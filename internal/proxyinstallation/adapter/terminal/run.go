@@ -107,7 +107,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			} else if writeRefusal(output, latest) != nil {
 				return 1
 			}
-		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
+		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.ReplaceSubscriptionCertificateAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {
@@ -130,6 +130,8 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 				prompt = "Enable subscription? [y/N]"
 			} else if action == proxyinstallation.RotateSubscriptionLinkAction {
 				prompt = "Rotate subscription link? [y/N]"
+			} else if action == proxyinstallation.ReplaceSubscriptionCertificateAction {
+				prompt = "Replace subscription certificate? [y/N]"
 			} else if action == proxyinstallation.RepairSubscriptionAction {
 				prompt = "Repair subscription? [y/N]"
 			} else if action == proxyinstallation.FinishSubscriptionChangeAction {

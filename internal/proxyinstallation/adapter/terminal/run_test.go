@@ -24,7 +24,7 @@ func (failedSubscriptionAction) Execute(context.Context, proxyinstallation.Prepa
 }
 
 func TestRunDisplaysSubscriptionFailureCheckAndCorrection(t *testing.T) {
-	for _, action := range []proxyinstallation.Action{proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction} {
+	for _, action := range []proxyinstallation.Action{proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.ReplaceSubscriptionCertificateAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction} {
 		t.Run(string(action), func(t *testing.T) {
 			var output bytes.Buffer
 			if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, failedSubscriptionAction{action}, nil); code != 0 {
@@ -187,6 +187,42 @@ func TestRunConfirmsRepairWithExactPrompt(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q: %s", want, output.String())
 		}
+	}
+}
+
+type certificateReplacementInstallation struct{ journeyInstallation }
+
+func (installation *certificateReplacementInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
+	review := proxyinstallation.Review{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, LegalActions: []proxyinstallation.Action{proxyinstallation.ReplaceSubscriptionCertificateAction}}
+	if action == proxyinstallation.ReplaceSubscriptionCertificateAction {
+		review.Prepared = &proxyinstallation.PreparedAction{}
+		review.Plan = []string{"Action: Replace subscription certificate", "Exact change: make one managed replacement attempt."}
+	}
+	return review
+}
+
+func (installation *certificateReplacementInstallation) Execute(_ context.Context, _ proxyinstallation.PreparedAction, confirmation proxyinstallation.Confirmation, progress proxyinstallation.ProgressReporter) proxyinstallation.Result {
+	installation.confirmations = append(installation.confirmations, confirmation)
+	if confirmation != proxyinstallation.Approved {
+		return proxyinstallation.Result{Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
+	}
+	progress(proxyinstallation.Progress{Phase: "Renewing subscription certificate"})
+	return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, Code: proxyinstallation.SubscriptionCertificateReplaced, Message: "Subscription certificate replacement completed and passed local checks."}
+}
+
+func TestRunConfirmsCertificateReplacementWithExactPrompt(t *testing.T) {
+	installation := &certificateReplacementInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &output, installation, nil); code != 0 {
+		t.Fatalf("Run() = %d output=%s", code, output.String())
+	}
+	for _, want := range []string{"Replace subscription certificate? [y/N]", "Progress: Renewing subscription certificate", string(proxyinstallation.SubscriptionCertificateReplaced)} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q: %s", want, output.String())
+		}
+	}
+	if !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+		t.Fatalf("confirmations=%v", installation.confirmations)
 	}
 }
 

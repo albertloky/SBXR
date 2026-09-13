@@ -35,6 +35,26 @@ func (module *installedInterface) repairDiagnosis(ctx context.Context, record ow
 	return "", renewal, false
 }
 
+func (module *installedInterface) certificateReplacementDiagnosis(ctx context.Context, record ownershipRecord, activation hostadapter.CertificateActivationInspection) (hostadapter.RenewalInspection, bool) {
+	host, supported := module.host.(subscriptionRepairHost)
+	if !supported || record.Serving == nil || record.Renewal == nil || record.Repair != nil || !activation.Observed || !activation.Accepted || activation.Published != *record.Serving || activation.Loaded != *record.Serving {
+		return hostadapter.RenewalInspection{}, false
+	}
+	renewal := host.InspectRenewal(*record.Renewal)
+	return renewal, renewal.State == hostadapter.RenewalAttemptHealthy && renewal.Observed && renewal.Accepted
+}
+
+func (module *installedInterface) prepareSubscriptionCertificateReplacementReview(ctx context.Context, review Review, activation hostadapter.CertificateActivationInspection) Review {
+	body, err := module.readOwnership()
+	record, valid := decodeOwnership(body)
+	if err != nil || !valid || record.Serving == nil || record.Renewal == nil {
+		review.Result = refused(Running, "Subscription replacement authority", "Restore one consistent owned subscription generation, then review again.")
+		return review
+	}
+	renewal, diagnosed := module.certificateReplacementDiagnosis(ctx, record, activation)
+	return module.prepareSubscriptionCorrectionReview(ctx, review, body, record, activation, ReplaceSubscriptionCertificateAction, repairCertificate, renewal, diagnosed)
+}
+
 func (module *installedInterface) prepareSubscriptionRepairReview(ctx context.Context, review Review, activation hostadapter.CertificateActivationInspection) Review {
 	body, err := module.readOwnership()
 	record, valid := decodeOwnership(body)
@@ -43,10 +63,20 @@ func (module *installedInterface) prepareSubscriptionRepairReview(ctx context.Co
 		return review
 	}
 	correction, renewal, diagnosed := module.repairDiagnosis(ctx, record, activation)
+	return module.prepareSubscriptionCorrectionReview(ctx, review, body, record, activation, RepairSubscriptionAction, correction, renewal, diagnosed)
+}
+
+func (module *installedInterface) prepareSubscriptionCorrectionReview(ctx context.Context, review Review, body []byte, record ownershipRecord, activation hostadapter.CertificateActivationInspection, action Action, correction subscriptionRepairCorrection, renewal hostadapter.RenewalInspection, diagnosed bool) Review {
 	status := module.lifecycle.Status(ctx)
 	running := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
 	if !diagnosed || status.State != softwarelifecycle.Ready || status.Installed == nil || !compatibleOwnership(record, *status.Installed) || !runningAccepted(running) {
-		review.Result = refused(Running, "Diagnosed subscription correction", "Restore the exact owned subscription and working proxy, then inspect the fault again. Healthy capability, public-IP drift, unknown authority, and combined faults cannot be repaired here.")
+		failed := "Diagnosed subscription correction"
+		remedy := "Restore the exact owned subscription and working proxy, then inspect the fault again. Healthy capability, public-IP drift, unknown authority, and combined faults cannot be repaired here."
+		if action == ReplaceSubscriptionCertificateAction {
+			failed = "Healthy subscription certificate replacement"
+			remedy = "Restore the exact owned subscription, accepted loaded certificate generation, healthy managed renewal evidence, and working proxy, then review Replace subscription certificate again."
+		}
+		review.Result = refused(Running, failed, remedy)
 		return review
 	}
 	if host, ok := module.host.(interface {
@@ -60,13 +90,32 @@ func (module *installedInterface) prepareSubscriptionRepairReview(ctx context.Co
 	}
 	var token [32]byte
 	if _, err := rand.Read(token[:]); err != nil {
-		review.Result = refused(Running, "Prepared Action generation", "Review Repair subscription again.")
+		correction := "Review Repair subscription again."
+		if action == ReplaceSubscriptionCertificateAction {
+			correction = "Review Replace subscription certificate again."
+		}
+		review.Result = refused(Running, "Prepared Action generation", correction)
 		return review
 	}
-	module.prepared[token] = preparedReview{generation: module.generation, action: RepairSubscriptionAction, status: Running, release: *status.Installed, record: slices.Clone(body), running: running, activation: activation, renewal: renewal, repair: correction}
+	module.prepared[token] = preparedReview{generation: module.generation, action: action, status: Running, release: *status.Installed, record: slices.Clone(body), running: running, activation: activation, renewal: renewal, repair: correction}
 	review.Prepared = &PreparedAction{token: token}
-	review.Plan = subscriptionRepairPlan(correction, *record.Serving)
+	if action == ReplaceSubscriptionCertificateAction {
+		review.Plan = subscriptionCertificateReplacementPlan()
+	} else {
+		review.Plan = subscriptionRepairPlan(correction, *record.Serving)
+	}
 	return review
+}
+
+func subscriptionCertificateReplacementPlan() []string {
+	return []string{
+		"Action: Replace subscription certificate",
+		"Exact change: make one Owner-driven managed Certbot replacement attempt for only the healthy owned sbxr-subscription lineage, then activate only a valid published replacement.",
+		"Network needs: Let's Encrypt standalone HTTP-01 needs public TCP 80 and the existing provider-firewall allowance; local checks cannot prove outside reachability.",
+		"Subscription Serving can be interrupted only while a valid replacement is activated; unrelated shared Certbot renewal remains excluded during this attempt.",
+		"Keep the Subscription Link, Proxy Profile, Client Identity, credential values, and proxy traffic unchanged.",
+		"Before commitment, discard only the unused replacement authority. After commitment, finish only this selected certificate replacement.",
+	}
 }
 
 func subscriptionRepairPlan(correction subscriptionRepairCorrection, source hostadapter.ServingAuthority) []string {
@@ -172,13 +221,29 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 	finishing := authority.action == FinishSubscriptionChangeAction
 	if record.Repair == nil {
 		activation := host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, *record.Serving)
-		correction, renewal, diagnosed := module.repairDiagnosis(context.WithoutCancel(ctx), record, activation)
+		var correction subscriptionRepairCorrection
+		var renewal hostadapter.RenewalInspection
+		var diagnosed bool
+		if authority.action == ReplaceSubscriptionCertificateAction {
+			renewal, diagnosed = module.certificateReplacementDiagnosis(context.WithoutCancel(ctx), record, activation)
+			correction = repairCertificate
+		} else {
+			correction, renewal, diagnosed = module.repairDiagnosis(context.WithoutCancel(ctx), record, activation)
+		}
 		if ctx.Err() != nil || !diagnosed || correction != authority.repair || !reflect.DeepEqual(activation, authority.activation) || !reflect.DeepEqual(renewal, authority.renewal) {
-			return refused(Running, "Prepared Action facts", "Review Repair subscription again after restoring every diagnosed certificate, runtime, and renewal fact.")
+			remedy := "Review Repair subscription again after restoring every diagnosed certificate, runtime, and renewal fact."
+			if authority.action == ReplaceSubscriptionCertificateAction {
+				remedy = "Review Replace subscription certificate again after restoring the exact accepted certificate, runtime, and healthy renewal facts."
+			}
+			return refused(Running, "Prepared Action facts", remedy)
 		}
 		operationID := make([]byte, 16)
 		if _, err := rand.Read(operationID); err != nil {
-			return refused(Running, "Repair operation generation", "Review Repair subscription again.")
+			correction := "Review Repair subscription again."
+			if authority.action == ReplaceSubscriptionCertificateAction {
+				correction = "Review Replace subscription certificate again."
+			}
+			return refused(Running, "Repair operation generation", correction)
 		}
 		effects := []string{"restart owned serving runtime"}
 		if correction == repairCertificate {
@@ -284,6 +349,9 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 	}
 	if finishing {
 		return Result{Status: Running, Message: "The interrupted subscription change was completed.", Code: SubscriptionChangeFinished}
+	}
+	if authority.action == ReplaceSubscriptionCertificateAction {
+		return Result{Status: Running, Message: "Subscription certificate replacement completed and passed local checks.", Code: SubscriptionCertificateReplaced}
 	}
 	return Result{Status: Running, Message: "Subscription repair completed and passed local checks.", Code: SubscriptionRepaired}
 }

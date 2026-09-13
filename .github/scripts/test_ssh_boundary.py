@@ -16,7 +16,7 @@ import tempfile
 import time
 
 
-CASE_TOTAL = 11
+CASE_TOTAL = 12
 CONFIG = '{"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2080}],"outbounds":[{"type":"vless","uuid":"11111111-1111-4111-8111-111111111111"}]}'
 
 
@@ -47,10 +47,17 @@ def free_port():
 def fake_product(path):
     source = f'''#!/usr/bin/env python3
 import os, signal, sys, time
-menu = "SBXR V3\\nProxy status: Running\\nCode: PROXY-INSTALLATION-SETUP-COMPLETE\\n1. View details\\n2. Rotate Client Identity\\n3. Show client configuration\\n0. Exit"
+menu = "SBXR V3\\nProxy status: Running\\nCode: PROXY-INSTALLATION-SETUP-COMPLETE\\n1. View details\\n2. Rotate Client Identity\\n3. Show client configuration\\n4. Replace subscription certificate\\n0. Exit"
 print(menu, flush=True)
 choice = sys.stdin.readline().strip()
 if choice == "0": raise SystemExit(0)
+if choice == "4":
+    print("Replace subscription certificate? [y/N]", flush=True)
+    if sys.stdin.readline().strip() != "y": raise SystemExit(4)
+    print("Code: PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED", flush=True)
+    print(menu, flush=True)
+    if sys.stdin.readline().strip() != "0": raise SystemExit(5)
+    raise SystemExit(0)
 if choice != "3": raise SystemExit(2)
 if os.environ.get("FIXTURE_MODE") == "slow":
     child = os.fork()
@@ -97,10 +104,20 @@ def clean_results(base):
 def inside(root):
     if os.getpid() != 1:
         raise Refused("inside-not-pid-one")
-    root = Path(root)
+    root = Path(root).resolve()
     (root / "pid-namespace-inode").write_text(str(os.stat("/proc/self/ns/pid").st_ino))
     run(["mount", "--make-rprivate", "/"])
-    run(["mount", "-t", "tmpfs", "-o", "mode=0700", "tmpfs", "/root"])
+    # Keep a workspace TMPDIR under /root visible after isolating the SSH home.
+    # The bind uses the same directory; fixtures remain in the caller's workspace.
+    fixture_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY) if root.is_relative_to("/root") else None
+    try:
+        run(["mount", "-t", "tmpfs", "-o", "mode=0700", "tmpfs", "/root"])
+        if fixture_fd is not None:
+            root.mkdir(parents=True)
+            run(["mount", "--no-canonicalize", "--bind", f"/proc/1/fd/{fixture_fd}", str(root)])
+    finally:
+        if fixture_fd is not None:
+            os.close(fixture_fd)
     run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/run"])
     Path("/run/sshd").mkdir(mode=0o755)
     Path("/root/.ssh").mkdir(mode=0o700)
@@ -184,6 +201,15 @@ LogLevel ERROR
         result = remote(base, command)
         if result.stdout != (CONFIG + "\n").encode():
             raise Refused("staged-disclosure-bytes")
+
+        replacement = (f"cd {foreign} && SBXR_EXECUTABLE={product} "
+                       f"SBXR_QUALIFICATION_REQUEST={request} python3 {driver} action "
+                       "'Replace subscription certificate' "
+                       "PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED --confirmation yes")
+        result = remote(base, replacement)
+        if (b"Replace subscription certificate? [y/N]" not in result.stdout or
+                b"Code: PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED" not in result.stdout):
+            raise Refused("replacement-menu-ssh-boundary")
 
         historical = (f"cd {foreign} && SBXR_EXECUTABLE={product} "
                       f"SBXR_QUALIFICATION_REQUEST={request} /usr/bin/bash -s "
@@ -331,7 +357,7 @@ def outer():
         return 0
     script = Path(__file__).resolve()
     source_dir = script.parent
-    with tempfile.TemporaryDirectory(prefix="sbxr-v3-ssh-boundary-", dir="/tmp") as name:
+    with tempfile.TemporaryDirectory(prefix="sbxr-v3-ssh-boundary-") as name:
         root = Path(name)
         copied = root / "source"
         copied.mkdir(mode=0o700)

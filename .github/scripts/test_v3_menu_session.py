@@ -57,7 +57,7 @@ class MenuSessionDriverTest(unittest.TestCase):
             env=dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec))
             result=subprocess.run([sys.executable,str(DRIVER),*arguments,"--executable",str(executable),"--timeout","5"],
                                   env=env,text=True,capture_output=True,timeout=10)
-            events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()]
+            events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()] if (root/"events.jsonl").exists() else []
             return result,events
 
     def test_setup_requires_exact_prompt_then_exits_returned_frame(self):
@@ -65,6 +65,16 @@ class MenuSessionDriverTest(unittest.TestCase):
         result,events=self.invoke(spec,"action","Start setup",spec["expected"],"--confirmation","yes")
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(events,[{"selected":"7"},{"answer":"y"},{"exit":"0"}])
+
+    def test_certificate_replacement_requires_its_prompt_and_exact_result(self):
+        spec={"label":"Replace subscription certificate","prompt":"Replace subscription certificate? [y/N]","kind":"action","expected":"PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED"}
+        result,events=self.invoke(spec,"action",spec["label"],spec["expected"],"--confirmation","yes")
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(events,[{"selected":"7"},{"answer":"y"},{"exit":"0"}])
+        spec["actual"]="PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
+        result,events=self.invoke(spec,"action",spec["label"],spec["expected"],"--confirmation","yes")
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("phase=result-mismatch",result.stderr)
 
     def test_details_waits_for_continue_in_same_process(self):
         spec={"label":"View details","kind":"details"}

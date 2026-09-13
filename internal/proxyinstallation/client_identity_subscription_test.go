@@ -128,7 +128,7 @@ func TestEnabledIdentityRotationRecoversEveryDurableCheckpoint(t *testing.T) {
 					t.Fatal(got.Code)
 				}
 				pending, _ := decodeOwnership(host.ownership)
-				for _, action := range []Action{ShowClientConfigurationAction, RotateClientIdentityAction, FinishSubscriptionChangeAction, RotateSubscriptionLinkAction, RepairSubscriptionAction} {
+				for _, action := range []Action{ShowClientConfigurationAction, RotateClientIdentityAction, FinishSubscriptionChangeAction, RotateSubscriptionLinkAction, ReplaceSubscriptionCertificateAction, RepairSubscriptionAction} {
 					if got := m.Review(t.Context(), action); got.Prepared != nil {
 						t.Fatalf("pending rotation admitted %s", action)
 					}

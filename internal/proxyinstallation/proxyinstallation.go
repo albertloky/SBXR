@@ -53,20 +53,21 @@ const (
 type Action string
 
 const (
-	StatusAction                   Action = "Status"
-	ViewDetailsAction              Action = "View details"
-	StartSetupAction               Action = "Start setup"
-	FinishCleanupAction            Action = "Finish cleanup"
-	FinishSetupAction              Action = "Finish setup"
-	ShowClientConfigurationAction  Action = "Show client configuration"
-	CompleteRemovalAction          Action = "Complete removal"
-	FinishRemovalAction            Action = "Finish removal"
-	EnableSubscriptionAction       Action = "Enable subscription"
-	RotateSubscriptionLinkAction   Action = "Rotate subscription link"
-	RepairSubscriptionAction       Action = "Repair subscription"
-	FinishSubscriptionChangeAction Action = "Finish subscription change"
-	RotateClientIdentityAction     Action = "Rotate Client Identity"
-	FinishClientIdentityAction     Action = "Finish Client Identity rotation"
+	StatusAction                         Action = "Status"
+	ViewDetailsAction                    Action = "View details"
+	StartSetupAction                     Action = "Start setup"
+	FinishCleanupAction                  Action = "Finish cleanup"
+	FinishSetupAction                    Action = "Finish setup"
+	ShowClientConfigurationAction        Action = "Show client configuration"
+	CompleteRemovalAction                Action = "Complete removal"
+	FinishRemovalAction                  Action = "Finish removal"
+	EnableSubscriptionAction             Action = "Enable subscription"
+	RotateSubscriptionLinkAction         Action = "Rotate subscription link"
+	ReplaceSubscriptionCertificateAction Action = "Replace subscription certificate"
+	RepairSubscriptionAction             Action = "Repair subscription"
+	FinishSubscriptionChangeAction       Action = "Finish subscription change"
+	RotateClientIdentityAction           Action = "Rotate Client Identity"
+	FinishClientIdentityAction           Action = "Finish Client Identity rotation"
 )
 
 type Confirmation uint8
@@ -100,6 +101,7 @@ const (
 	SubscriptionChangeNeedsCompletion       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
 	SubscriptionEnabled                     ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"
 	SubscriptionLinkRotated                 ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED"
+	SubscriptionCertificateReplaced         ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED"
 	SubscriptionRepaired                    ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-REPAIRED"
 	SubscriptionChangeCleanedUp             ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
 	SubscriptionLinkDisplayIncomplete       ResultCode = "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
@@ -408,6 +410,22 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	if review.Status == Running && review.SubscriptionStatus == SubscriptionAvailable {
 		review.LegalActions = slices.DeleteFunc(review.LegalActions, func(a Action) bool { return a == EnableSubscriptionAction })
 		review.LegalActions = append(review.LegalActions, RotateSubscriptionLinkAction)
+		replacementCandidate := false
+		if body, err := module.readOwnership(); err == nil {
+			if record, valid := decodeOwnership(body); valid {
+				_, replacementCandidate = module.certificateReplacementDiagnosis(ctx, record, activation)
+			}
+		}
+		if replacementCandidate {
+			review.LegalActions = append(review.LegalActions, ReplaceSubscriptionCertificateAction)
+			if action == ReplaceSubscriptionCertificateAction {
+				review = module.prepareSubscriptionCertificateReplacementReview(ctx, review, activation)
+			}
+		} else if action == ReplaceSubscriptionCertificateAction {
+			clear(module.prepared)
+			review.Prepared = nil
+			review.Result = refused(review.Status, "Healthy subscription certificate authority", "Restore one accepted, loaded owned certificate generation and healthy managed renewal evidence, then review Replace subscription certificate again.")
+		}
 		if action == EnableSubscriptionAction {
 			clear(module.prepared)
 			review.Prepared = nil
@@ -838,7 +856,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		if result.Code == SetupComplete || result.Code == ClientConfigurationDisclosed {
 			result.ProxyTraffic = ProvedWorking
 		}
-		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated || result.Code == SubscriptionRepaired {
+		if result.Code == SubscriptionChangeFinished || result.Code == SubscriptionEnabled || result.Code == SubscriptionLinkRotated || result.Code == SubscriptionCertificateReplaced || result.Code == SubscriptionRepaired {
 			result.ProxyTraffic, result.SubscriptionServing = ProvedWorking, ProvedWorking
 		}
 		if result.Code == ClientIdentityRotated || result.Code == ClientIdentityRotationFinished || result.Code == ClientIdentityRotationCleanedUp {
@@ -891,6 +909,9 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return module.rotateSubscriptionLink(ctx, authority, progress)
 	}
 	if authority.action == RepairSubscriptionAction {
+		return module.executeSubscriptionRepair(ctx, authority, progress)
+	}
+	if authority.action == ReplaceSubscriptionCertificateAction {
 		return module.executeSubscriptionRepair(ctx, authority, progress)
 	}
 	if authority.action == FinishSubscriptionChangeAction {

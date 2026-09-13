@@ -21,6 +21,7 @@ PROMPTS = {
     "Enable subscription": "Enable subscription? [y/N]",
     "Rotate subscription link": "Rotate subscription link? [y/N]",
     "Repair subscription": "Repair subscription? [y/N]",
+    "Replace subscription certificate": "Replace subscription certificate? [y/N]",
     "Finish subscription change": "Finish subscription change? [y/N]",
     "Rotate Client Identity": "Rotate Client Identity? [y/N]",
     "Finish Client Identity rotation": "Finish Client Identity rotation? [y/N]",

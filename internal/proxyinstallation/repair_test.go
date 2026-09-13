@@ -142,6 +142,102 @@ func TestOwnerRepairsOneFailedManagedCertificateAttempt(t *testing.T) {
 	}
 }
 
+func healthyCertificateReplacementInstallation(t *testing.T) (*installedInterface, *repairTestHost, *controlledRemovalLifecycle) {
+	t.Helper()
+	_, renewal, lifecycle := renewalInstallation(t)
+	record, ok := decodeOwnership(renewal.ownership)
+	if !ok || record.Serving == nil {
+		t.Fatal("serving authority invalid")
+	}
+	healthy := hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true, Accepted: true}, State: hostadapter.RenewalAttemptHealthy}
+	host := &repairTestHost{activationTestHost: &activationTestHost{renewalTestHost: renewal, published: *record.Serving, loaded: *record.Serving, renewal: &healthy}}
+	host.subscriptionServing = *record.Serving
+	host.subscriptionCredential = []byte(strings.Repeat("A", 43))
+	return newInstalledInterface(lifecycle, host, acceptedSingBox{}).(*installedInterface), host, lifecycle
+}
+
+func TestOwnerReviewsDeclinesAndExecutesHealthyCertificateReplacement(t *testing.T) {
+	module, host, _ := healthyCertificateReplacementInstallation(t)
+	source, ok := decodeOwnership(host.ownership)
+	if !ok || source.Serving == nil {
+		t.Fatal("source serving authority invalid")
+	}
+	configuration := slices.Clone(host.configuration)
+	credential := slices.Clone(host.subscriptionCredential)
+
+	review := module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+	if review.Prepared == nil || !slices.Contains(review.LegalActions, ReplaceSubscriptionCertificateAction) || slices.Contains(review.LegalActions, RepairSubscriptionAction) {
+		t.Fatalf("Review() = %#v", review)
+	}
+	plan := strings.Join(review.Plan, "\n")
+	for _, want := range []string{"Action: Replace subscription certificate", "healthy owned sbxr-subscription lineage", "public TCP 80", "Subscription Link", "Client Identity"} {
+		if !strings.Contains(plan, want) {
+			t.Fatalf("Plan does not contain %q: %s", want, plan)
+		}
+	}
+	if result := module.Execute(t.Context(), *review.Prepared, Declined, nil); result.Code != ActionCancelled || host.repairs != 0 || host.restarts != 0 {
+		t.Fatalf("declined Execute() = %#v repairs=%d restarts=%d", result, host.repairs, host.restarts)
+	}
+
+	review = module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+	result := module.Execute(t.Context(), *review.Prepared, Approved, nil)
+	record, ok := decodeOwnership(host.ownership)
+	if !ok || record.Repair != nil || record.Serving == nil || record.Serving.CertificateGeneration != 2 || record.Serving.LinkID != source.Serving.LinkID || record.Serving.CredentialSHA256 != source.Serving.CredentialSHA256 || !slices.Equal(host.subscriptionCredential, credential) || !slices.Equal(host.configuration, configuration) || result.Code != SubscriptionCertificateReplaced || result.Status != Running || result.SubscriptionStatus != SubscriptionAvailable || result.ProxyTraffic != ProvedWorking || result.SubscriptionServing != ProvedWorking || host.repairs != 1 || host.restarts != 1 {
+		t.Fatalf("approved Execute() = %#v record=%#v repairs=%d restarts=%d", result, record, host.repairs, host.restarts)
+	}
+}
+
+func TestHealthyCertificateReplacementRevalidatesRenewalFacts(t *testing.T) {
+	module, host, _ := healthyCertificateReplacementInstallation(t)
+	review := module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+	failed := hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true}, State: hostadapter.RenewalAttemptFailed}
+	host.renewal = &failed
+	result := module.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if result.Code != ActionRefused || result.FailedCheck != "Prepared Action facts" || !strings.Contains(result.Correction, "Replace subscription certificate") || host.repairs != 0 || host.restarts != 0 {
+		t.Fatalf("stale Execute() = %#v repairs=%d restarts=%d", result, host.repairs, host.restarts)
+	}
+	status := module.Review(t.Context(), StatusAction)
+	if slices.Contains(status.LegalActions, ReplaceSubscriptionCertificateAction) || !slices.Contains(status.LegalActions, RepairSubscriptionAction) {
+		t.Fatalf("failed renewal actions = %#v", status.LegalActions)
+	}
+}
+
+func TestCertificateReplacementIsUnavailableWithoutAcceptedHealthyEvidence(t *testing.T) {
+	module, host, _ := healthyCertificateReplacementInstallation(t)
+	unaccepted := hostadapter.RenewalInspection{State: hostadapter.RenewalAttemptHealthy}
+	host.renewal = &unaccepted
+	status := module.Review(t.Context(), StatusAction)
+	if status.SubscriptionStatus != SubscriptionAvailable || slices.Contains(status.LegalActions, ReplaceSubscriptionCertificateAction) {
+		t.Fatalf("Status Review() = %#v", status)
+	}
+	review := module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+	if review.Prepared != nil || review.Result.Code != ActionRefused || review.Result.FailedCheck != "Healthy subscription certificate authority" || host.repairs != 0 {
+		t.Fatalf("replacement Review() = %#v repairs=%d", review, host.repairs)
+	}
+}
+
+func TestInterruptedHealthyCertificateReplacementFinishesThroughExistingRepairAuthority(t *testing.T) {
+	module, host, lifecycle := healthyCertificateReplacementInstallation(t)
+	host.repairFails = true
+	review := module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+	if result := module.Execute(t.Context(), *review.Prepared, Approved, nil); result.Code != SubscriptionChangeNeedsCompletion {
+		t.Fatalf("interrupted Execute() = %#v", result)
+	}
+	pending, ok := decodeOwnership(host.ownership)
+	if !ok || pending.Repair == nil || pending.Repair.Correction != repairCertificate || pending.Repair.Checkpoint != repairCommitted {
+		t.Fatalf("pending repair authority = %#v", pending.Repair)
+	}
+	host.repairFails = false
+	module = newInstalledInterface(lifecycle, host, acceptedSingBox{}).(*installedInterface)
+	finish := module.Review(t.Context(), FinishSubscriptionChangeAction)
+	if finish.Prepared == nil || !strings.Contains(strings.Join(finish.Plan, "\n"), "finish forward") {
+		t.Fatalf("Finish Review() = %#v", finish)
+	}
+	if result := module.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != SubscriptionChangeFinished || host.repairs != 2 || host.restarts != 1 {
+		t.Fatalf("Finish Execute() = %#v repairs=%d restarts=%d", result, host.repairs, host.restarts)
+	}
+}
+
 func TestRepairEffectFailuresRemainForwardAndRecoverable(t *testing.T) {
 	for _, test := range []struct {
 		name string

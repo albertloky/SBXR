@@ -24,7 +24,7 @@ finish pending work, convert durable authority, or create missing authority.
 | Owner-facing details and observation formatting | [details.go](details.go) |
 | Subscription enablement and interrupted-enable cleanup | [subscription.go](subscription.go) |
 | Subscription-link replacement and finishing | [rotation.go](rotation.go) |
-| Subscription repair and its recovery direction | [repair.go](repair.go) |
+| Reviewed healthy certificate replacement, fault repair, and their recovery direction | [repair.go](repair.go) |
 | Certificate-generation inspection and forward activation | [activation.go](activation.go) |
 | Client Identity replacement and startup protection | [client_identity.go](client_identity.go) and [client_identity_subscription.go](client_identity_subscription.go) |
 | Managed renewal dispatch and hook recording | [renewal.go](renewal.go) |

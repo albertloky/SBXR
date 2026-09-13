@@ -54,14 +54,52 @@ state permits:
    new URL works, confirm the proxy identity is unchanged, and refresh the same
    Karing session to obtain fresh replacement-node latency. Do not induce an
    interruption to create this evidence.
-4. **`mvp-renewal` — keep HTTPS working after certificate replacement.** Use
-   the actual supported Certbot renewal and activation route, then observe the
-   replacement through outside TLS while proxy traffic remains usable. This
-   manually exercised route does not claim the natural timer fired.
+4. **`mvp-renewal` — keep HTTPS working after certificate replacement.** On
+   the healthy subscription, use the reviewed **Replace subscription
+   certificate** menu action once. This invokes the existing managed Certbot
+   replacement and activation path for the owned lineage, even when the current
+   certificate is not due. Observe the replacement through outside trusted TLS
+   while the same subscription link and proxy identity remain usable. Follow the
+   [replacement procedure below](#certificate-replacement-procedure). This Owner
+   action does not claim the natural timer fired.
 5. **`mvp-removal` — restart and remove it.** Perform an ordinary service restart
    and confirm usable configuration and credentials remain. Then use reviewed
    Complete removal, confirm owned services, listeners, and resources are gone
    while unrelated resources remain, and confirm old outside access fails.
+
+## Certificate replacement procedure
+
+The starting state is a Running proxy with an Available subscription, matching
+published/loaded certificate, and healthy idle renewal evidence. If that state
+cannot be established, inspect the displayed problem; do not induce a fault to
+make Repair subscription available.
+
+1. Retain the current certificate identity from a real outside TLS connection
+   and confirm the current subscription link and proxy traffic work. Keep the
+   credential values private.
+2. Choose **Replace subscription certificate** in the packaged SBXR menu. Read
+   its plan and confirm once. Public TCP 80 must be reachable for the existing
+   HTTP-01 issuance route. The action requests one replacement for the owned
+   `sbxr-subscription` lineage and activates the verified result. It preserves
+   the subscription link and proxy identity. Serving can be interrupted during
+   certificate activation; repeated requests can consume CA issuance limits.
+3. Require `PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED`, then inspect
+   status/details for Available serving and healthy renewal evidence. Verify a
+   different certificate through a new outside TLS connection with normal
+   trust validation. Check the same link, unchanged proxy identity, and fresh
+   outside proxy traffic. Local success alone does not prove outside acceptance.
+4. If the action refuses or needs completion, retain its original result and
+   diagnose the displayed cause. Use **Finish subscription change** only for
+   supported cleanup/completion. Do not count a failed first action as passed
+   after recovery, and do not automatically request another certificate.
+
+`systemctl start snap.certbot.renew.service` exercises ordinary scheduled
+renewal semantics. Exit 0 can mean no renewal was needed, so it cannot substitute
+for the replacement check on a fresh installation. Do not run a direct forced
+Certbot command or private hook around SBXR's managed operation. The checklist
+names and evidence format are unchanged; `official-renewal-route` records the
+supported managed Certbot Owner action in this journey. See Certbot's
+[renewal behavior](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates).
 
 ## Evidence handoff
 
