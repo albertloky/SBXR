@@ -19,7 +19,7 @@ import unittest
 
 
 HERE = Path(__file__).resolve().parent
-MODULE = HERE.parent / "v3-packaged-live.sh"
+MODULE = HERE / "v3-packaged-live.sh"
 
 
 FIXTURE = r'''#!/usr/bin/env python3

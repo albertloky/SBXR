@@ -21,7 +21,7 @@ func TestV3RealSSHBoundaries(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "python3", ".github/scripts/tests/test_ssh_boundary.py")
+	command := exec.CommandContext(ctx, "python3", ".github/scripts/test_ssh_boundary.py")
 	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
 	command.WaitDelay = 10 * time.Second
 	output, err := command.CombinedOutput()

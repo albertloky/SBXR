@@ -8,7 +8,7 @@ import (
 )
 
 func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
-	if output, err := exec.Command("python3", ".github/scripts/tests/test_mvp_evidence.py").CombinedOutput(); err != nil {
+	if output, err := exec.Command("python3", ".github/scripts/test_mvp_evidence.py").CombinedOutput(); err != nil {
 		t.Fatalf("MVP evidence assembler regression: %v\n%s", err, output)
 	}
 	if output, err := exec.Command("bash", "-n", ".github/scripts/v3-recurring-evidence.sh").CombinedOutput(); err != nil {
@@ -18,8 +18,8 @@ func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
 
 func TestSharedPackagedMenuDrivers(t *testing.T) {
 	for _, path := range []string{
-		".github/scripts/tests/test_v3_menu_session.py",
-		".github/scripts/tests/test_v3_packaged_live_menu_disclosure.py",
+		".github/scripts/test_v3_menu_session.py",
+		".github/scripts/test_v3_packaged_live_menu_disclosure.py",
 	} {
 		if output, err := exec.Command("python3", path).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", path, err, output)

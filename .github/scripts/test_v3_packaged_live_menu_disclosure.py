@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-MODULE = Path(__file__).resolve().parent.parent / "v3-packaged-live.sh"
+MODULE = Path(__file__).resolve().parent / "v3-packaged-live.sh"
 CONFIGURATION = {"outbounds": [{"type": "fixture", "credential": "test-only"}]}
 
 FIXTURE = r'''#!/usr/bin/env python3

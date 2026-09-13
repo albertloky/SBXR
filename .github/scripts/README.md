@@ -13,8 +13,8 @@ explicit human observations and does not run the historical V4 protocol.
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh` |
 
-Focused helper tests live in `tests/`, including
-`tests/test_mvp_evidence.py` and `tests/test_ssh_boundary.py`. The former
+Focused helper tests live beside the scripts they exercise, including
+`test_mvp_evidence.py` and `test_ssh_boundary.py`. The former
 outside-probe mode is retired. Repository-root Go tests are split by concern:
 `release_workflow_test.go` covers native CI; `release_candidate_workflow_test.go`
 covers candidate preparation; `release_stable_workflow_test.go` covers

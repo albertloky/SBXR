@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parent.parent / "v3-mvp-evidence.py"
+SCRIPT = Path(__file__).resolve().parent / "v3-mvp-evidence.py"
 SPEC = importlib.util.spec_from_file_location("mvp_evidence", SCRIPT)
 MVP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MVP)

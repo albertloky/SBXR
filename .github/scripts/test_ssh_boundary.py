@@ -330,7 +330,7 @@ def outer():
         print("SSH_BOUNDARY_SKIPPED missing-tool")
         return 0
     script = Path(__file__).resolve()
-    source_dir = script.parent.parent
+    source_dir = script.parent
     with tempfile.TemporaryDirectory(prefix="sbxr-v3-ssh-boundary-", dir="/tmp") as name:
         root = Path(name)
         copied = root / "source"

@@ -19,7 +19,7 @@ run history rather than current source.
 | Private Subscription Serving | Keep serving, authentication and bounded network behavior. These serve real client requests; they were not created solely to satisfy the retired operator. Correct the obsolete guide that claimed enablement was disabled. |
 | Software Lifecycle | Keep installed-state checks, update transactions and recovery. Remove the two unused constructors; production uses `NewInstalledWithUpdateRuntime`. |
 | Host file inspection | Remove unused `boundFileMatchesGroup`; its live underlying inspection remains. |
-| V4 operator producer | Retire the 25-scenario scripts, injected faults, rehearsal and capture machinery, and their dedicated tests. Preserve still-used packaged menu and SSH tests in `.github/scripts/tests/`. |
+| V4 operator producer | Retire the 25-scenario scripts, injected faults, rehearsal and capture machinery, and their dedicated tests. Preserve still-used packaged menu and SSH tests in `.github/scripts/`. |
 | Current collector | Keep only the five-journey path plus its existing submission, failure and cleanup handling. Remove the old outside-driver protocols and their source-copy inventories. |
 | Historical qualification records | Keep the Go validators and GitHub acceptance reader. Existing release records still depend on their historical interpretation. Old producer source is available in Git at `0859e96`. |
 | Native CI | Remove seven redundant package-test invocations. Full normal and race suites still run once each, followed by vet; native package/menu checks remain. |
@@ -62,7 +62,7 @@ Start with [the code map](../agents/code-map.md). Documentation has a
 - Root release tests are grouped by CI, candidate, stable, collector, packaged
   driver, and transport responsibility. They stay in the root package because
   they exercise repository-relative paths.
-- Current script tests live together under `.github/scripts/tests/`, with a
+- Current script tests live beside their scripts under `.github/scripts/`, with a
   [tooling map](../../.github/scripts/README.md). Historical source links point
   to the retained Git revision instead of deleted local files.
 - `.gitignore` excludes local run history, Python caches and macOS metadata.

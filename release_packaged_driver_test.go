@@ -107,7 +107,7 @@ func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, "python3", "-m", "unittest", "discover", "-v",
-		"-s", ".github/scripts/tests", "-p", "test_v3_packaged_live_interrupt.py")
+		"-s", ".github/scripts", "-p", "test_v3_packaged_live_interrupt.py")
 	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("packaged interruption process fixture: %v\n%s", err, output)

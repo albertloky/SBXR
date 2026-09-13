@@ -46,7 +46,7 @@ deadline failure, inspect the driver and operator wrapper.
 | Stable publication, failure, or burn record | [publication](../../cmd/sbxr-release/qualification_publication.go), [failure](../../cmd/sbxr-release/qualification_failure.go) | `release_stable_workflow_test.go` |
 | Collector request or result submission | [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | `release_collector_test.go` |
 | Packaged menu results, interruptions, cleanup, or downloads | [v3-packaged-live.sh](../../.github/scripts/v3-packaged-live.sh), [v3-menu-session.py](../../.github/scripts/v3-menu-session.py) | `release_packaged_driver_test.go` |
-| Current MVP observation assembly and submission | [v3-mvp-evidence.py](../../.github/scripts/v3-mvp-evidence.py), [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | [MVP evidence handoff](../acceptance/mvp-live-acceptance.md#evidence-handoff), `tests/test_mvp_evidence.py`, and `v3_mvp_evidence_test.go` |
+| Current MVP observation assembly and submission | [v3-mvp-evidence.py](../../.github/scripts/v3-mvp-evidence.py), [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | [MVP evidence handoff](../acceptance/mvp-live-acceptance.md#evidence-handoff), `test_mvp_evidence.py`, and `v3_mvp_evidence_test.go` |
 | Retired V4 producer source | [V4 tree at commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator) | Historical readers/validators remain in `cmd/sbxr-release`; do not restore or run the producer for MVP work |
 | Current MVP live procedure | [MVP acceptance](../acceptance/mvp-live-acceptance.md), [ADR-0023](../adr/0023-mvp-live-acceptance.md) | Five normal journeys: install, subscription, credentials, renewal, and removal |
 | Find a historical V4 scenario or its controls | [Retired Operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md) | [V4 scenario procedures](../acceptance/v4-operator-procedures.md) |
@@ -101,3 +101,8 @@ Local fixtures and tests do not establish live qualification or Karing acceptanc
 Local scratch and research files may contain unfinished user work. Inspect their
 Git status before reorganizing them; use tracked source and current procedures
 to determine implemented behavior.
+
+Follow [the test-file and artifact locations in AGENTS.md](../../AGENTS.md#test-files-and-local-artifacts).
+Tests live beside their code, run artifacts under `.scratch/acceptance/`, and
+readable reports under `docs/acceptance/`. `.scratch/` is excluded from Git and
+normal source searches.

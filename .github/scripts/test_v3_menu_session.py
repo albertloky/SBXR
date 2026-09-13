@@ -9,7 +9,7 @@ import tempfile
 import time
 import unittest
 
-DRIVER = Path(__file__).resolve().parent.parent / "v3-menu-session.py"
+DRIVER = Path(__file__).resolve().parent / "v3-menu-session.py"
 FIXTURE = r'''#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
