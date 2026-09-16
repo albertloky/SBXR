@@ -2,6 +2,7 @@ package proxyinstallation
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -15,16 +16,18 @@ type repairTestHost struct {
 	*activationTestHost
 	repairs            int
 	repairFails        bool
+	repairFailure      *hostadapter.RenewalFailure
 	repairInvalid      bool
 	resolveFails       bool
 	removalRepairFails bool
 	removedRepair      *hostadapter.ServingAuthority
 }
 
-func (h *repairTestHost) RepairSubscriptionCertificate(context.Context, hostadapter.RenewalAuthority) bool {
+func (h *repairTestHost) RepairSubscriptionCertificate(context.Context, hostadapter.RenewalAuthority) hostadapter.CertificateRepairResult {
 	h.repairs++
 	if h.repairFails {
-		return false
+		h.renewal = &hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true}, State: hostadapter.RenewalAttemptFailed, Evidence: hostadapter.RenewalEvidence{Attempts: []hostadapter.RenewalAttempt{{Completion: &hostadapter.RenewalCompletion{ExitCode: 1, Failure: h.repairFailure}}}}}
+		return hostadapter.CertificateRepairResult{Failure: h.repairFailure}
 	}
 	h.published.CertificateGeneration++
 	for index := range h.published.CertificateSHA256 {
@@ -33,7 +36,7 @@ func (h *repairTestHost) RepairSubscriptionCertificate(context.Context, hostadap
 	if h.repairInvalid {
 		h.published.LinkID = strings.Repeat("f", 32)
 	}
-	return true
+	return hostadapter.CertificateRepairResult{Replaced: true}
 }
 
 func (h *repairTestHost) ResolveRenewalFailure(hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool {
@@ -235,6 +238,119 @@ func TestInterruptedHealthyCertificateReplacementFinishesThroughExistingRepairAu
 	}
 	if result := module.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != SubscriptionChangeFinished || host.repairs != 2 || host.restarts != 1 {
 		t.Fatalf("Finish Execute() = %#v repairs=%d restarts=%d", result, host.repairs, host.restarts)
+	}
+}
+
+func TestCertificateReplacementUnknownFailureDoesNotInventCause(t *testing.T) {
+	module, host, _ := healthyCertificateReplacementInstallation(t)
+	host.repairFails = true
+	review := module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+	result := module.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if result.Code != SubscriptionChangeNeedsCompletion || host.repairs != 1 || host.restarts != 0 {
+		t.Fatalf("failed replacement: %#v attempts=%d restarts=%d", result, host.repairs, host.restarts)
+	}
+	if !strings.Contains(result.Correction, "cause is unknown") || strings.Contains(result.Correction, "Correct public TCP 80") {
+		t.Fatalf("failure guidance invents a cause: %s", result.Correction)
+	}
+}
+
+func TestCertificateFailureGuidancePreservesReviewedRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		failure *hostadapter.RenewalFailure
+		want    string
+	}{
+		{"rate limit with retry", &hostadapter.RenewalFailure{Kind: hostadapter.RenewalRateLimited, RetryAfter: "2030-09-14T16:16:25Z"}, "Wait until at least 2030-09-14 16:16:25 UTC"},
+		{"rate limit without retry", &hostadapter.RenewalFailure{Kind: hostadapter.RenewalRateLimited}, "No reliable retry time was reported"},
+		{"invalid retry is concealed", &hostadapter.RenewalFailure{Kind: hostadapter.RenewalRateLimited, RetryAfter: "https://example.invalid/secret-marker\nBEGIN PRIVATE KEY"}, "No reliable retry time was reported"},
+		{"unknown failure", nil, "cause is unknown"},
+		{"unknown kind is concealed", &hostadapter.RenewalFailure{Kind: "secret-marker", RetryAfter: "2030-09-14T16:16:25Z"}, "cause is unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			module, host, lifecycle := healthyCertificateReplacementInstallation(t)
+			source := host.published
+			configuration := slices.Clone(host.configuration)
+			credential := slices.Clone(host.subscriptionCredential)
+			host.repairFails, host.repairFailure = true, test.failure
+			review := module.Review(t.Context(), ReplaceSubscriptionCertificateAction)
+			result := module.Execute(t.Context(), *review.Prepared, Approved, nil)
+			if result.Code != SubscriptionChangeNeedsCompletion || !strings.Contains(result.Correction, test.want) || !strings.Contains(result.Correction, "Finish subscription change can request another certificate") {
+				t.Fatalf("failure result = %#v", result)
+			}
+			if host.repairs != 1 || host.restarts != 0 || host.published != source || !slices.Equal(configuration, host.configuration) || !slices.Equal(credential, host.subscriptionCredential) {
+				t.Fatal("failed attempt changed certificate, credentials, configuration, or retried")
+			}
+			pending, ok := decodeOwnership(host.ownership)
+			if !ok || pending.Repair == nil || pending.Repair.Checkpoint != repairCommitted || pending.Repair.Direction != "forward" {
+				t.Fatalf("repair authority changed: %#v", pending.Repair)
+			}
+			module = newInstalledInterface(lifecycle, host, acceptedSingBox{}).(*installedInterface)
+			details := module.Review(t.Context(), ViewDetailsAction)
+			finish := module.Review(t.Context(), FinishSubscriptionChangeAction)
+			for name, text := range map[string]string{"details": strings.Join(details.Details, "\n"), "finish plan": strings.Join(finish.Plan, "\n")} {
+				if !strings.Contains(text, test.want) {
+					t.Fatalf("%s lost failure diagnosis: %s", name, text)
+				}
+			}
+			visible := fmt.Sprintf("%+v %s %s", result, strings.Join(details.Details, "\n"), strings.Join(finish.Plan, "\n"))
+			for _, forbidden := range []string{"secret-marker", "BEGIN PRIVATE KEY"} {
+				if strings.Contains(visible, forbidden) {
+					t.Fatalf("unsafe failure guidance contains %q", forbidden)
+				}
+			}
+			// Plans still describe TCP 80 as a prerequisite, not the failure's cause.
+			if strings.Contains(result.Correction, "Correct public TCP 80") || strings.Contains(result.Correction, "provider firewall") {
+				t.Fatalf("failure guidance invents a cause: %s", result.Correction)
+			}
+			if finish.Prepared == nil || host.repairs != 1 {
+				t.Fatal("review retried issuance or changed recovery legality")
+			}
+			if declined := module.Execute(t.Context(), *finish.Prepared, Declined, nil); declined.Code != ActionCancelled || host.repairs != 1 {
+				t.Fatal("declined Finish requested a certificate")
+			}
+			// Even a future diagnostic time does not become transaction authority.
+			// This fixture simulates the issuer allowing a separately reviewed retry.
+			host.repairFails = false
+			finish = module.Review(t.Context(), FinishSubscriptionChangeAction)
+			completed := module.Execute(t.Context(), *finish.Prepared, Approved, nil)
+			if completed.Code != SubscriptionChangeFinished || host.repairs != 2 || host.restarts != 1 {
+				t.Fatalf("reviewed Finish changed: %#v attempts=%d restarts=%d", completed, host.repairs, host.restarts)
+			}
+			if !slices.Equal(configuration, host.configuration) || !slices.Equal(credential, host.subscriptionCredential) {
+				t.Fatal("recovery changed proxy or link credentials")
+			}
+		})
+	}
+}
+
+func TestReviewedRepairShowsLastManagedFailureBeforeConfirmation(t *testing.T) {
+	module, host, _ := healthyCertificateReplacementInstallation(t)
+	host.renewal = &hostadapter.RenewalInspection{
+		Observation: hostadapter.Observation{Observed: true}, State: hostadapter.RenewalAttemptFailed,
+		Evidence: hostadapter.RenewalEvidence{Attempts: []hostadapter.RenewalAttempt{{
+			Invocation: hostadapter.OfficialRenewalInvocation,
+			Completion: &hostadapter.RenewalCompletion{ExitCode: 1, Failure: &hostadapter.RenewalFailure{Kind: hostadapter.RenewalRateLimited}},
+		}}},
+	}
+	review := module.Review(t.Context(), RepairSubscriptionAction)
+	if review.Prepared == nil || !strings.Contains(strings.Join(review.Plan, "\n"), "rate-limited this Certbot attempt") || host.repairs != 0 {
+		t.Fatalf("Repair review lost diagnosis or invoked issuer: %#v attempts=%d", review, host.repairs)
+	}
+	if result := module.Execute(t.Context(), *review.Prepared, Declined, nil); result.Code != ActionCancelled || host.repairs != 0 {
+		t.Fatal("declining Repair changed the certificate")
+	}
+}
+
+func TestRenewalDetailsDoNotReuseAnOlderFailure(t *testing.T) {
+	failed := hostadapter.RenewalAttempt{Completion: &hostadapter.RenewalCompletion{ExitCode: 1, Failure: &hostadapter.RenewalFailure{Kind: hostadapter.RenewalRateLimited}}}
+	for _, latest := range []hostadapter.RenewalAttempt{{}, {Completion: &hostadapter.RenewalCompletion{ExitCode: 0}}} {
+		inspection := hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true}, Evidence: hostadapter.RenewalEvidence{Attempts: []hostadapter.RenewalAttempt{failed, latest}}}
+		if details := renewalFailureDetails(inspection); len(details) != 0 {
+			t.Fatalf("older failure presented as latest: %v", details)
+		}
+	}
+	if details := renewalFailureDetails(hostadapter.RenewalInspection{Evidence: hostadapter.RenewalEvidence{Attempts: []hostadapter.RenewalAttempt{failed}}}); len(details) != 0 {
+		t.Fatalf("unobserved evidence displayed: %v", details)
 	}
 }
 

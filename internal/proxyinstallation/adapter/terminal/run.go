@@ -312,7 +312,7 @@ func writeClientConfiguration(output io.Writer, configuration []byte) error {
 }
 
 func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyinstallation.Result, lifecycle softwarelifecycle.Interface, ctx context.Context) error {
-	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nProxy traffic availability: %s\nSubscription serving availability: %s\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, review.ProxyTraffic, review.SubscriptionServing, result.Message, result.Code); err != nil {
+	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nLocal proxy runtime: %s\nLocal subscription serving: %s\nOutside connectivity: not established by these local checks (including Karing).\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, review.ProxyTraffic, review.SubscriptionServing, result.Message, result.Code); err != nil {
 		return err
 	}
 	for index, action := range review.LegalActions {

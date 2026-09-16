@@ -81,6 +81,13 @@ proves the accepted generation or performs the diagnosed repair. Renewal writers
 use their dedicated exclusion; Ownership Record and runtime mutations still use
 whole-host authority.
 
+Failed managed Certbot attempts can retain an allowlisted CA rate-limit diagnosis
+and a validated retry time in that existing receipt. View details and reviewed
+certificate Repair/Finish plans show the latest failed attempt's guidance.
+Unknown failures do not imply a firewall or lineage fault. Diagnostic text never
+authorizes a retry or changes the recovery direction; raw issuer output is not
+stored in the receipt or displayed by SBXR.
+
 ## Evidence boundary
 
 The source implements setup/removal, subscription enablement, link rotation,

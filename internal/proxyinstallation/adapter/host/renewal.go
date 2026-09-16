@@ -41,9 +41,10 @@ const (
 	RenewalAdmissionPath      = "/var/lib/sbxr/renewal-admission.lock"
 	RenewalWriterPath         = "/var/lib/sbxr/renewal-writer.lock"
 
-	RenewalRecorderRefused = 125
-	maxRenewalAttempts     = 32
-	maxRenewalEvidenceAge  = 48 * time.Hour
+	RenewalRecorderRefused  = 125
+	maxRenewalAttempts      = 32
+	maxRenewalEvidenceAge   = 48 * time.Hour
+	maxRenewalEvidenceBytes = 16 << 10
 )
 
 const RenewalDropIn = `[Service]
@@ -95,10 +96,11 @@ func (a RenewalAuthority) Resources() []string {
 }
 
 type RenewalCompletion struct {
-	ExitCode     int    `json:"exit_code"`
-	CompletedAt  string `json:"completed_at"`
-	OwnedOutcome string `json:"owned_outcome"`
-	LineageAfter string `json:"lineage_after"`
+	ExitCode     int             `json:"exit_code"`
+	CompletedAt  string          `json:"completed_at"`
+	OwnedOutcome string          `json:"owned_outcome"`
+	LineageAfter string          `json:"lineage_after"`
+	Failure      *RenewalFailure `json:"failure,omitempty"`
 }
 
 type RenewalHookOutcome struct {
@@ -496,7 +498,7 @@ func (a Adapter) validRenewalCertificate(authority RenewalAuthority, generation 
 
 func (a Adapter) readRenewalEvidence(authority RenewalAuthority) (RenewalEvidence, []byte, error) {
 	body, err := a.protectedServingFile(RenewalEvidencePath, 0600, "")
-	if err != nil || len(body) > 16<<10 {
+	if err != nil || len(body) > maxRenewalEvidenceBytes {
 		return RenewalEvidence{}, nil, errors.New("renewal evidence unavailable")
 	}
 	var evidence RenewalEvidence
@@ -512,7 +514,7 @@ func (a Adapter) readRenewalEvidence(authority RenewalAuthority) (RenewalEvidenc
 		return RenewalEvidence{}, nil, errors.New("renewal evidence anchor invalid")
 	}
 	latest := established
-	for _, attempt := range evidence.Attempts {
+	for index, attempt := range evidence.Attempts {
 		id, e := hex.DecodeString(attempt.AttemptID)
 		started, timeErr := time.Parse(time.RFC3339Nano, attempt.StartedAt)
 		_, lineageValid := renewalLineageGeneration(authority, attempt.LineageBefore)
@@ -522,6 +524,8 @@ func (a Adapter) readRenewalEvidence(authority RenewalAuthority) (RenewalEvidenc
 		seen[attempt.AttemptID] = true
 		var completed time.Time
 		if attempt.Completion != nil {
+			attempt.Completion.Failure = attempt.Completion.Failure.Safe()
+			evidence.Attempts[index].Completion.Failure = attempt.Completion.Failure
 			completed, timeErr = time.Parse(time.RFC3339Nano, attempt.Completion.CompletedAt)
 			_, lineageValid = renewalLineageGeneration(authority, attempt.Completion.LineageAfter)
 			expectedOutcome := ownedRenewalOutcome(authority, attempt, attempt.Completion.LineageAfter)
@@ -627,15 +631,20 @@ type renewalAttemptRunner struct {
 	command       []string
 	holdAdmission bool
 	finished      bool
+	failure       *RenewalFailure
 }
 
 // PrepareRenewalRecorder publishes the receipt while the caller still owns
 // whole-host authority. Run releases admission before waiting for Certbot.
 func (a Adapter) PrepareRenewalRecorder(authority RenewalAuthority) (RenewalAttemptRunner, bool) {
-	return a.prepareRenewalAttempt(authority, OfficialRenewalInvocation, false, false, []string{"/usr/bin/snap", "run", "--timer=00:00~24:00/2", "certbot.renew"})
+	runner, prepared := a.prepareRenewalAttempt(authority, OfficialRenewalInvocation, false, false, []string{"/usr/bin/snap", "run", "--timer=00:00~24:00/2", "certbot.renew"})
+	if !prepared {
+		return nil, false
+	}
+	return runner, true
 }
 
-func (a Adapter) prepareRenewalAttempt(authority RenewalAuthority, invocation string, allowAbandoned, exclusive bool, command []string) (RenewalAttemptRunner, bool) {
+func (a Adapter) prepareRenewalAttempt(authority RenewalAuthority, invocation string, allowAbandoned, exclusive bool, command []string) (*renewalAttemptRunner, bool) {
 	admission, ok := a.openRenewalLock(RenewalAdmissionPath, exclusive)
 	if !ok {
 		return nil, false
@@ -734,6 +743,13 @@ func (r *renewalAttemptRunner) Abort() {
 	}
 }
 
+func (r *renewalAttemptRunner) Failure() *RenewalFailure {
+	if r == nil {
+		return nil
+	}
+	return r.failure.Safe()
+}
+
 func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 	if r == nil || r.finished {
 		return RenewalRecorderRefused
@@ -755,6 +771,7 @@ func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 	}
 	run := r.adapter.renewalCommand
 	code := 0
+	var failure *RenewalFailure
 	if run != nil {
 		code = run(ctx, r.command[0], r.command[1:]...)
 	} else {
@@ -764,19 +781,52 @@ func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 			return slices.Contains([]string{"SBXR_RENEWAL_ATTEMPT_ID", "RENEWED_LINEAGE", "RENEWED_DOMAINS", "FAILED_DOMAINS"}, name)
 		})
 		command.Env = append(environment, "SBXR_RENEWAL_ATTEMPT_ID="+r.attempt.AttemptID)
-		command.Stdin, command.Stdout, command.Stderr = nil, nil, nil
-		err := command.Run()
-		if err != nil {
+		capture := &boundedRenewalDiagnostic{}
+		stderrReader, stderrWriter, pipeErr := os.Pipe()
+		if pipeErr != nil {
 			code = RenewalRecorderRefused
-			var exit *exec.ExitError
-			if errors.As(err, &exit) {
-				code = exit.ExitCode()
+		} else {
+			command.Stdin, command.Stdout, command.Stderr = nil, nil, stderrWriter
+			command.WaitDelay = 2 * time.Second
+			startErr := command.Start()
+			_ = stderrWriter.Close()
+			if startErr != nil {
+				_ = stderrReader.Close()
+				code = RenewalRecorderRefused
+			} else {
+				drained := make(chan error, 1)
+				go func() {
+					_, copyErr := io.Copy(capture, stderrReader)
+					drained <- copyErr
+				}()
+				err := command.Wait()
+				stderrComplete := false
+				select {
+				case copyErr := <-drained:
+					stderrComplete = copyErr == nil
+				case <-time.After(command.WaitDelay):
+					_ = stderrReader.Close()
+					<-drained
+				}
+				_ = stderrReader.Close()
+				if err != nil {
+					code = RenewalRecorderRefused
+					var exit *exec.ExitError
+					if errors.As(err, &exit) {
+						code = exit.ExitCode()
+					}
+				}
+				if code > 0 && code <= 255 && ctx.Err() == nil && stderrComplete {
+					failure = capture.failure()
+				}
 			}
 		}
 	}
 	if code < 0 || code > 255 {
 		code = RenewalRecorderRefused
+		failure = nil
 	}
+	r.failure = failure.Safe()
 	if !r.adapter.protectOwnedLineageDirectories(r.authority) {
 		return RenewalRecorderRefused
 	}
@@ -789,7 +839,7 @@ func (r *renewalAttemptRunner) Run(ctx context.Context) int {
 		return RenewalRecorderRefused
 	}
 	attempt := &latest.Attempts[len(latest.Attempts)-1]
-	attempt.Completion = &RenewalCompletion{ExitCode: code, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnedOutcome: ownedRenewalOutcome(r.authority, *attempt, lineageAfter), LineageAfter: lineageAfter}
+	attempt.Completion = &RenewalCompletion{ExitCode: code, CompletedAt: time.Now().UTC().Format(time.RFC3339Nano), OwnedOutcome: ownedRenewalOutcome(r.authority, *attempt, lineageAfter), LineageAfter: lineageAfter, Failure: r.failure.Safe()}
 	if !r.adapter.publishRenewalEvidence(r.authority, expected, latest) {
 		return RenewalRecorderRefused
 	}
@@ -867,8 +917,24 @@ func (a Adapter) publishRenewalEvidence(authority RenewalAuthority, expected []b
 		return false
 	}
 	body, err := json.Marshal(evidence)
-	if err != nil || len(body) > 16<<10 {
+	if err != nil {
 		return false
+	}
+	if len(body)+1 > maxRenewalEvidenceBytes {
+		withoutFailures := evidence
+		withoutFailures.Attempts = append([]RenewalAttempt(nil), evidence.Attempts...)
+		for index := range withoutFailures.Attempts {
+			if withoutFailures.Attempts[index].Completion == nil {
+				continue
+			}
+			completion := *withoutFailures.Attempts[index].Completion
+			completion.Failure = nil
+			withoutFailures.Attempts[index].Completion = &completion
+		}
+		body, err = json.Marshal(withoutFailures)
+		if err != nil || len(body)+1 > maxRenewalEvidenceBytes {
+			return false
+		}
 	}
 	body = append(body, '\n')
 	temporary := a.path(RenewalEvidenceNextPath)
@@ -1000,37 +1066,45 @@ func (a Adapter) AcquireRenewalExclusion(authority RenewalAuthority) (*RenewalEx
 	return exclusion, true
 }
 
+type CertificateRepairResult struct {
+	Replaced bool
+	Failure  *RenewalFailure
+}
+
 // RepairSubscriptionCertificate performs one reviewed replacement attempt.
 // The caller retains whole-host authority and activates the published target.
-func (a Adapter) RepairSubscriptionCertificate(ctx context.Context, authority RenewalAuthority) bool {
+func (a Adapter) RepairSubscriptionCertificate(ctx context.Context, authority RenewalAuthority) CertificateRepairResult {
 	if !authority.Valid() || !a.renewalFiles(authority) || !a.renewalRoute() || !a.renewalHooksSafe() {
-		return false
+		return CertificateRepairResult{}
 	}
 	beforeTarget, ok := a.renewalLineageTarget(authority)
 	beforeGeneration, valid := renewalLineageGeneration(authority, beforeTarget)
 	if !ok || !valid || !a.validRenewalCertificate(authority, beforeGeneration) {
-		return false
+		return CertificateRepairResult{}
 	}
 	for _, path := range certbotDirectoryLocks {
 		if !a.certbotLockAvailable(path) {
-			return false
+			return CertificateRepairResult{}
 		}
 	}
 	command := []string{"/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--force-renewal", "--cert-name", authority.Lineage, "--required-profile", "shortlived", "--ip-address", authority.PublicIPv4}
 	runner, prepared := a.prepareRenewalAttempt(authority, OwnerRenewalInvocation, true, true, command)
-	if !prepared || runner.Run(ctx) != 0 {
-		return false
+	if !prepared {
+		return CertificateRepairResult{}
+	}
+	if runner.Run(ctx) != 0 {
+		return CertificateRepairResult{Failure: runner.Failure()}
 	}
 	// Certbot unlinks its own lock files at exit. Establish fresh exclusion
 	// before inspecting the result, rather than requiring those inodes to survive.
 	exclusion, locked := a.AcquireServingExclusion()
 	if !locked {
-		return false
+		return CertificateRepairResult{}
 	}
 	defer exclusion.Release()
 	afterTarget, ok := a.renewalLineageTarget(authority)
 	afterGeneration, valid := renewalLineageGeneration(authority, afterTarget)
-	return ok && valid && afterGeneration > beforeGeneration && a.validRenewalCertificate(authority, afterGeneration)
+	return CertificateRepairResult{Replaced: ok && valid && afterGeneration > beforeGeneration && a.validRenewalCertificate(authority, afterGeneration)}
 }
 
 // ResolveRenewalFailure clears only diagnosed evidence after the reviewed

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"time"
 
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -16,7 +17,7 @@ import (
 type subscriptionRepairHost interface {
 	certificateActivationHost
 	renewalHost
-	RepairSubscriptionCertificate(context.Context, hostadapter.RenewalAuthority) bool
+	RepairSubscriptionCertificate(context.Context, hostadapter.RenewalAuthority) hostadapter.CertificateRepairResult
 	ResolveRenewalFailure(hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool
 }
 
@@ -103,6 +104,9 @@ func (module *installedInterface) prepareSubscriptionCorrectionReview(ctx contex
 		review.Plan = subscriptionCertificateReplacementPlan()
 	} else {
 		review.Plan = subscriptionRepairPlan(correction, *record.Serving)
+		if correction == repairCertificate {
+			review.Plan = append(review.Plan, renewalFailureDetails(renewal)...)
+		}
 	}
 	return review
 }
@@ -171,7 +175,38 @@ func (module *installedInterface) prepareSubscriptionRepairFinishReview(ctx cont
 		"Remaining effects: " + remaining + ".",
 		"Existing Subscription Link: unverified by this recovery review; its identity stays unchanged.",
 	}, subscriptionRepairPlan(record.Repair.Correction, record.Repair.Source)[3:]...)
+	if record.Repair.Checkpoint == repairCommitted && record.Repair.Correction == repairCertificate {
+		if host, ok := module.host.(renewalHost); ok {
+			review.Plan = append(review.Plan, renewalFailureDetails(host.InspectRenewal(*record.Renewal))...)
+		}
+	}
 	return review
+}
+
+// Diagnostics describe a failed attempt; they never select an action or its
+// recovery direction. Only allowlisted facts reach user-visible text.
+func certificateFailureCorrection(failure *hostadapter.RenewalFailure) string {
+	failure = failure.Safe()
+	if failure == nil {
+		return "The certificate change did not complete; its cause is unknown. Inspect protected Certbot diagnostics before reviewing another attempt. Finish subscription change can request another certificate."
+	}
+	wait := "Wait for the certificate authority's rate limit to clear before reviewing another attempt. No reliable retry time was reported."
+	if failure.RetryAfter != "" {
+		retry, _ := time.Parse(time.RFC3339, failure.RetryAfter)
+		wait = "Wait until at least " + retry.UTC().Format("2006-01-02 15:04:05 UTC") + " before reviewing another attempt."
+	}
+	return "The certificate authority rate-limited this Certbot attempt. " + wait + " This does not establish allowance for multiple certificate issuances. Finish subscription change can request another certificate; it does not bypass the limit."
+}
+
+func renewalFailureDetails(inspection hostadapter.RenewalInspection) []string {
+	if !inspection.Observed || len(inspection.Evidence.Attempts) == 0 {
+		return nil
+	}
+	latest := inspection.Evidence.Attempts[len(inspection.Evidence.Attempts)-1]
+	if latest.Completion == nil || latest.Completion.ExitCode == 0 {
+		return nil
+	}
+	return []string{"Latest managed Certbot failure: " + certificateFailureCorrection(latest.Completion.Failure)}
 }
 
 func subscriptionRepairIncomplete(failed, correction string) Result {
@@ -283,8 +318,12 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 			report(progress, "Renewing subscription certificate")
 			inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, record.Repair.Source)
 			if !inspection.Observed || !inspection.Accepted || inspection.Published == record.Repair.Source {
-				if ctx.Err() != nil || !host.RepairSubscriptionCertificate(context.WithoutCancel(ctx), *record.Renewal) {
-					return subscriptionRepairIncomplete("Owned certificate replacement", "Correct public TCP 80, the provider firewall, or the exact owned Certbot lineage, then use Finish subscription change again.")
+				if ctx.Err() != nil {
+					return subscriptionRepairIncomplete("Owned certificate replacement", "The operation was interrupted before a new certificate attempt. Review Finish subscription change to inspect the remaining work.")
+				}
+				replacement := host.RepairSubscriptionCertificate(context.WithoutCancel(ctx), *record.Renewal)
+				if !replacement.Replaced {
+					return subscriptionRepairIncomplete("Owned certificate replacement", certificateFailureCorrection(replacement.Failure))
 				}
 				inspection = host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, record.Repair.Source)
 			}

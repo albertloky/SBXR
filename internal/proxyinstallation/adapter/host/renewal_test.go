@@ -253,7 +253,7 @@ func testReviewedCertificateRepair(t *testing.T, locksPresent bool) {
 		}
 		return 0
 	}
-	if !a.RepairSubscriptionCertificate(t.Context(), authority) {
+	if result := a.RepairSubscriptionCertificate(t.Context(), authority); !result.Replaced || result.Failure != nil {
 		t.Fatal("RepairSubscriptionCertificate() refused")
 	}
 	want := "/snap/bin/certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --standalone --preferred-challenges http --no-directory-hooks --force-renewal --cert-name sbxr-subscription --required-profile shortlived --ip-address 8.8.8.8"
@@ -299,7 +299,7 @@ func TestReviewedCertificateRepairRefusesBusyRenewalAdmission(t *testing.T) {
 	defer admission.Close()
 	called := false
 	a.renewalCommand = func(context.Context, string, ...string) int { called = true; return 0 }
-	if a.RepairSubscriptionCertificate(t.Context(), authority) || called {
+	if result := a.RepairSubscriptionCertificate(t.Context(), authority); result.Replaced || result.Failure != nil || called {
 		t.Fatal("Owner repair bypassed renewal admission contention")
 	}
 }
@@ -450,6 +450,84 @@ func TestRenewalRecorderPublishesStartBeforeChildAndExactCompletion(t *testing.T
 	inspection := a.InspectRenewal(authority)
 	if inspection.State != RenewalAttemptFailed || len(inspection.Evidence.Attempts) != 1 || inspection.Evidence.Attempts[0].Completion == nil || inspection.Evidence.Attempts[0].Completion.ExitCode != 17 {
 		t.Fatalf("completed evidence = %#v", inspection)
+	}
+}
+
+func TestRenewalEvidenceSanitizesInvalidFailureWithoutChangingOutcome(t *testing.T) {
+	a, authority := renewalFiles(t)
+	a.renewalCommand = func(context.Context, string, ...string) int { return 17 }
+	if code := runRenewalRecorder(t.Context(), a, authority); code != 17 {
+		t.Fatalf("RunRenewalRecorder() = %d", code)
+	}
+	evidence, _, err := a.readRenewalEvidence(authority)
+	if err != nil || len(evidence.Attempts) != 1 || evidence.Attempts[0].Completion == nil {
+		t.Fatalf("receipt = %#v, %v", evidence, err)
+	}
+	completion := evidence.Attempts[0].Completion
+	exit, outcome, lineage := completion.ExitCode, completion.OwnedOutcome, completion.LineageAfter
+	completion.Failure = &RenewalFailure{Kind: RenewalRateLimited, RetryAfter: "2026-09-14T16:16:25Z"}
+	body, err := json.Marshal(evidence)
+	body = []byte(strings.Replace(string(body), `"kind":"rate-limited"`, `"kind":42,"unknown":"ignored"`, 1))
+	if err != nil || os.WriteFile(a.path(RenewalEvidencePath), append(body, '\n'), 0600) != nil {
+		t.Fatal("invalid diagnostic fixture")
+	}
+	read, _, err := a.readRenewalEvidence(authority)
+	if err != nil || len(read.Attempts) != 1 || read.Attempts[0].Completion == nil {
+		t.Fatalf("sanitized receipt = %#v, %v", read, err)
+	}
+	got := read.Attempts[0].Completion
+	if got.Failure != nil || got.ExitCode != exit || got.OwnedOutcome != outcome || got.LineageAfter != lineage {
+		t.Fatalf("invalid diagnostic changed completion: %#v", got)
+	}
+}
+
+func TestRenewalEvidenceOmitsDiagnosticsBeforeExceedingExistingBound(t *testing.T) {
+	a, authority := renewalFiles(t)
+	now := time.Now().UTC().Add(-time.Second)
+	attempt := RenewalAttempt{
+		AttemptID:     strings.Repeat("1", 32),
+		Invocation:    authority.Invocation,
+		StartedAt:     now.Format(time.RFC3339Nano),
+		BootID:        "old",
+		RecorderPID:   1,
+		ProcessTick:   1,
+		LineageBefore: "../../archive/sbxr-subscription/cert1.pem",
+		Completion: &RenewalCompletion{
+			ExitCode:     17,
+			CompletedAt:  now.Add(time.Millisecond).Format(time.RFC3339Nano),
+			OwnedOutcome: "no-op",
+			LineageAfter: "../../archive/sbxr-subscription/cert1.pem",
+		},
+	}
+	evidence := RenewalEvidence{Schema: 1, RecorderID: authority.RecorderID, EstablishedAt: now.Format(time.RFC3339Nano), Attempts: []RenewalAttempt{attempt}}
+	body, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padding := maxRenewalEvidenceBytes - 1 - len(body)
+	if padding <= 0 {
+		t.Fatalf("fixture already exceeds evidence bound: %d", len(body))
+	}
+	evidence.Attempts[0].BootID += strings.Repeat("x", padding)
+	body, err = json.Marshal(evidence)
+	if err != nil || len(body) != maxRenewalEvidenceBytes-1 || os.WriteFile(a.path(RenewalEvidencePath), append(body, '\n'), 0600) != nil {
+		t.Fatalf("near-limit fixture = %d bytes, %v", len(body), err)
+	}
+	_, expected, err := a.readRenewalEvidence(authority)
+	if err != nil {
+		t.Fatalf("original near-limit receipt unreadable: %v", err)
+	}
+	evidence.Attempts[0].Completion.Failure = &RenewalFailure{Kind: RenewalRateLimited, RetryAfter: "2026-09-14T16:16:25Z"}
+	withFailure, err := json.Marshal(evidence)
+	if err != nil || len(withFailure) <= maxRenewalEvidenceBytes {
+		t.Fatalf("diagnostic fixture did not cross bound: %d bytes, %v", len(withFailure), err)
+	}
+	if !a.publishRenewalEvidence(authority, expected, evidence) {
+		t.Fatal("authoritative completion was lost when optional diagnosis crossed the existing bound")
+	}
+	read, stored, err := a.readRenewalEvidence(authority)
+	if err != nil || len(stored) > maxRenewalEvidenceBytes || read.Attempts[0].Completion.Failure != nil || read.Attempts[0].Completion.ExitCode != 17 {
+		t.Fatalf("bounded receipt = %d bytes, %#v, %v", len(stored), read, err)
 	}
 }
 
@@ -781,12 +859,19 @@ func TestRenewalEvidenceBoundDropsOnlyResolvedSuccess(t *testing.T) {
 					exit = 1
 				}
 				completed := started.Add(time.Second)
-				evidence.Attempts = append(evidence.Attempts, RenewalAttempt{AttemptID: fmt.Sprintf("%032x", i), Invocation: authority.Invocation, StartedAt: started.Format(time.RFC3339Nano), BootID: "old", RecorderPID: i, ProcessTick: uint64(i), LineageBefore: "../../archive/sbxr-subscription/cert1.pem", Completion: &RenewalCompletion{ExitCode: exit, CompletedAt: completed.Format(time.RFC3339Nano), OwnedOutcome: "no-op", LineageAfter: "../../archive/sbxr-subscription/cert1.pem"}})
+				completion := &RenewalCompletion{ExitCode: exit, CompletedAt: completed.Format(time.RFC3339Nano), OwnedOutcome: "no-op", LineageAfter: "../../archive/sbxr-subscription/cert1.pem"}
+				if failed {
+					completion.Failure = &RenewalFailure{Kind: RenewalRateLimited, RetryAfter: "2026-09-14T16:16:25Z"}
+				}
+				evidence.Attempts = append(evidence.Attempts, RenewalAttempt{AttemptID: fmt.Sprintf("%032x", i), Invocation: authority.Invocation, StartedAt: started.Format(time.RFC3339Nano), BootID: "old", RecorderPID: i, ProcessTick: uint64(i), LineageBefore: "../../archive/sbxr-subscription/cert1.pem", Completion: completion})
 				started = completed
 			}
 			body, err := json.Marshal(evidence)
 			if err != nil || os.WriteFile(a.path(RenewalEvidencePath), append(body, '\n'), 0600) != nil {
 				t.Fatal("evidence fixture failed")
+			}
+			if _, _, err := a.readRenewalEvidence(authority); err != nil {
+				t.Fatalf("maximum evidence (%d bytes) unreadable: %v", len(body)+1, err)
 			}
 			called := false
 			a.renewalCommand = func(context.Context, string, ...string) int { called = true; return 0 }

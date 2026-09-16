@@ -350,6 +350,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			if host, ok := module.host.(renewalHost); ok {
 				inspection := host.InspectRenewal(*record.Renewal)
 				review.Details = append(review.Details, "Renewal Attempt Evidence: "+string(inspection.State))
+				review.Details = append(review.Details, renewalFailureDetails(inspection)...)
 			}
 		}
 	}

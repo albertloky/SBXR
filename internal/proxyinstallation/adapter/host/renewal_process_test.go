@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,11 +40,13 @@ func TestRenewalIssuerProcessFixture(t *testing.T) {
 	if err != nil {
 		os.Exit(74)
 	}
-	for _, f := range []*os.File{os.Stdout, os.Stderr} {
-		info, err := f.Stat()
-		if err != nil || !os.SameFile(null, info) {
-			os.Exit(75)
-		}
+	stdout, err := os.Stdout.Stat()
+	if err != nil || !os.SameFile(null, stdout) {
+		os.Exit(75)
+	}
+	stderr, err := os.Stderr.Stat()
+	if err != nil || stderr.Mode()&os.ModeNamedPipe == 0 {
+		os.Exit(75)
 	}
 	if lock, ok := a.openRenewalLock(RenewalAdmissionPath, false); ok {
 		lock.Close()
@@ -55,6 +58,46 @@ func TestRenewalIssuerProcessFixture(t *testing.T) {
 	if mode == "cancel" {
 		time.Sleep(time.Minute)
 		os.Exit(78)
+	}
+	if mode == "retain-success" || mode == "retain-fail" {
+		holder := exec.Command("/bin/sh", "-c", "sleep 60")
+		holder.Stdin, holder.Stdout, holder.Stderr = nil, nil, os.Stderr
+		holder.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if holder.Start() != nil {
+			os.Exit(82)
+		}
+		if os.WriteFile(filepath.Join(root, "stderr-holder"), []byte(strconv.Itoa(holder.Process.Pid)), 0600) != nil {
+			_ = syscall.Kill(-holder.Process.Pid, syscall.SIGKILL)
+			_ = holder.Wait()
+			os.Exit(82)
+		}
+	}
+	if mode == "retain-fail" {
+		_, _ = io.WriteString(os.Stderr, "urn:ietf:params:acme:error:rateLimited retry after 2026-09-14 16:16:25 UTC\n")
+		os.Exit(37)
+	}
+	if mode == "rate-limit" {
+		_, _ = io.WriteString(os.Stderr, "2026-09-13 13:22:26 unrelated timestamp\n")
+		_, _ = io.WriteString(os.Stderr, "acme.messages.Error: urn:ietf:params:acme:error:rateLimited :: There were too many requests of a given type :: too many certificates (5) already issued for this exact set of identifiers in the last 168h0m0s, retry after 2026-09-14 16:16:25 UTC: see [documentation URL]\n")
+		_, _ = io.WriteString(os.Stderr, "private-secret-marker-must-not-be-saved\n")
+		os.Exit(37)
+	}
+	if mode == "unknown" {
+		_, _ = io.WriteString(os.Stderr, "private-secret-marker-must-not-be-saved\n")
+		os.Exit(37)
+	}
+	if mode == "missing-retry" {
+		_, _ = io.WriteString(os.Stderr, "acme.messages.Error: urn:ietf:params:acme:error:rateLimited :: request refused\n")
+		os.Exit(37)
+	}
+	if mode == "invalid-retry" {
+		_, _ = io.WriteString(os.Stderr, "too many certificates (5) already issued for this exact set of identifiers in the last 168h0m0s, retry after tomorrow UTC\n")
+		os.Exit(37)
+	}
+	if mode == "overflow" {
+		_, _ = io.WriteString(os.Stderr, "urn:ietf:params:acme:error:rateLimited retry after 2026-09-14 16:16:25 UTC\n")
+		_, _ = os.Stderr.Write(make([]byte, maxRenewalDiagnosticBytes+1))
+		os.Exit(37)
 	}
 	if mode == "fail" {
 		os.Exit(37)
@@ -80,9 +123,21 @@ func TestRenewalIssuerProcessFixture(t *testing.T) {
 }
 
 func TestOwnerRenewalRealProcessPublicationFailureAndCancellation(t *testing.T) {
-	for _, mode := range []string{"publish", "fail", "cancel"} {
+	for _, mode := range []string{"publish", "retain-success", "fail", "rate-limit", "unknown", "missing-retry", "invalid-retry", "overflow", "retain-fail", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			a, authority := renewalFiles(t)
+			if mode == "retain-success" || mode == "retain-fail" {
+				t.Cleanup(func() {
+					holderBody, err := os.ReadFile(filepath.Join(a.root, "stderr-holder"))
+					if err != nil {
+						return
+					}
+					holderPID, err := strconv.Atoi(string(holderBody))
+					if err == nil {
+						_ = syscall.Kill(-holderPID, syscall.SIGKILL)
+					}
+				})
+			}
 			a.renewalCertificateValid = nil
 			a.renewalTrustRoots = installRenewalCertificate(t, a, authority.PublicIPv4)
 			original := map[string][]byte{}
@@ -156,6 +211,17 @@ func TestOwnerRenewalRealProcessPublicationFailureAndCancellation(t *testing.T) 
 				cancel()
 			}
 			code := <-done
+			if mode == "retain-success" || mode == "retain-fail" {
+				holderBody, err := os.ReadFile(filepath.Join(a.root, "stderr-holder"))
+				if err != nil {
+					t.Fatalf("stderr holder: %v", err)
+				}
+				holderPID, err := strconv.Atoi(string(holderBody))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = syscall.Kill(-holderPID, syscall.SIGKILL)
+			}
 			pidBytes, err := os.ReadFile(ready)
 			if err != nil {
 				t.Fatalf("issuer boundary: exit %d: %v", code, err)
@@ -175,7 +241,27 @@ func TestOwnerRenewalRealProcessPublicationFailureAndCancellation(t *testing.T) 
 			if completion.ExitCode != code {
 				t.Fatalf("exit not preserved: %d %#v", code, completion)
 			}
-			if mode == "publish" {
+			body, err := os.ReadFile(a.path(RenewalEvidencePath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			recognizedFailure := mode == "rate-limit" || mode == "missing-retry" || mode == "invalid-retry"
+			if recognizedFailure && !strings.Contains(string(body), `"kind":"rate-limited"`) {
+				t.Fatalf("rate-limit diagnosis absent from receipt: %s", body)
+			}
+			if mode == "rate-limit" && (completion.Failure == nil || completion.Failure.RetryAfter != "2026-09-14T16:16:25Z" || runner.Failure() == nil || *runner.Failure() != *completion.Failure) {
+				t.Fatalf("issuer retry time did not reach both the receipt and repair result: %#v", completion.Failure)
+			}
+			if !recognizedFailure && strings.Contains(string(body), `"failure"`) {
+				t.Fatalf("unexpected diagnosis saved for %s: %s", mode, body)
+			}
+			if (mode == "missing-retry" || mode == "invalid-retry") && strings.Contains(string(body), `"retry_after"`) {
+				t.Fatalf("unreliable retry time saved for %s: %s", mode, body)
+			}
+			if strings.Contains(string(body), "private-secret-marker") {
+				t.Fatal("raw issuer stderr escaped into renewal evidence")
+			}
+			if mode == "publish" || mode == "retain-success" {
 				if code != 0 || completion.OwnedOutcome != "renewed" || !a.validRenewalCertificate(authority, 2) {
 					t.Fatalf("replacement not proved: %d %#v", code, completion)
 				}

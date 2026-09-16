@@ -141,7 +141,7 @@ func TestEnabledIdentityRotationRecoversEveryDurableCheckpoint(t *testing.T) {
 				if finish.Prepared == nil {
 					t.Fatalf("finish refused: %s", finish.Result.FailedCheck)
 				}
-				if strings.Contains(strings.Join(finish.Plan, "\n"), "Subscription serving availability: Proved stopped") {
+				if strings.Contains(strings.Join(finish.Plan, "\n"), "Local subscription serving: proved stopped") {
 					t.Fatal("finishing plan inferred stopped serving from pending status")
 				}
 				got := restarted.Execute(t.Context(), *finish.Prepared, Approved, nil)

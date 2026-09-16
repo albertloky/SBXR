@@ -190,7 +190,10 @@ func TestRunConfirmsRepairWithExactPrompt(t *testing.T) {
 	}
 }
 
-type certificateReplacementInstallation struct{ journeyInstallation }
+type certificateReplacementInstallation struct {
+	journeyInstallation
+	result *proxyinstallation.Result
+}
 
 func (installation *certificateReplacementInstallation) Review(_ context.Context, action proxyinstallation.Action) proxyinstallation.Review {
 	review := proxyinstallation.Review{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, LegalActions: []proxyinstallation.Action{proxyinstallation.ReplaceSubscriptionCertificateAction}}
@@ -207,7 +210,38 @@ func (installation *certificateReplacementInstallation) Execute(_ context.Contex
 		return proxyinstallation.Result{Code: proxyinstallation.ActionCancelled, Message: "No changes were made."}
 	}
 	progress(proxyinstallation.Progress{Phase: "Renewing subscription certificate"})
+	if installation.result != nil {
+		return *installation.result
+	}
 	return proxyinstallation.Result{Status: proxyinstallation.Running, SubscriptionStatus: proxyinstallation.SubscriptionAvailable, Code: proxyinstallation.SubscriptionCertificateReplaced, Message: "Subscription certificate replacement completed and passed local checks."}
+}
+
+func TestRunDisplaysCertificateFailureGuidanceWithoutRetry(t *testing.T) {
+	for _, correction := range []string{
+		"The certificate authority rate-limited this Certbot attempt. Wait until at least 2030-09-14 16:16:25 UTC before reviewing another attempt. This does not establish allowance for multiple certificate issuances. Finish subscription change can request another certificate; it does not bypass the limit.",
+		"The certificate change did not complete; its cause is unknown. Inspect protected Certbot diagnostics before reviewing another attempt. Finish subscription change can request another certificate.",
+	} {
+		t.Run(correction, func(t *testing.T) {
+			installation := &certificateReplacementInstallation{result: &proxyinstallation.Result{
+				Status: proxyinstallation.Running, Code: proxyinstallation.SubscriptionChangeNeedsCompletion,
+				Message:     "The subscription change did not complete. Use Finish subscription change.",
+				FailedCheck: "Owned certificate replacement", Correction: correction,
+			}}
+			var output, errors bytes.Buffer
+			code := Run(t.Context(), nil, strings.NewReader("1\ny\n0\n"), &output, &errors, installation, nil)
+			if code != 0 || errors.Len() != 0 || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Approved}) {
+				t.Fatalf("Run()=%d confirmations=%v errors=%s", code, installation.confirmations, errors.String())
+			}
+			for _, want := range []string{"Replace subscription certificate? [y/N]", "Owned certificate replacement", correction, string(proxyinstallation.SubscriptionChangeNeedsCompletion)} {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("missing %q: %s", want, output.String())
+				}
+			}
+			if strings.Count(output.String(), "Progress: Renewing subscription certificate") != 1 {
+				t.Fatal("menu retried the failed action")
+			}
+		})
+	}
 }
 
 func TestRunConfirmsCertificateReplacementWithExactPrompt(t *testing.T) {
@@ -399,7 +433,7 @@ func TestRunPresentsAndCancelsTheRealNotSetUpJourney(t *testing.T) {
 	if status != 0 || !reflect.DeepEqual(installation.actions, []proxyinstallation.Action{proxyinstallation.StatusAction, proxyinstallation.StartSetupAction, proxyinstallation.StatusAction}) || !reflect.DeepEqual(installation.confirmations, []proxyinstallation.Confirmation{proxyinstallation.Declined}) || installation.statusReviews != 2 {
 		t.Fatalf("status=%d actions=%v confirmations=%v statusReviews=%d", status, installation.actions, installation.confirmations, installation.statusReviews)
 	}
-	want := "SBXR V3\nVersion: v3.0.0\nProxy status: Not set up\nSubscription status: Not enabled\nProxy traffic availability: \nSubscription serving availability: \nResult: Proxy setup has not started.\nCode: PROXY-INSTALLATION-STATUS-NOT-SET-UP\n\n1. Start setup\n2. View details\n3. Complete removal\n0. Exit\n"
+	want := "SBXR V3\nVersion: v3.0.0\nProxy status: Not set up\nSubscription status: Not enabled\nLocal proxy runtime: \nLocal subscription serving: \nOutside connectivity: not established by these local checks (including Karing).\nResult: Proxy setup has not started.\nCode: PROXY-INSTALLATION-STATUS-NOT-SET-UP\n\n1. Start setup\n2. View details\n3. Complete removal\n0. Exit\n"
 	if !bytes.Contains(output.Bytes(), []byte(want)) {
 		t.Fatalf("initial frame missing:\n%s", output.String())
 	}

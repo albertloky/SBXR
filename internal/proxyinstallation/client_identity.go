@@ -162,7 +162,7 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 	if record.Serving != nil {
 		servingAvailability = CannotBeVerified
 	}
-	review.Plan = []string{"Action: Finish Client Identity rotation", "Selected direction: " + direction + ".", "Remaining effects: " + strings.Join(remaining, ", ") + ".", "Proxy traffic availability: " + string(review.ProxyTraffic) + ".", "Subscription serving availability: " + string(servingAvailability) + ".", "Subscription Capability remains Not enabled.", "No Client Configuration is displayed automatically."}
+	review.Plan = []string{"Action: Finish Client Identity rotation", "Selected direction: " + direction + ".", "Remaining effects: " + strings.Join(remaining, ", ") + ".", "Local proxy runtime: " + string(review.ProxyTraffic) + ".", "Local subscription serving: " + string(servingAvailability) + ".", "Subscription Capability remains Not enabled.", "No Client Configuration is displayed automatically.", "Outside connectivity: not established by these local checks (including Karing)."}
 	if record.Serving != nil {
 		review.Plan[5] = "Preserve the unchanged Subscription Link and publish only matching selected artifact material. Retain independent subscription faults and renewal evidence; never start stale artifacts."
 	}

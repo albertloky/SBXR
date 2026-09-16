@@ -2914,7 +2914,7 @@ func TestClientIdentityRecoveryFreshlyVerifiesTheStartupRoute(t *testing.T) {
 	restarted := newInstalledInterface(readyLifecycle{}, host, singboxadapter.New())
 	finish := restarted.Review(t.Context(), FinishClientIdentityAction)
 	plan := strings.Join(finish.Plan, "\n")
-	for _, want := range []string{"Selected direction:", "Remaining effects:", "Proxy traffic availability:", "Subscription serving availability: proved stopped"} {
+	for _, want := range []string{"Selected direction:", "Remaining effects:", "Local proxy runtime:", "Local subscription serving: proved stopped", "Outside connectivity: not established by these local checks (including Karing)."} {
 		if !strings.Contains(plan, want) {
 			t.Errorf("Finish Plan missing %q: %s", want, plan)
 		}
