@@ -12,6 +12,17 @@ explicit human observations and does not run the historical V4 protocol.
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh` |
+| Authenticated release asset reads | `download-release-asset.py` |
+
+The asset reader uses `gh api` and makes at most one fresh GET after a TCP read
+reset, the failure observed in the unsigned `v3.1.73` draft download. It discards
+the incomplete body, obtains a new redirect from the API, and exposes a completed
+file atomically. Other errors and a second reset fail. Callers retain their
+existing identity, size, and SHA-256 verification; release mutations are not
+retried. Error logs retain the read failure and discarded byte count with URLs
+redacted. `python3 .github/scripts/test_download_release_asset.py -v` exercises
+the real `gh` client against a local server, including resets and HTTP refusals;
+the root `release_asset_download_test.go` includes it in ordinary Go checks.
 
 Focused helper tests live beside the scripts they exercise, including
 `test_mvp_evidence.py` and `test_ssh_boundary.py`. The former

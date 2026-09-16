@@ -4,6 +4,7 @@ set -euo pipefail
 umask 077
 test "$#" -eq 1
 output="$1"
+script_directory="$(cd "$(dirname "$0")" && pwd)"
 directory="$(mktemp -d)"
 trap 'rm -rf "$directory"' EXIT
 (
@@ -16,7 +17,7 @@ while read -r release; do
   index=null
   sequence=null
   if test -n "$index_asset_id"; then
-    gh api "repos/$GITHUB_REPOSITORY/releases/assets/$index_asset_id" -H 'Accept: application/octet-stream' > existing-index.json
+    python3 "$script_directory/download-release-asset.py" "$GITHUB_REPOSITORY" "$index_asset_id" existing-index.json
     if jq -e '(.sequence | type) == "number" and .sequence > 0 and .sequence == (.sequence | floor)' existing-index.json >/dev/null 2>&1; then
       sequence="$(jq -c .sequence existing-index.json)"
     fi

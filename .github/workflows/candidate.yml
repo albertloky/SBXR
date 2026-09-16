@@ -155,7 +155,7 @@ jobs:
             while read -r expected; do
               name="$(jq -r .name <<<"$expected")"
               id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' source-a-release.json)"
-              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$id" -H 'Accept: application/octet-stream' > "source-a/$name"
+              python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$GITHUB_REPOSITORY" "$id" "source-a/$name"
               test "$(stat -c %s "source-a/$name")" -eq "$(jq -r .size <<<"$expected")"
               test "$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"
             done < <(jq -c '.assets[]' source-action.json)
@@ -428,7 +428,7 @@ jobs:
             while read -r asset; do
               id="$(jq -r .id <<<"$asset")"
               name="$(jq -r .name <<<"$asset")"
-              gh api "repos/$repository/releases/assets/$id" -H 'Accept: application/octet-stream' > "downloaded/$tag/$name"
+              python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$repository" "$id" "downloaded/$tag/$name"
               download="$(jq -cnS --argjson id "$id" --arg name "$name" --arg sha256 "$(sha256sum "downloaded/$tag/$name" | cut -d' ' -f1)" --argjson size "$(stat -c %s "downloaded/$tag/$name")" '{authenticated:true,id:$id,name:$name,sha256:$sha256,size:$size}')"
               jq -cS --argjson download "$download" '. + [$download]' downloads.json > downloads.next
               mv downloads.next downloads.json
@@ -606,7 +606,7 @@ jobs:
               name="$(jq -r .name <<<"$asset")"
               proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' <<<"$release")"
               test -n "$proof"
-              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "assets/$tag/$name"
+              python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$GITHUB_REPOSITORY" "$(jq -r .id <<<"$asset")" "assets/$tag/$name"
               test "$(stat -c %s "assets/$tag/$name")" -eq "$(jq -r .size <<<"$proof")"
               test "$(sha256sum "assets/$tag/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$proof")"
             done < <(jq -c '.assets[]' release.json)

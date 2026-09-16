@@ -172,7 +172,7 @@ func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservatio
 		`gh api --method POST "repos/$repository/releases"`,
 		`gh api "repos/$repository/releases/$created_release_id" > observed-release.json`,
 		`release_id="$(jq -r .id observed-release.json)"`,
-		`gh api "repos/$repository/releases/assets/$id" -H 'Accept: application/octet-stream'`,
+		`python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$repository" "$id" "downloaded/$tag/$name"`,
 		`stage:"candidate-draft-verification"`,
 		`go run ./cmd/sbxr-release qualification < candidate-draft-verification-facts.json > candidate-draft-verification-decision.json`,
 		`jq -c '.verified_releases' candidate-draft-verification-decision.json > verified-drafts.json`,

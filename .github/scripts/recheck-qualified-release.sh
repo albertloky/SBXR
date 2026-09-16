@@ -23,7 +23,7 @@ while read -r asset; do
   proof="$(jq -c --arg name "$name" '.assets[] | select(.name == $name)' "$release_json")"
   test -n "$proof"
   test "$(jq -r .size <<<"$asset")" -eq "$(jq -r .size <<<"$proof")"
-  gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "$directory/$name"
+  python3 "$(dirname "$0")/download-release-asset.py" "$GITHUB_REPOSITORY" "$(jq -r .id <<<"$asset")" "$directory/$name"
   test "$(sha256sum "$directory/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$proof")"
 done < <(jq -c '.assets[]' "$metadata")
 if test -e "$directory/release-index.json"; then

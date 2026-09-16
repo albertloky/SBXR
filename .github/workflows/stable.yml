@@ -85,7 +85,7 @@ jobs:
             printf '[]' > assets.json
             while read -r asset; do
               name="$(jq -r .name <<<"$asset")"
-              gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "$directory/$name"
+              python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$GITHUB_REPOSITORY" "$(jq -r .id <<<"$asset")" "$directory/$name"
               jq -cS --arg name "$name" --arg sha256 "$(sha256sum "$directory/$name" | cut -d' ' -f1)" --argjson size "$(stat -c %s "$directory/$name")" '. + [{name:$name,sha256:$sha256,size:$size}] | sort_by(.name)' assets.json > assets.next
               mv assets.next assets.json
             done < <(jq -c '.assets[]' "$metadata")
@@ -206,7 +206,7 @@ jobs:
               if test "$public" = true; then
                 curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$name" -o "$directory/$name" || return 1
               else
-                gh api "repos/$GITHUB_REPOSITORY/releases/assets/$(jq -r .id <<<"$asset")" -H 'Accept: application/octet-stream' > "$directory/$name" || return 1
+                python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$GITHUB_REPOSITORY" "$(jq -r .id <<<"$asset")" "$directory/$name" || return 1
               fi
               sha256="$(jq -r .digest <<<"$asset")"
               jq -cS --arg name "$name" --arg sha256 "${sha256#sha256:}" --argjson id "$(jq -r .id <<<"$asset")" --argjson size "$(jq -r .size <<<"$asset")" '. + [{id:$id,name:$name,sha256:$sha256,size:$size}] | sort_by(.name)' "$directory.assets.json" > "$directory.assets.next"
