@@ -81,35 +81,76 @@ jobs:
           V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
+          preflight_operation='initialize preflight'
+          public_latest_execution='not started'
+          report_preflight_exit() {
+            local status="$1" outcome
+            trap - EXIT
+            # Reporting must not replace the original status, even if writing fails.
+            set +e
+            {
+              printf 'Candidate preflight operation: %s\n' "$preflight_operation"
+              printf 'Candidate preflight exit status: %s\n' "$status"
+              printf 'Public-latest verifier: %s\n' "$public_latest_execution"
+              if test ! -e current-source-verification.json; then
+                printf '%s\n' 'Public-latest result: missing'
+              elif test ! -s current-source-verification.json; then
+                printf '%s\n' 'Public-latest result: empty'
+              elif outcome="$(jq -ser 'if length == 1 then .[0].outcome else null end | select(. == "accepted" or . == "refused" or . == "unavailable")' current-source-verification.json 2>/dev/null)"; then
+                printf 'Public-latest result: %s\n' "$outcome"
+              else
+                printf '%s\n' 'Public-latest result: incomplete or invalid'
+              fi
+            } | tee candidate-preflight-diagnostics.txt >&2
+            exit "$status"
+          }
+          # Fixed labels and allowlisted outcomes only; never trace input values.
+          trap 'report_preflight_exit "$?"' EXIT
           if test "$MODE" = v3; then CHECKLIST="$V3_CHECKLIST"; A_TAG=; A_SEQUENCE=0; fi
           if test "$MODE" = v3; then
+            preflight_operation='require V3 declaration'
             test -n "$V3_ATTEMPT"
+            preflight_operation='check canonical V3 declaration'
             test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
+            preflight_operation='execute verify-public-latest'
+            public_latest_execution='did not complete'
             go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
-            jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null
+            public_latest_execution='completed'
+            preflight_operation='require accepted public-latest outcome'
+            jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
+            preflight_operation='check V3 declaration scope'
             jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and (.support.scope == "first-subscription-clean-install" or .support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade")' <<<"$V3_ATTEMPT" >/dev/null
           fi
+          preflight_operation='fetch source tags'
           git fetch --force --tags origin
+          preflight_operation='collect release history'
           bash .github/scripts/release-history.sh release-facts.json
+          preflight_operation='read burned release identities'
           burned="$(for burned_tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$burned_tag"; done | jq -cS -s 'sort_by(.original_tag)')"
+          preflight_operation='read latest release metadata'
           latest_tag=null
           if gh api "repos/$GITHUB_REPOSITORY/releases/latest" > latest.json 2>/dev/null; then
             latest_tag="$(jq -c .tag_name latest.json)"
           fi
+          preflight_operation='read candidate tag authority'
           tags="$(for tag in "$A_TAG" "$B_TAG"; do if test -n "$tag" && git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then printf '%s\n' "$tag"; fi; done | jq -Rsc 'split("\n") | map(select(length > 0)) | sort')"
           defect_issue=null
           failed_normal_run=null
           if test "$MODE" = rescue; then
+            preflight_operation='read rescue issue and failed run'
             gh api "repos/$GITHUB_REPOSITORY/issues/${DEFECT_URL##*/}" > defect-issue.json
             defect_issue="$(jq -cS '{is_pull_request:has("pull_request"),state,url:.html_url}' defect-issue.json)"
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FAILED_RUN" > failed-normal-run.json
+            preflight_operation='download failed normal qualification boundary'
             mkdir -m 0700 failed-normal-boundary
             gh run download "$FAILED_RUN" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir failed-normal-boundary
             failed_sha="$(jq -r .head_sha failed-normal-run.json)"
+            preflight_operation='verify failed normal qualification boundary'
             gh attestation verify failed-normal-boundary/qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$failed_sha" >/dev/null
             jq -e --arg run "$FAILED_RUN" --arg sha "$failed_sha" '.schema == "sbxr-qualification-manifest-v1" and .mode == "normal" and .workflow == {commit:$sha,path:".github/workflows/candidate.yml",ref:"albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main",run_id:$run,run_url:("https://github.com/albertloky/SBXR/actions/runs/"+$run)}' failed-normal-boundary/qualification-manifest.json >/dev/null
             failed_normal_run="$(jq -cS '{conclusion:(.conclusion // ""),id:(.id | tostring),mode:"normal",path}' failed-normal-run.json)"
           fi
+          preflight_operation='assemble candidate preflight facts'
           failed_normal_run_id=null
           defect_issue_url=null
           if test -n "$FAILED_RUN"; then failed_normal_run_id="$(jq -cn --arg value "$FAILED_RUN" '$value')"; fi
@@ -125,16 +166,21 @@ jobs:
             --arg checklist_sha256 "$(sha256sum "$CHECKLIST" | cut -d' ' -f1)" --arg commit "$(git rev-parse HEAD)" --argjson defect_issue "$defect_issue" --argjson failed_normal_run "$failed_normal_run" --argjson latest_tag "$latest_tag" --slurpfile releases release-facts.json --arg remote_main "$(git rev-parse origin/main)" --argjson tags "$tags" --argjson support "$(if test "$MODE" = v3; then jq -c .support <<<"$V3_ATTEMPT"; else printf null; fi)" \
             '{archive_commit:$archive_commit,archive_remote_commit:$archive_remote_commit,archive_remote_tag_object:$archive_remote_tag_object,archive_tag_object:$archive_tag_object,archive_type:$archive_type,burned_identities:$burned_identities,candidate:({a_sequence:$a_sequence,a_tag:$a_tag,b_sequence:$b_sequence,b_tag:$b_tag,defect_issue_url:$defect_issue_url,failed_normal_run_id:$failed_normal_run_id,mode:$mode} + (if $mode == "v3" then {evidence_version:3,support:$support} else {} end)),checklist_sha256:$checklist_sha256,commit:$commit,defect_issue:$defect_issue,failed_normal_run:$failed_normal_run,latest_tag:$latest_tag,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",stage:"candidate-preflight",tags:$tags}' | tr -d '\n' > candidate-preflight-facts.json
           if test "$MODE" = v3; then
+            preflight_operation='attach verified public latest to preflight facts'
             jq -cS --slurpfile latest current-source-verification.json --slurpfile releases release-facts.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' candidate-preflight-facts.json | tr -d '\n' > candidate-preflight-facts.next
             mv candidate-preflight-facts.next candidate-preflight-facts.json
           fi
+          preflight_operation='execute candidate preflight qualification'
           go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json
           if test "$MODE" = v3; then
             # Check the complete declaration before allocating either build.
             # Preserve raw JSON so duplicate keys cannot disappear through jq.
+            preflight_operation='assemble candidate declaration facts'
             { printf '{"attempt":%s,"preflight":' "$V3_ATTEMPT"; cat candidate-preflight-facts.json; printf '}'; } > candidate-declaration-facts.json
+            preflight_operation='validate candidate declaration'
             go run ./cmd/sbxr-release qualification-declaration < candidate-declaration-facts.json > candidate-declaration-decision.json
           fi
+          preflight_operation='verify candidate preflight decision bindings'
           facts_sha256="$(sha256sum candidate-preflight-facts.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg mode "$MODE" --arg a_tag "$A_TAG" --argjson a_sequence "$A_SEQUENCE" --arg b_tag "$B_TAG" --argjson b_sequence "$B_SEQUENCE" '
             .schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-preflight" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and
@@ -144,27 +190,42 @@ jobs:
               elif .type == "use-source-release" then (keys | sort) == ["assets","commit","draft","immutable","prerelease","release_id","release_identity","sequence","tag","type"] and .tag == $a_tag and .sequence == $a_sequence and (.release_id | type) == "number" and (.release_identity | keys | sort) == ["commit","release_index_sha256","repository","tag"] and .release_identity == {commit:.commit,release_index_sha256:.release_identity.release_index_sha256,repository:env.GITHUB_REPOSITORY,tag:.tag} and (.release_identity.release_index_sha256 | test("^[0-9a-f]{64}$")) and (.assets | length) == 4 and all(.assets[]; (keys | sort) == ["name","sha256","size"] and (.sha256 | test("^[0-9a-f]{64}$")) and .size > 0)
               else false end) and
             (if .source_state == "v3-clean" or .source_state == "v3-recurring" or .source_state == "v3-subscription-clean" then $mode == "v3" and [.actions[].type] == ["build-release"] and .actions[0].tag == $b_tag and .actions[0].sequence == $b_sequence elif .source_state == "initial-normal" then $mode == "normal" and [.actions[].type] == ["build-release","build-release"] else (.source_state == "rescue") == ($mode == "rescue") and [.actions[].type] == ["use-source-release","build-release"] end)' candidate-preflight-decision.json >/dev/null
+          preflight_operation='read qualified candidate actions'
           build_releases="$(jq -c '[.actions[] | select(.type == "build-release") | {tag,sequence}]' candidate-preflight-decision.json)"
           source_state="$(jq -r .source_state candidate-preflight-decision.json)"
           source_a='{}'
           if jq -e '.actions[] | select(.type == "use-source-release")' candidate-preflight-decision.json > source-action.json; then
+            preflight_operation='verify source release metadata'
             release_id="$(jq -r .release_id source-action.json)"
             gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > source-a-release.json
             jq -e --argjson action "$(cat source-action.json)" '.id == $action.release_id and .tag_name == $action.tag and .target_commitish == $action.commit and .draft == $action.draft and .prerelease == $action.prerelease and .immutable == $action.immutable and (.assets | length) == 4' source-a-release.json >/dev/null
             mkdir -m 0700 source-a
             while read -r expected; do
+              preflight_operation='download source release asset'
               name="$(jq -r .name <<<"$expected")"
               id="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .id' source-a-release.json)"
               python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$GITHUB_REPOSITORY" "$id" "source-a/$name"
+              preflight_operation='verify source release asset size and digest'
               test "$(stat -c %s "source-a/$name")" -eq "$(jq -r .size <<<"$expected")"
               test "$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"
             done < <(jq -c '.assets[]' source-action.json)
+            preflight_operation='verify source release index identity'
             jq -e --argjson action "$(cat source-action.json)" '.repository == env.GITHUB_REPOSITORY and .tag == $action.tag and .commit == $action.commit and .sequence == $action.sequence' source-a/release-index.json >/dev/null
             source_a="$(jq -c '{assets,commit,draft,immutable,prerelease,release_id,release_identity,sequence,tag}' source-action.json)"
           fi
+          preflight_operation='write qualified preflight outputs'
           echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
           echo "build_releases=$build_releases" >> "$GITHUB_OUTPUT"
           echo "source_a=$source_a" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.preflight.outcome == 'failure' }}
+        with:
+          name: candidate-preflight-diagnostics
+          path: |
+            current-source-verification.json
+            candidate-preflight-diagnostics.txt
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ !cancelled() && inputs.mode == 'v3' }}
         with:

@@ -2,12 +2,205 @@ package architecture_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, step, found := strings.Cut(string(body), "      - name: Verify source state and unused release authority\n")
+	if !found {
+		t.Fatal("missing candidate preflight step")
+	}
+	_, script, found := strings.Cut(step, "        run: |\n")
+	if !found {
+		t.Fatal("missing candidate preflight shell")
+	}
+	script, _, _ = strings.Cut(script, "\n      - ")
+	lines := strings.Split(script, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimPrefix(lines[i], "          ")
+	}
+	script = strings.Join(lines, "\n")
+	prefix, _, found := strings.Cut(script, "git fetch --force --tags origin\n")
+	if !found {
+		t.Fatal("missing boundary after public verification")
+	}
+	const refused = `{"outcome":"refused","release_identity":null,"sequence":null}`
+	const unavailable = `{"outcome":"unavailable","release_identity":null,"sequence":null}`
+	const accepted = `{"outcome":"accepted","release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"albertloky/SBXR","tag":"v3.1.0"},"sequence":83}`
+	const token = "preflight-test-token-must-stay-private"
+	const signedQuery = "sig=preflight-test-signature&token=private-query"
+	const declaration = `{"private_fixture":"` + token + ` https://release-assets.githubusercontent.com/fixture?` + signedQuery + `","schema":"sbxr-v3-qualification-attempt-v3","support":{"scope":"subscription-clean-install-repair"}}`
+	for _, fixture := range []struct {
+		name, result, operation, execution, outcome string
+		verifierStatus, wantStatus                  int
+	}{
+		{"accepted", accepted, "", "completed", "accepted", 0, 0},
+		{"refused", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
+		{"unavailable", unavailable, "require accepted public-latest outcome", "completed", "unavailable", 0, 1},
+		{"execution-failed", "", "execute verify-public-latest", "did not complete", "empty", 42, 42},
+		{"execution-failed-with-result", refused, "execute verify-public-latest", "did not complete", "refused", 42, 42},
+		{"execution-failed-with-accepted-result", accepted, "execute verify-public-latest", "did not complete", "accepted", 42, 42},
+		{"interrupted", `{"outcome":`, "execute verify-public-latest", "did not complete", "incomplete or invalid", 143, 143},
+		{"empty", "", "require accepted public-latest outcome", "completed", "empty", 0, 4},
+		{"incomplete", `{"outcome":`, "require accepted public-latest outcome", "completed", "incomplete or invalid", 0, 5},
+		{"missing", "", "require accepted public-latest outcome", "completed", "missing", 0, 2},
+		{"declaration-missing", "", "require V3 declaration", "not started", "missing", 0, 1},
+		{"declaration-noncanonical", "", "check canonical V3 declaration", "not started", "missing", 0, 1},
+		{"declaration-scope", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
+		{"later-failure", accepted, "fetch source tags", "completed", "accepted", 0, 37},
+		{"diagnostic-write-failure", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
+		{"normal", "", "", "not started", "missing", 0, 0},
+		{"rescue", "", "", "not started", "missing", 0, 0},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			directory := t.TempDir()
+			// Substitute only external commands. Bash, jq, redirection, traps,
+			// filesystem writes and the workflow's assertions run unchanged.
+			for name, source := range map[string]string{
+				"go": `#!/usr/bin/env bash
+set -euo pipefail
+test "$*" = 'run ./cmd/sbxr-release verify-public-latest'
+printf 'called\n' >> verifier-called
+if test "$FIXTURE" = missing; then
+  rm current-source-verification.json
+else
+  printf '%s' "$RESULT"
+fi
+if test "$FIXTURE" = interrupted; then kill -TERM "$$"; fi
+exit "$VERIFIER_STATUS"
+`,
+				"git": "#!/bin/sh\nprintf called > git-called\nexit 37\n",
+			} {
+				if err := os.WriteFile(filepath.Join(directory, name), []byte(source), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fixture.name == "diagnostic-write-failure" {
+				if err := os.Mkdir(filepath.Join(directory, "candidate-preflight-diagnostics.txt"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			attempt, mode := declaration, "v3"
+			switch fixture.name {
+			case "declaration-missing":
+				attempt = ""
+			case "declaration-noncanonical":
+				attempt += " "
+			case "declaration-scope":
+				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-repair", "unknown")
+			case "normal", "rescue":
+				mode = fixture.name
+			}
+			// Success must reach the next operation. The later-failure case
+			// runs the full step, stopping at the external git subprocess.
+			entry := prefix + "printf reached > continued\n"
+			if fixture.name == "later-failure" {
+				entry = script
+			}
+			command := exec.CommandContext(t.Context(), "bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry)
+			command.Dir = directory
+			command.Env = []string{
+				"PATH=" + directory + ":" + os.Getenv("PATH"), "MODE=" + mode,
+				"V3_CHECKLIST=unused", "V3_ATTEMPT=" + attempt, "GH_TOKEN=" + token,
+				"SIGNED_URL=https://release-assets.githubusercontent.com/fixture?" + signedQuery,
+				"RESULT=" + fixture.result, "FIXTURE=" + fixture.name,
+				"VERIFIER_STATUS=" + strconv.Itoa(fixture.verifierStatus),
+			}
+			output, err := command.CombinedOutput()
+			status := 0
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				status = exit.ExitCode()
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if status != fixture.wantStatus {
+				t.Errorf("exit = %d, want %d; output: %s", status, fixture.wantStatus, output)
+			}
+			_, continuedErr := os.Stat(filepath.Join(directory, "continued"))
+			if (continuedErr == nil) != (fixture.wantStatus == 0) {
+				t.Errorf("continued after failure or stopped after acceptance: %v", continuedErr)
+			}
+			calls, _ := os.ReadFile(filepath.Join(directory, "verifier-called"))
+			wantCalls := "called\n"
+			if fixture.execution == "not started" {
+				wantCalls = ""
+			}
+			if string(calls) != wantCalls {
+				t.Errorf("verifier invocations = %q, want %q", calls, wantCalls)
+			}
+			result, resultErr := os.ReadFile(filepath.Join(directory, "current-source-verification.json"))
+			if fixture.execution == "not started" || fixture.name == "missing" {
+				if !os.IsNotExist(resultErr) {
+					t.Errorf("unexpected result: %v", resultErr)
+				}
+			} else if resultErr != nil || string(result) != fixture.result {
+				t.Errorf("available verification result was not preserved: %v %s", resultErr, result)
+			}
+			diagnostic, diagnosticErr := os.ReadFile(filepath.Join(directory, "candidate-preflight-diagnostics.txt"))
+			if fixture.name != "diagnostic-write-failure" && diagnosticErr != nil {
+				t.Errorf("preflight diagnostics were not retained: %v", diagnosticErr)
+			}
+			for i, text := range []string{string(output), string(diagnostic)} {
+				if i == 1 && fixture.name == "diagnostic-write-failure" {
+					continue
+				}
+				for _, want := range []string{fixture.operation, "exit status: " + strconv.Itoa(fixture.wantStatus), "Public-latest verifier: " + fixture.execution, "Public-latest result: " + fixture.outcome} {
+					if !strings.Contains(text, want) {
+						t.Errorf("diagnostic lacks %q: %q", want, text)
+					}
+				}
+			}
+			for _, text := range []string{string(output), string(diagnostic), string(result)} {
+				for _, secret := range []string{token, signedQuery, "release-assets.githubusercontent.com/fixture?"} {
+					if strings.Contains(text, secret) {
+						t.Error("preflight exposed a secret or signed URL query")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCandidatePreflightRetainsDiagnosticsWithoutChangingDecisionArtifact(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight, _, _ := strings.Cut(string(body), "\n  build:")
+	var diagnosticUpload, decisionUpload string
+	for _, step := range strings.Split(preflight, "\n      - ") {
+		if strings.Contains(step, "name: candidate-preflight-diagnostics\n") {
+			diagnosticUpload = step
+		}
+		if strings.Contains(step, "name: candidate-preflight-decision-chain\n") {
+			decisionUpload = step
+		}
+	}
+	for _, want := range []string{"uses: actions/upload-artifact@", "if: ${{ always() && steps.preflight.outcome == 'failure' }}", "path: |\n            current-source-verification.json\n            candidate-preflight-diagnostics.txt\n", "if-no-files-found: ignore", "retention-days: 1"} {
+		if !strings.Contains(diagnosticUpload, want) {
+			t.Errorf("early-failure diagnostic upload lacks %q", want)
+		}
+	}
+	if !strings.Contains(decisionUpload, "if-no-files-found: error") || strings.Contains(decisionUpload, "if:") || strings.Contains(decisionUpload, "current-source-verification.json") {
+		t.Error("success-only decision-chain artifact contract changed")
+	}
+	for _, forbidden := range []string{"continue-on-error:", "set -x", "BASH_COMMAND", "printenv"} {
+		if strings.Contains(preflight, forbidden) {
+			t.Errorf("preflight diagnostics may weaken failure or expose secrets: %s", forbidden)
+		}
+	}
+}
 
 func TestSigningUsesVerifiedIndexArtifactWithoutDraftReadPermission(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
