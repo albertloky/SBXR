@@ -30,6 +30,7 @@ finish pending work, convert durable authority, or create missing authority.
 | Managed renewal dispatch and hook recording | [renewal.go](renewal.go) |
 | Serving dispatch, serving/removal exclusion, and resource cleanup | [serving.go](serving.go) |
 | Software Lifecycle compatibility and runtime collaboration | [software_update.go](software_update.go) |
+| New-setup boot provisioning of the volatile whole-host lock | [lock_provision.go](lock_provision.go), [adapter/host/lock_provision.go](adapter/host/lock_provision.go), and [softwarelifecycle/mutation_lock.go](../softwarelifecycle/mutation_lock.go) |
 | Linux filesystem, systemd, Certbot, firewall, process, and lock mechanics | [adapter/host](adapter/host) |
 | sing-box configuration and UUID-only Client Identity replacement | [adapter/singbox/singbox.go](adapter/singbox/singbox.go) |
 | Numbered Owner menu and Software Lifecycle choices | [adapter/terminal/run.go](adapter/terminal/run.go) and [adapter/terminal/lifecycle.go](adapter/terminal/lifecycle.go) |
@@ -56,11 +57,33 @@ operation records its source and target, checkpoint, authorized effects, and
 recovery direction before the corresponding effect. Unknown or contradictory
 direction refuses mutation rather than choosing cleanup or forward completion.
 
+Certificate acceptance retains its completion checkpoint until the protected
+serving snapshot matches accepted authority and publication is durable. A proved
+older snapshot for the same link can be synchronized through reviewed Finish
+subscription change when the accepted certificate is still published and loaded.
+Inspection does not write it. See the [repair validation and existing-host
+recovery plan](../../docs/acceptance/certificate-start-coordination-repair-2026-09-19.md).
+
 Ordinary proxy starts pass through the owned startup integration. Client
 Identity rotation closes every supported start route during cutover, restores
 only the proved source before revocation, and finishes only the selected target
 after revocation. Boot and private dispatch do not choose recovery direction or
 create authority.
+
+Ordinary proxy and serving starts serialize on the existing protected lock,
+with a bounded, cancellable wait. Each revalidates installed and operation facts
+after acquisition. Owner-controlled starts retain the authenticated descriptor
+handoff; an ordinary acquired lock does not authorize a one-use cutover start.
+
+New clean setups bind an exact boot-provisioning authority into the Ownership
+Record and install an owned early systemd unit. After a reboot, its private role
+may create only the absent `/run/lock/sbxr.lock` inode after verifying the
+Installed Record, then rechecks that identity while holding the lock. A safe
+existing inode is reused; unexpected parents, files, links, metadata, identity,
+or contention refuse. Legacy records are not migrated. Ordinary proxy, serving,
+renewal, and recorder roles remain existing-only and never create the lock.
+Complete removal deletes only the exact owned unit, staged path, and enablement
+link through the normal recorded removal sequence.
 
 Complete removal is forward-only once committed. It binds the verified
 finishing Release Identity, preserves each resource's creating identity, obtains

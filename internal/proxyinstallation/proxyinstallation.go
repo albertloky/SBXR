@@ -223,6 +223,7 @@ type preparedReview struct {
 	running      hostadapter.RunningInspection
 	removal      hostadapter.RemovalInspection
 	activation   hostadapter.CertificateActivationInspection
+	servingState hostadapter.ServingAuthority
 	renewal      hostadapter.RenewalInspection
 	repair       subscriptionRepairCorrection
 	target       []byte
@@ -277,6 +278,9 @@ var footprint = []hostadapter.Resource{
 	{Kind: hostadapter.PathResource, Name: "/etc/sing-box"},
 	{Kind: hostadapter.PathResource, Name: hostadapter.ClientIdentityTargetPath},
 	{Kind: hostadapter.PathResource, Name: hostadapter.ProxyStartupDropInPath},
+	{Kind: hostadapter.PathResource, Name: hostadapter.MutationLockProvisionUnitPath},
+	{Kind: hostadapter.PathResource, Name: hostadapter.MutationLockProvisionUnitPath + ".sbxr-next"},
+	{Kind: hostadapter.PathResource, Name: hostadapter.MutationLockProvisionWantsPath},
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sing-box"},
 	{Kind: hostadapter.PathResource, Name: "/usr/bin/sing-box"},
 	{Kind: hostadapter.PathResource, Name: "/etc/systemd/system/sing-box.service"},
@@ -1182,7 +1186,7 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 		{hostadapter.UnmaskService, serviceUnmasked, nil},
 	}
 	for _, step := range steps {
-		if result := module.host.Apply(ctx, hostadapter.OperationInput{Operation: step.operation, Spec: hostSetupSpec, Body: step.payload}); !result.OK {
+		if result := module.host.Apply(ctx, hostadapter.OperationInput{Operation: step.operation, Spec: hostSetupSpec, Body: step.payload, LockProvisioning: record.LockProvisioning}); !result.OK {
 			return module.cleanup(ctx, record, body, progress)
 		}
 		report(progress, string(step.operation))
@@ -1635,7 +1639,7 @@ func cleanupSurfaceAccepted(inspection hostadapter.Inspection, ownershipPresent 
 }
 
 func cleanupInput(operation hostadapter.Operation, record ownershipRecord) hostadapter.OperationInput {
-	input := hostadapter.OperationInput{Operation: operation, Spec: hostSetupSpec}
+	input := hostadapter.OperationInput{Operation: operation, Spec: hostSetupSpec, LockProvisioning: record.LockProvisioning}
 	switch operation {
 	case hostadapter.RemoveConfigurationState:
 		input.SHA256 = record.ConfigurationSHA256
@@ -1753,7 +1757,7 @@ func runningAccepted(facts hostadapter.RunningInspection) bool {
 }
 
 func ownedFactsAccepted(facts hostadapter.RunningInspection) bool {
-	return all(facts.Ownership, facts.TransactionFilesAbsent, facts.APTKey, facts.APTSource, facts.Package, facts.Hold, facts.PackageIdentity, facts.Configuration, facts.State, facts.Validation, facts.ServiceProvenance).Accepted
+	return all(facts.Ownership, facts.TransactionFilesAbsent, facts.APTKey, facts.APTSource, facts.Package, facts.Hold, facts.PackageIdentity, facts.Configuration, facts.State, facts.Validation, facts.ServiceProvenance, facts.LockProvisioning).Accepted
 }
 
 func report(progress ProgressReporter, phase string) {

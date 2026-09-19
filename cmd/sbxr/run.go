@@ -13,6 +13,12 @@ import (
 )
 
 func run(ctx context.Context, arguments []string, input io.Reader, output, errorOutput io.Writer, lifecycle softwarelifecycle.Interface) int {
+	if len(arguments) == 1 && arguments[0] == hostadapter.MutationLockProvisionRole {
+		if proxyinstallation.ProvisionMutationLock(ctx, lifecycle) {
+			return 0
+		}
+		return 1
+	}
 	if len(arguments) == 1 && arguments[0] == hostadapter.RenewalRecorderRole {
 		return proxyinstallation.RecordRenewal(ctx, lifecycle)
 	}

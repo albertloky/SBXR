@@ -68,6 +68,7 @@ type ownershipRecord struct {
 	SubscriptionCompromised  bool                                       `json:"subscription_compromised,omitempty"`
 	SubscriptionResources    *hostadapter.SubscriptionResourceAuthority `json:"subscription_resources,omitempty"`
 	Startup                  *hostadapter.ProxyStartupAuthority         `json:"proxy_startup,omitempty"`
+	LockProvisioning         *hostadapter.LockProvisioningAuthority     `json:"lock_provisioning,omitempty"`
 	ClientRotation           *clientIdentityRotation                    `json:"client_identity_rotation,omitempty"`
 }
 
@@ -188,13 +189,16 @@ const (
 
 func newOwnershipRecord(release softwarelifecycle.ReleaseIdentity, facts hostadapter.Preflight, destination hostadapter.Destination, configuration []byte) ownershipRecord {
 	digest := sha256.Sum256(configuration)
-	return ownershipRecord{
+	lockProvisioning := hostadapter.NewLockProvisioningAuthority()
+	record := ownershipRecord{
 		Schema: 1, Phase: ownershipRecorded, Direction: cleanupRequired, Release: release,
 		Package:    "https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
 		PublicIPv4: facts.PublicIPv4, DestinationAddress: destination.Address, DestinationName: destination.ServerName,
 		ConfigurationSHA256: hex.EncodeToString(digest[:]),
-		Resources:           ownershipResources(hex.EncodeToString(digest[:])),
+		LockProvisioning:    &lockProvisioning,
 	}
+	record.Resources = recordResources(record, false)
+	return record
 }
 
 func ownershipBytes(record ownershipRecord) []byte {
@@ -228,7 +232,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "client_identity_rotation"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "lock_provisioning", "client_identity_rotation"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -417,6 +421,9 @@ func validOwnership(record ownershipRecord) bool {
 	if record.Startup != nil && (record.Schema != 2 || !record.Startup.Valid() || record.Phase != runningPhase && record.Phase != removalCommitted) {
 		return false
 	}
+	if record.LockProvisioning != nil && (!record.LockProvisioning.Valid() || record.Package == "") {
+		return false
+	}
 	if record.ClientRotation != nil && (record.Schema != 2 || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validClientIdentityRotation(*record.ClientRotation, record.Startup, record.ConfigurationSHA256)) {
 		return false
 	}
@@ -453,6 +460,9 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	}
 	if record.Schema == 2 {
 		resources[0] = "/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-2"
+	}
+	if record.LockProvisioning != nil {
+		resources = append(resources, record.LockProvisioning.Resources()...)
 	}
 	if record.Serving != nil {
 		resources = append(resources, record.Serving.Resources()...)
@@ -682,7 +692,7 @@ func AdmitSoftwareUpdate(body []byte, source softwarelifecycle.ReleaseIdentity, 
 	if target == nil {
 		return true
 	}
-	if !validReleaseIdentity(target.Identity) || target.Support == nil || target.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || target.Support.Contract != softwarelifecycle.SubscriptionUpdateContract || !slices.Contains(target.Support.Sources, source) || !bytes.Contains(target.Executable, []byte(expandedProxyAuthorityCapability)) {
+	if !validReleaseIdentity(target.Identity) || target.Support == nil || target.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || target.Support.Contract != softwarelifecycle.SubscriptionUpdateContract || !slices.Contains(target.Support.Sources, source) || !bytes.Contains(target.Executable, []byte(expandedProxyAuthorityCapability)) || record.LockProvisioning != nil && !bytes.Contains(target.Executable, []byte(hostadapter.LockProvisioningCapability())) {
 		return false
 	}
 	return true

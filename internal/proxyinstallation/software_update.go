@@ -21,7 +21,7 @@ type softwareUpdateHost interface {
 	hostInterface
 	AcquireServingExclusion() (*hostadapter.ServingExclusion, bool)
 	AcquireRenewalExclusion(hostadapter.RenewalAuthority) (*hostadapter.RenewalExclusion, bool)
-	SoftwareUpdateContracts(context.Context, *hostadapter.ServingAuthority, *hostadapter.RenewalAuthority, *hostadapter.SubscriptionResourceAuthority, *hostadapter.ProxyStartupAuthority) bool
+	SoftwareUpdateContracts(context.Context, *hostadapter.ServingAuthority, *hostadapter.RenewalAuthority, *hostadapter.SubscriptionResourceAuthority, *hostadapter.ProxyStartupAuthority, *hostadapter.LockProvisioningAuthority) bool
 	InspectPreparedSubscription(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) hostadapter.Observation
 	CompleteSoftwareUpdateServing(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) bool
 }
@@ -86,7 +86,7 @@ func softwareUpdateRuntime(host softwareUpdateHost) softwarelifecycle.UpdateRunt
 			if target != nil {
 				compatible = runningAccepted(facts)
 			}
-			if !host.SoftwareUpdateContracts(ctx, record.Serving, record.Renewal, record.SubscriptionResources, record.Startup) || !compatible {
+			if !host.SoftwareUpdateContracts(ctx, record.Serving, record.Renewal, record.SubscriptionResources, record.Startup, record.LockProvisioning) || !compatible {
 				release()
 				return nil, false
 			}
@@ -113,7 +113,7 @@ func softwareUpdateRuntime(host softwareUpdateHost) softwarelifecycle.UpdateRunt
 				return false
 			}
 			current, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
-			return err == nil && bytes.Equal(current, body) && host.SoftwareUpdateContracts(ctx, record.Serving, record.Renewal, record.SubscriptionResources, record.Startup) && ownedFactsAccepted(host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4))
+			return err == nil && bytes.Equal(current, body) && host.SoftwareUpdateContracts(ctx, record.Serving, record.Renewal, record.SubscriptionResources, record.Startup, record.LockProvisioning) && ownedFactsAccepted(host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4))
 		},
 	}
 }

@@ -13,6 +13,24 @@ explicit human observations and does not run the historical V4 protocol.
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh` |
 | Authenticated release asset reads | `download-release-asset.py` |
+| One-time v3.1.75 maintenance (outside release dispatch) | [helper](sbxr-snapshot-recovery/main.go), [executable driver](sbxr-snapshot-recovery/rehearse.py), [protected log-parent wrapper](sbxr-snapshot-recovery/with-protected-log-parent.sh), [command supervisor](sbxr-snapshot-recovery/protected_command_supervisor.py), [wrapper VM qualification](sbxr-snapshot-recovery/with-protected-log-parent-test.sh), [runbook comparison regression](sbxr-snapshot-recovery/test_runbook.py), and [runbook](../../docs/acceptance/v3.1.75-snapshot-recovery-runbook.md) |
+
+`v3-packaged-live.sh` inventories the complete protected candidate footprint and
+proves its absence after public cleanup, including the owned mutation-lock boot
+unit, its staged publication path, and its enablement symlink. Absence checks
+treat broken symlinks as present. Keep that inventory aligned with
+`internal/proxyinstallation` whenever an owned host resource is added or moved;
+`release_packaged_driver_test.go` owns the script-level regression checks.
+
+The log-parent wrapper qualification is destructive and runs only as root on a
+prepared disposable Ubuntu/systemd VM. With the wrapper, supervisor, and test
+script staged in `/root/recovery/log-parent-qualification`, invoke it exactly as
+`bash /root/recovery/log-parent-qualification/with-protected-log-parent-test.sh`.
+
+`python3 .github/scripts/sbxr-snapshot-recovery/test_runbook.py` executes the
+runbook's actual listener-comparison program against preservation and refusal
+fixtures. Set `TMPDIR` to an absolute temporary directory under the current
+local acceptance run; each test removes its fixture directory on success or failure.
 
 The asset reader uses `gh api` and makes at most one fresh GET after a TCP read
 reset, the failure observed in the unsigned `v3.1.73` draft download. It discards

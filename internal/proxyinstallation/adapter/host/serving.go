@@ -277,6 +277,18 @@ func (a Adapter) InspectServingFiles(authority ServingAuthority, removing bool) 
 }
 
 func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandbox bool, stored ...ServingAuthority) Observation {
+	state := authority
+	if len(stored) == 1 {
+		state = stored[0]
+	}
+	return a.inspectServingFilesWithState(authority, state, removing, sandbox, false)
+}
+
+func (a Adapter) inspectCertificateServingFiles(authority, stored ServingAuthority) Observation {
+	return a.inspectServingFilesWithState(authority, stored, false, false, true)
+}
+
+func (a Adapter) inspectServingFilesWithState(authority, stateAuthority ServingAuthority, removing, sandbox, certificatePublication bool) Observation {
 	if !authority.Valid() {
 		return observation(false, true)
 	}
@@ -295,7 +307,11 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 	if !a.servingDirectory("/var/lib/sbxr", []string{"update.json", ".update.json.next", ".installed.json.prior", ".installed.json.candidate", "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "client-identity-target.json", "client-identity-target.json.sbxr-next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
 		return Observation{}
 	}
-	if !sandbox && !a.servingDirectory(ServingStagingPath, nil, removing) {
+	stagingSafe := a.servingDirectory(ServingStagingPath, nil, removing)
+	if certificatePublication {
+		stagingSafe = a.certificateStateStaging(authority)
+	}
+	if !sandbox && !stagingSafe {
 		return Observation{}
 	}
 	archive, live := []string{}, []string{}
@@ -343,10 +359,6 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 		tokenPresent := err == nil
 		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && (len(token) != 44 || token[43] != '\n' || digest(token[:43]) != authority.CredentialSHA256) {
 			return Observation{}
-		}
-		stateAuthority := authority
-		if len(stored) == 1 {
-			stateAuthority = stored[0]
 		}
 		state, err := a.protectedServingFile(ServingStatePath, 0600, digest(servingStateBytes(stateAuthority)))
 		if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && !bytes.Equal(state, servingStateBytes(stateAuthority)) {
@@ -421,7 +433,7 @@ func (a Adapter) publishedCertificateAuthority(renewal RenewalAuthority, accepte
 
 func (a Adapter) publishedServingAuthority(renewal RenewalAuthority, accepted ServingAuthority) (ServingAuthority, bool) {
 	target, valid := a.publishedCertificateAuthority(renewal, accepted)
-	if !valid || !a.servingDirectory(ServingStagingPath, nil, false) {
+	if !valid || !a.certificateStateStaging(target) {
 		return ServingAuthority{}, false
 	}
 	unit, unitErr := a.protectedServingFile(ServingUnitPath, 0644, "")

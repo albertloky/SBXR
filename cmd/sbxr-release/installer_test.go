@@ -139,7 +139,7 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, variant := range []int{1, 2, 3, 4, 5} {
+	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8} {
 		schema := variant
 		if variant >= 3 {
 			schema = 2
@@ -183,6 +183,22 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`"phase":"Running","unfinished_direction":"none"`), []byte(`"phase":"Removal committed","unfinished_direction":"removal required"`), 1)
 				ownership = bytes.Replace(ownership, []byte(`"removal_checkpoint":0`), []byte(`"removal_checkpoint":11`), 1)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"finishing_release_identity":` + string(finisherJSON) + "}\n")
+			}
+			if variant == 6 || variant == 8 {
+				authority := hostadapter.NewLockProvisioningAuthority()
+				resources, _ := json.Marshal(authority.Resources())
+				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), resources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(ownership, &fields) != nil {
+					t.Fatal("lock provisioning authority failed")
+				}
+				extra := []byte{}
+				for range authority.Resources() {
+					extra = append(extra, ',')
+					extra = append(extra, fields["release_identity"]...)
+				}
+				extra = append(extra, []byte(`],"finishing_release_identity"`)...)
+				ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
 			}
 			if variant >= 4 {
 				authority := hostadapter.ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}}
@@ -239,6 +255,32 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"renewal":` + string(renewalJSON) + `,"subscription_repair":` + repair + `,"subscription_resources":` + string(subscriptionJSON) + "}\n")
 				}
 			}
+			if variant == 7 || variant == 8 {
+				startup := hostadapter.ProxyStartupAuthority{DropInSHA256: strings.Repeat("9", 64), DirectoryCreated: true}
+				startupResources, _ := json.Marshal(startup.Resources())
+				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), startupResources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(ownership, &fields) != nil {
+					t.Fatal("startup authority failed")
+				}
+				creatorCount := len(startup.Resources())
+				var extra []byte
+				for range creatorCount {
+					extra = append(extra, ',')
+					extra = append(extra, fields["release_identity"]...)
+				}
+				extra = append(extra, []byte(`],"finishing_release_identity"`)...)
+				ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
+				startupJSON, _ := json.Marshal(startup)
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"proxy_startup":` + string(startupJSON) + "}\n")
+				if variant == 8 {
+					lockJSON, _ := json.Marshal(hostadapter.NewLockProvisioningAuthority())
+					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"lock_provisioning":` + string(lockJSON) + "}\n")
+				}
+			} else if variant == 6 {
+				authority, _ := json.Marshal(hostadapter.NewLockProvisioningAuthority())
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"lock_provisioning":` + string(authority) + "}\n")
+			}
 			ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
 			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
 				t.Fatal(err)
@@ -254,12 +296,25 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				t.Fatal(err)
 			}
 
-			for name, wrong := range map[string][]byte{
+			invalid := map[string][]byte{
 				"unknown schema":             bytes.Replace(ownership, []byte(fmt.Sprintf(`"schema":%d`, schema)), []byte(`"schema":99`), 1),
 				"unknown operation":          bytes.Replace(ownership, []byte(`"phase":`), []byte(`"operation":{},"phase":`), 1),
 				"conflicting identity alias": bytes.Replace(ownership, []byte(`"Tag":`), []byte(`"tag":"v9.0.0","Tag":`), 1),
 				"unknown resource":           bytes.Replace(ownership, []byte(`root:root 0600 one-link`), []byte(`unproved resource`), 1),
-			} {
+			}
+			if variant == 7 || variant == 8 {
+				invalid["changed startup authority"] = bytes.Replace(ownership, []byte(`"drop_in_sha256":"`+strings.Repeat("9", 64)+`"`), []byte(`"drop_in_sha256":"`+strings.Repeat("0", 64)+`"`), 1)
+				finishing := bytes.Index(ownership, []byte(`],"finishing_release_identity"`))
+				if finishing < 0 {
+					t.Fatal("missing creator boundary")
+				}
+				lastCreator := bytes.LastIndex(ownership[:finishing], []byte(`,{"Repository"`))
+				if lastCreator < 0 {
+					t.Fatal("missing creator")
+				}
+				invalid["wrong provenance count"] = append(append([]byte{}, ownership[:lastCreator]...), ownership[finishing:]...)
+			}
+			for name, wrong := range invalid {
 				t.Run(name, func(t *testing.T) {
 					if err := os.WriteFile(ownershipPath, wrong, 0o600); err != nil {
 						t.Fatal(err)

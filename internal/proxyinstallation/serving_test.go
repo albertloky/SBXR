@@ -61,6 +61,15 @@ func (h *dispatchTestHost) BorrowRuntimeStartLock(role string) (*hostadapter.Mut
 	return &hostadapter.MutationLock{}, nil
 }
 
+func (h *dispatchTestHost) AcquireRuntimeStartLock(_ context.Context, role string) (*hostadapter.MutationLock, bool, error) {
+	lock, busy, err := h.AcquireSubscriptionReviewLock(hostSetupSpec.LockPath)
+	if err != nil || !busy {
+		return lock, false, err
+	}
+	lock, err = h.BorrowRuntimeStartLock(role)
+	return lock, err == nil, err
+}
+
 type advertisedListener struct {
 	net.Listener
 	ip string

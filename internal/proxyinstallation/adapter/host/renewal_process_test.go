@@ -52,7 +52,14 @@ func TestRenewalIssuerProcessFixture(t *testing.T) {
 		lock.Close()
 		os.Exit(76)
 	}
-	if err := os.WriteFile(filepath.Join(root, "issuer-ready"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+	ready := filepath.Join(root, "issuer-ready")
+	staged := ready + ".next"
+	if err := os.WriteFile(staged, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		_ = os.Remove(staged)
+		os.Exit(77)
+	}
+	if err := os.Rename(staged, ready); err != nil {
+		_ = os.Remove(staged)
 		os.Exit(77)
 	}
 	if mode == "cancel" {

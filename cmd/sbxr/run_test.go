@@ -13,6 +13,12 @@ import (
 
 type constructionLifecycle struct{}
 
+type notReadyLifecycle struct{ constructionLifecycle }
+
+func (notReadyLifecycle) Status(context.Context) softwarelifecycle.Result {
+	return softwarelifecycle.Result{}
+}
+
 func (constructionLifecycle) Status(context.Context) softwarelifecycle.Result {
 	identity := softwarelifecycle.ReleaseIdentity{Repository: softwarelifecycle.Repository, Tag: "v3.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}
 	return softwarelifecycle.Result{State: softwarelifecycle.Ready, Installed: &identity, Code: softwarelifecycle.StatusReady}
@@ -53,6 +59,13 @@ func TestPrivateProxyStartArgumentDoesNotCreateAuthority(t *testing.T) {
 	var output bytes.Buffer
 	if run(t.Context(), []string{hostadapter.ProxyStartRole}, strings.NewReader(""), &output, &output, constructionLifecycle{}) != 1 || output.Len() != 0 {
 		t.Fatal("private proxy start dispatch did not refuse silently")
+	}
+}
+
+func TestPrivateMutationLockProvisionArgumentRefusesSilentlyWithoutMutationLifecycle(t *testing.T) {
+	var output bytes.Buffer
+	if run(t.Context(), []string{hostadapter.MutationLockProvisionRole}, strings.NewReader(""), &output, &output, notReadyLifecycle{}) != 1 || output.Len() != 0 {
+		t.Fatal("private mutation-lock provisioning dispatch did not refuse silently")
 	}
 }
 

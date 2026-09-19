@@ -258,6 +258,23 @@ func TestCandidateFailureCleanupFinishesOnlyThroughThePublicInterface(t *testing
 	}
 }
 
+func TestPackagedFootprintChecksTreatBrokenSymlinksAsPresent(t *testing.T) {
+	script, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, required := range []string{
+		`if test -e "$path" || test -L "$path"; then`,
+		`{ test ! -e "$path" && test ! -L "$path"; } || return 1`,
+		`test ! -e /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service && test ! -L /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("packaged footprint checks omitted broken-link guard %q", required)
+		}
+	}
+}
+
 func TestPackagedFailureCleanupHandlesEveryPublicFinishingState(t *testing.T) {
 	script, err := filepath.Abs(".github/scripts/v3-packaged-live.sh")
 	if err != nil {

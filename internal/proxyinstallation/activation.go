@@ -18,6 +18,8 @@ import (
 type certificateActivationHost interface {
 	InspectCertificateActivation(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) hostadapter.CertificateActivationInspection
 	ActivateServing(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool
+	InspectCertificateServingState(hostadapter.ServingAuthority, bool) (hostadapter.ServingAuthority, bool)
+	PublishCertificateServingState(hostadapter.RenewalAuthority, hostadapter.ServingAuthority, hostadapter.ServingAuthority) bool
 }
 
 func compatibleCertificateTarget(source, target hostadapter.ServingAuthority) bool {
@@ -62,7 +64,9 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 		}
 		return SubscriptionProblemDetected, hostadapter.CertificateActivationInspection{}
 	}
-	if record.ClientRotation != nil { return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{} }
+	if record.ClientRotation != nil {
+		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
+	}
 	activationHost, ok := module.host.(certificateActivationHost)
 	renewalHost, renewalOK := module.host.(renewalHost)
 	if !ok || !renewalOK || record.Renewal == nil {
@@ -83,6 +87,13 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 		return SubscriptionChangeIncomplete, inspection
 	}
 	if inspection.Published != *record.Serving {
+		return SubscriptionChangeIncomplete, inspection
+	}
+	stored, safe := activationHost.InspectCertificateServingState(*record.Serving, false)
+	if !safe {
+		return SubscriptionProblemDetected, inspection
+	}
+	if stored != *record.Serving {
 		return SubscriptionChangeIncomplete, inspection
 	}
 	if inspection.Loaded != *record.Serving {
@@ -139,12 +150,21 @@ func (module *installedInterface) prepareCertificateActivationReview(ctx context
 		review.Result = refused(review.Status, "Working proxy", "Restore the independently managed proxy, then review Finish subscription change again.")
 		return review
 	}
+	host, supported := module.host.(certificateActivationHost)
+	stored, safe := hostadapter.ServingAuthority{}, false
+	if supported {
+		stored, safe = host.InspectCertificateServingState(inspection.Published, record.Activation != nil)
+	}
+	if !safe || record.Activation == nil && inspection.Published != *record.Serving && stored != *record.Serving || inspection.Published == *record.Serving && stored != *record.Serving && inspection.Loaded != *record.Serving {
+		review.Result = refused(review.Status, "Protected serving state", "Restore the exact owned serving state and certificate archive before finishing.")
+		return review
+	}
 	var token [32]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		review.Result = refused(review.Status, "Prepared Action generation", "Review Finish subscription change again.")
 		return review
 	}
-	module.prepared[token] = preparedReview{generation: module.generation, action: FinishSubscriptionChangeAction, status: review.Status, release: *status.Installed, record: slices.Clone(body), running: running, activation: inspection}
+	module.prepared[token] = preparedReview{generation: module.generation, action: FinishSubscriptionChangeAction, status: review.Status, release: *status.Installed, record: slices.Clone(body), running: running, activation: inspection, servingState: stored}
 	review.Prepared = &PreparedAction{token: token}
 	link := "unverified"
 	if inspection.Loaded.Valid() {
@@ -152,12 +172,20 @@ func (module *installedInterface) prepareCertificateActivationReview(ctx context
 	} else if inspection.Observed {
 		link = "unavailable"
 	}
-	if record.Activation != nil && record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target == inspection.Published {
+	if inspection.Published == *record.Serving && stored != *record.Serving && record.Activation == nil {
+		review.Plan = []string{
+			"Action: Finish subscription change",
+			"Diagnosed fault: accepted certificate generation " + strconv.Itoa(record.Serving.CertificateGeneration) + " still has a protected serving snapshot for generation " + strconv.Itoa(stored.CertificateGeneration) + ".",
+			"Selected direction: record completion authority, synchronize the proved older snapshot to the already accepted generation, and clear the completed marker.",
+			"Resources affected: the Ownership Record and subscription-serving.json only.",
+			"Verify the published and loaded accepted certificate with normal trust checks. Keep the Subscription Link, Client Identity, certificate files, live links, and services unchanged.",
+		}
+	} else if record.Activation != nil && record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target == inspection.Published {
 		review.Plan = []string{
 			"Action: Finish subscription change",
 			"Interrupted operation: accepted certificate generation " + strconv.Itoa(inspection.Published.CertificateGeneration) + " still has its completion checkpoint.",
 			"Selected direction: verify the loaded accepted generation and clear only the completed activation marker.",
-			"Resources affected: the Ownership Record only; sbxr-subscription.service, the published Certbot certificate files, and four live links stay unchanged.",
+			"Resources affected: the Ownership Record and protected serving snapshot; sbxr-subscription.service, the published Certbot certificate files, and four live links stay unchanged.",
 			"Existing Subscription Link: " + link + "; its identity stays unchanged.",
 			"Do not restart Subscription Serving; verify its selected state, certificate, process, service, owned listener, and local HTTPS behavior.",
 			"Keep the Subscription Link, Proxy Profile, Client Identity, and working proxy unchanged.",
@@ -172,13 +200,14 @@ func (module *installedInterface) prepareCertificateActivationReview(ctx context
 			"Action: Finish subscription change",
 			"Interrupted operation: certificate activation from accepted generation " + strconv.Itoa(record.Serving.CertificateGeneration) + " to published generation " + strconv.Itoa(inspection.Published.CertificateGeneration) + ".",
 			"Selected direction: finish forward activation of the exact published generation for the owned sbxr-subscription lineage.",
-			"Resources affected: the Ownership Record and sbxr-subscription.service; the published Certbot certificate files and four live links stay unchanged.",
+			"Resources affected: the Ownership Record, protected serving snapshot, and sbxr-subscription.service; the published Certbot certificate files and four live links stay unchanged.",
 			"Existing Subscription Link: " + link + "; its identity stays unchanged.",
 			runtimeEffect,
 			"Keep the Subscription Link, Proxy Profile, Client Identity, and working proxy unchanged.",
 			"Local HTTPS checks do not prove public reachability or Karing acceptance.",
 		}
 	}
+	review.Plan = append(review.Plan, "Synchronize the protected subscription-serving.json snapshot with the accepted certificate before clearing completion authority. No certificate is requested.")
 	return review
 }
 
@@ -209,7 +238,16 @@ func (module *installedInterface) executeCertificateActivation(ctx context.Conte
 		return refused(Running, "Prepared Action facts", "Restore the exact reviewed proxy and one consistent published certificate generation, then review again.")
 	}
 	target := inspection.Published
+	stored, safe := host.InspectCertificateServingState(target, record.Activation != nil)
+	if !safe || stored != authority.servingState {
+		return refused(Running, "Protected serving state", "Serving state changed since Review. Inspect and review Finish subscription change again.")
+	}
 	operation := certificateActivation{Source: *record.Serving, Target: target, Checkpoint: activationTargetRecorded}
+	if target == *record.Serving && stored != target {
+		// Recover the already accepted generation without changing its identity,
+		// requesting a certificate, or restarting a correctly loaded runtime.
+		operation = certificateActivation{Source: stored, Target: target, Checkpoint: activationTargetAccepted}
+	}
 	if record.Activation != nil && record.Activation.Target == target {
 		operation = *record.Activation
 	}
@@ -269,6 +307,9 @@ func (module *installedInterface) executeCertificateActivation(ctx context.Conte
 		} else {
 			current = next
 		}
+	}
+	if !host.PublishCertificateServingState(*record.Renewal, operation.Source, target) {
+		return subscriptionActivationIncomplete("Protected serving state publication", "Preserve the accepted certificate and use Finish subscription change to complete its protected state publication.")
 	}
 	record.Activation = nil
 	next := ownershipBytes(record)

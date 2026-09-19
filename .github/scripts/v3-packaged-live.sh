@@ -41,8 +41,8 @@ scan_vps_capture() {
 
 protected_inventory() {
   {
-    for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /lib/systemd/system/sing-box.service /usr/lib/systemd/system/sing-box.service; do
-      if test -e "$path"; then stat -c "$path %a %u %g %s" "$path"; sha256sum "$path"; else printf '%s absent\n' "$path"; fi
+    for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-mutation-lock.service /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service /lib/systemd/system/sing-box.service /usr/lib/systemd/system/sing-box.service; do
+      if test -e "$path" || test -L "$path"; then stat -c "$path %a %u %g %s" "$path"; sha256sum "$path"; else printf '%s absent\n' "$path"; fi
     done
     for directory in /var/lib/sbxr /etc/sing-box /var/lib/sing-box; do
       if test -d "$directory"; then
@@ -336,6 +336,9 @@ prove_not_set_up() {
   printf '0\n' | /usr/local/bin/sbxr | grep -F 'Proxy status: Not set up' >/dev/null
   test ! -e /var/lib/sbxr/proxy-ownership.json
   test ! -e /var/lib/sbxr/proxy-ownership.finalizing.json
+  test ! -e /etc/systemd/system/sbxr-mutation-lock.service && test ! -L /etc/systemd/system/sbxr-mutation-lock.service
+  test ! -e /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next && test ! -L /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next
+  test ! -e /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service && test ! -L /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service
   test ! -e /etc/sing-box/config.json
   test ! -e /var/lib/sing-box
   ! dpkg-query -W sing-box >/dev/null 2>&1
@@ -350,8 +353,8 @@ prove_running() {
 
 prove_not_installed() {
   local code output
-  for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /var/lib/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /lib/systemd/system/sing-box.service /usr/lib/systemd/system/sing-box.service; do
-    test ! -e "$path" || return 1
+  for path in /usr/local/bin/sbxr /var/lib/sbxr/installed.json /var/lib/sbxr/proxy-ownership.json /var/lib/sbxr/proxy-ownership.finalizing.json /etc/sing-box/config.json /var/lib/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-mutation-lock.service /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service /lib/systemd/system/sing-box.service /usr/lib/systemd/system/sing-box.service; do
+    { test ! -e "$path" && test ! -L "$path"; } || return 1
   done
   if dpkg-query -W sing-box >/dev/null 2>&1; then return 1; else code=$?; fi
   test "$code" -eq 1 || return 1

@@ -13,11 +13,14 @@ import (
 
 // SoftwareUpdateContracts observes the actual resources while the caller holds
 // package and renewal exclusion. Diagnostic evidence is read, never cleared.
-func (a Adapter) SoftwareUpdateContracts(ctx context.Context, serving *ServingAuthority, renewal *RenewalAuthority, resources *SubscriptionResourceAuthority, startup *ProxyStartupAuthority) bool {
+func (a Adapter) SoftwareUpdateContracts(ctx context.Context, serving *ServingAuthority, renewal *RenewalAuthority, resources *SubscriptionResourceAuthority, startup *ProxyStartupAuthority, lockProvisioning *LockProvisioningAuthority) bool {
 	if ctx.Err() != nil || !a.ClientIdentityPreparationIdle().Accepted || !a.safelyAbsent(ClientIdentityTargetPath+".sbxr-next") || !a.safelyAbsent(ClientIdentityConfigurationNextPath) {
 		return false
 	}
 	if startup != nil && !a.VerifyProxyStartupIntegration(ctx, *startup) {
+		return false
+	}
+	if lockProvisioning != nil && !a.InspectLockProvisioning(*lockProvisioning).Accepted {
 		return false
 	}
 	if serving == nil {

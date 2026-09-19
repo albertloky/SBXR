@@ -20,3 +20,10 @@ while current Go readers and validators preserve historical-record meaning.
 Files with release versions, dates, issue numbers, or `diagnostic` in their name
 are reports of individual attempts. They do not prove current host state,
 candidate readiness, or release acceptance.
+
+[Certificate-state and startup repairs — 2026-09-19](certificate-start-coordination-repair-2026-09-19.md)
+records local regression and isolated systemd validation, plus the
+[maintenance handoff](v3.1.75-snapshot-recovery-runbook.md) for the retained
+generation mismatch. The report distinguishes exact original-executable
+rehearsals, source-level coverage and live observations. Its current status and
+remaining gates are recorded there; the handoff adds no MVP journey.

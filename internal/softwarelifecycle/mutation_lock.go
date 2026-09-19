@@ -3,6 +3,7 @@ package softwarelifecycle
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -48,6 +49,55 @@ func AcquireMutationLockAuthority(path string, uid uint32) (*MutationLockAuthori
 func AcquireExistingMutationLockAuthority(path string, uid uint32) (*MutationLockAuthority, bool, error) {
 	// A FIFO in the shared lock directory must reach the type check without waiting for a writer.
 	return acquireMutationLockAuthority(path, uid, os.O_RDONLY|syscall.O_NONBLOCK)
+}
+
+// ProvisionMutationLockAuthority creates only the exact absent coordination
+// inode. A retry may acquire an already-safe inode, but never changes, replaces,
+// or truncates one that it did not create.
+func ProvisionMutationLockAuthority(path string, uid uint32) (*MutationLockAuthority, bool, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return acquireMutationLockAuthority(path, uid, os.O_RDONLY|syscall.O_NONBLOCK)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	refuse := func(err error) (*MutationLockAuthority, bool, error) {
+		_ = file.Close()
+		return nil, false, err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		return refuse(err)
+	}
+	info, err := file.Stat()
+	stat, ok := mutationLockFileInfo(info)
+	current, currentErr := os.Lstat(path)
+	currentStat, currentOK := mutationLockFileInfo(current)
+	if err != nil || currentErr != nil || !ok || !currentOK || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || stat.Uid != uid || stat.Nlink != 1 || stat.Dev != currentStat.Dev || stat.Ino != currentStat.Ino {
+		return refuse(errors.New("unsafe mutation lock"))
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	if err := file.Sync(); err != nil {
+		return refuse(err)
+	}
+	parent, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return refuse(err)
+	}
+	syncErr, closeErr := parent.Sync(), parent.Close()
+	if syncErr != nil || closeErr != nil {
+		if syncErr != nil {
+			return refuse(syncErr)
+		}
+		return refuse(closeErr)
+	}
+	return &MutationLockAuthority{file: file, path: path, uid: uid}, false, nil
 }
 
 func acquireMutationLockAuthority(path string, uid uint32, flags int) (*MutationLockAuthority, bool, error) {

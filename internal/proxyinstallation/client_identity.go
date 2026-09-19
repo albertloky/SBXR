@@ -32,6 +32,7 @@ type clientIdentityHost interface {
 }
 
 type proxyStartHost interface {
+	AcquireRuntimeStartLock(context.Context, string) (*hostadapter.MutationLock, bool, error)
 	ReadOwnership(string) ([]byte, error)
 	ReadConfiguration(context.Context, hostadapter.SetupSpec, string) ([]byte, error)
 	MutationInProgress(string) (bool, bool)
@@ -46,22 +47,16 @@ func AuthorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interf
 }
 
 func authorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interface, host proxyStartHost) bool {
-	status := lifecycle.Status(ctx)
-	if status.State == softwarelifecycle.UpdateInProgress {
-		starter, ok := host.(interface {
-			BorrowRuntimeStartLock(string) (*hostadapter.MutationLock, error)
-		})
-		lc, lifecycleOK := lifecycle.(mutationLifecycle)
-		if !ok || !lifecycleOK {
-			return false
-		}
-		lock, err := starter.BorrowRuntimeStartLock(hostadapter.ProxyStartRole)
-		if err != nil {
-			return false
-		}
-		defer lock.Release()
-		status = lc.StatusUnderMutationLock(ctx, lock)
+	lock, borrowed, err := host.AcquireRuntimeStartLock(ctx, hostadapter.ProxyStartRole)
+	if err != nil || lock == nil {
+		return false
 	}
+	defer lock.Release()
+	lc, ok := lifecycle.(mutationLifecycle)
+	if !ok {
+		return false
+	}
+	status := lc.StatusUnderMutationLock(ctx, lock)
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	record, ok := decodeOwnership(body)
 	if err != nil || !ok || status.State != softwarelifecycle.Ready || status.Installed == nil || !compatibleOwnership(record, *status.Installed) || record.Phase != runningPhase || record.Direction != noDirection || record.Startup == nil || !host.VerifyProxyStartupIntegration(ctx, *record.Startup) {
@@ -81,7 +76,7 @@ func authorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interf
 		return record.ConfigurationSHA256 == record.ClientRotation.Source
 	}
 	held, valid := host.MutationInProgress(hostSetupSpec.LockPath)
-	if !held || !valid {
+	if !borrowed || !held || !valid {
 		return false
 	}
 	selected := record.ClientRotation.Source

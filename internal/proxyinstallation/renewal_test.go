@@ -358,6 +358,9 @@ func TestLiveRenewalTakesStatusPrecedenceButDeployHookStillActivates(t *testing.
 		target.CertificateSHA256[index] = strings.Repeat(string(rune('4'+index)), 64)
 	}
 	live := hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true, Accepted: true}, State: hostadapter.RenewalAttemptLive}
+	// A deploy hook runs inside its still-live managed Certbot attempt; an
+	// activation must not try to exclude the very recorder waiting for it.
+	renewal.renewalBusy = true
 	host := &activationTestHost{renewalTestHost: renewal, published: target, loaded: *record.Serving, renewal: &live}
 	m := newInstalledInterface(lifecycle, host, acceptedSingBox{})
 	if review := m.Review(t.Context(), StatusAction); review.SubscriptionStatus != SubscriptionChangeInProgress {

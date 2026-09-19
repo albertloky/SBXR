@@ -11,7 +11,7 @@ import (
 
 type updateTestHost struct{ *controlledHost }
 
-func (h *updateTestHost) SoftwareUpdateContracts(context.Context, *hostadapter.ServingAuthority, *hostadapter.RenewalAuthority, *hostadapter.SubscriptionResourceAuthority, *hostadapter.ProxyStartupAuthority) bool {
+func (h *updateTestHost) SoftwareUpdateContracts(context.Context, *hostadapter.ServingAuthority, *hostadapter.RenewalAuthority, *hostadapter.SubscriptionResourceAuthority, *hostadapter.ProxyStartupAuthority, *hostadapter.LockProvisioningAuthority) bool {
 	return true
 }
 func (h *updateTestHost) CompleteSoftwareUpdateServing(context.Context, hostadapter.ServingAuthority, hostadapter.RenewalAuthority) bool {
@@ -41,7 +41,7 @@ func TestSoftwareRecoveryAdmitsStoppedProxyWithoutRestartingIt(t *testing.T) {
 	if host.active || host.listener || len(host.operations) != operations || !bytes.Equal(before, host.ownership) {
 		t.Fatal("recovery changed proxy or authority")
 	}
-	target := &softwarelifecycle.UpdateTarget{Identity: testInstalledIdentity(), Executable: []byte(expandedProxyAuthorityCapability), Support: &softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.RecurringSubscriptionUpgrade, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []softwarelifecycle.ReleaseIdentity{testInstalledIdentity()}}}
+	target := &softwarelifecycle.UpdateTarget{Identity: testInstalledIdentity(), Executable: []byte(expandedProxyAuthorityCapability + " " + hostadapter.LockProvisioningCapability()), Support: &softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.RecurringSubscriptionUpgrade, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []softwarelifecycle.ReleaseIdentity{testInstalledIdentity()}}}
 	if release, ok := collaboration.Acquire(t.Context(), host.ownership, testInstalledIdentity(), target, lock); ok {
 		release()
 		t.Fatal("ordinary update admitted stopped proxy")

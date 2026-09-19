@@ -73,7 +73,7 @@ func (m *installedInterface) acquireSubscriptionExclusion(record ownershipRecord
 }
 
 type servingDispatchHost interface {
-	AcquireSubscriptionReviewLock(string) (*hostadapter.MutationLock, bool, error)
+	AcquireRuntimeStartLock(context.Context, string) (*hostadapter.MutationLock, bool, error)
 	ReadOwnership(string) ([]byte, error)
 	ValidateServingDispatch(hostadapter.ServingAuthority, *hostadapter.RenewalAuthority) bool
 	ServingPublicIPv4(context.Context, string) bool
@@ -144,18 +144,8 @@ func ServeSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 }
 
 func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interface, host servingDispatchHost, m *subscriptionserving.Module) subscriptionserving.Code {
-	lock, busy, err := host.AcquireSubscriptionReviewLock(hostSetupSpec.LockPath)
-	borrowed := false
-	if err == nil && busy {
-		if starter, ok := host.(interface {
-			BorrowRuntimeStartLock(string) (*hostadapter.MutationLock, error)
-		}); ok {
-			lock, err = starter.BorrowRuntimeStartLock(hostadapter.ServingRole)
-			busy = err != nil
-			borrowed = err == nil
-		}
-	}
-	if err != nil || busy || lock == nil {
+	lock, borrowed, err := host.AcquireRuntimeStartLock(ctx, hostadapter.ServingRole)
+	if err != nil || lock == nil {
 		return subscriptionserving.Refused
 	}
 	defer lock.Release()

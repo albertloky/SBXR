@@ -16,6 +16,37 @@ import (
 
 type runtimeStartLockKey struct{}
 
+// AcquireRuntimeStartLock serializes ordinary starts with each other and with
+// mutations. A busy lock is never permission: either borrow the authenticated
+// Owner handoff or acquire the exact protected inode after it becomes idle.
+// The caller must then revalidate all installed and durable operation facts.
+func (a Adapter) AcquireRuntimeStartLock(ctx context.Context, role string) (*MutationLock, bool, error) {
+	if role != ServingRole && role != ProxyStartRole {
+		return nil, false, errors.New("runtime role refused")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		lock, busy, err := a.AcquireSubscriptionReviewLock("/run/lock/sbxr.lock")
+		if err != nil || !busy {
+			return lock, false, err
+		}
+		if lock, err := a.borrowRuntimeStartLock(ctx, role); err == nil {
+			return lock, true, nil
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 // RuntimeStartContext carries existing whole-host authority to private Host
 // service effects. It grants nothing to ordinary service-manager starts.
 func RuntimeStartContext(ctx context.Context, lock *MutationLock) context.Context {
@@ -93,16 +124,34 @@ func (a Adapter) WithRuntimeStart(ctx context.Context, lock *MutationLock, role 
 }
 
 func (a Adapter) BorrowRuntimeStartLock(role string) (*MutationLock, error) {
+	return a.borrowRuntimeStartLock(context.Background(), role)
+}
+
+func (a Adapter) borrowRuntimeStartLock(ctx context.Context, role string) (*MutationLock, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	refused := errors.New("runtime start authority refused")
 	if role != ServingRole && role != ProxyStartRole {
 		return nil, refused
 	}
-	connection, err := net.DialUnix("unix", nil, a.runtimeStartAddress())
+	dialer := net.Dialer{}
+	connected, err := dialer.DialContext(ctx, "unix", a.runtimeStartAddress().Name)
 	if err != nil {
 		return nil, refused
 	}
+	connection, ok := connected.(*net.UnixConn)
+	if !ok {
+		connected.Close()
+		return nil, refused
+	}
 	defer connection.Close()
-	connection.SetDeadline(time.Now().Add(15 * time.Second))
+	deadline := time.Now().Add(15 * time.Second)
+	if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
+		deadline = end
+	}
+	connection.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { connection.Close() })
+	defer stop()
 	uid, ok := runtimePeerUID(connection)
 	if !ok || uid != a.ownerUID() {
 		return nil, refused

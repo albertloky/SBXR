@@ -568,6 +568,21 @@ func (host *controlledHost) AcquireSubscriptionReviewLock(string) (*hostadapter.
 	return &hostadapter.MutationLock{}, host.busy || host.statusBusy, nil
 }
 
+func (host *controlledHost) AcquireRuntimeStartLock(context.Context, string) (*hostadapter.MutationLock, bool, error) {
+	return &hostadapter.MutationLock{}, host.statusBusy, nil
+}
+
+func (host *controlledHost) InspectCertificateServingState(target hostadapter.ServingAuthority, _ bool) (hostadapter.ServingAuthority, bool) {
+	if record, valid := decodeOwnership(host.ownership); valid && record.Serving != nil {
+		return *record.Serving, true
+	}
+	return target, true
+}
+
+func (host *controlledHost) PublishCertificateServingState(_ hostadapter.RenewalAuthority, _, _ hostadapter.ServingAuthority) bool {
+	return true
+}
+
 func (host *controlledHost) AcquirePackageLocks() (*hostadapter.PackageLocks, bool, error) {
 	return &hostadapter.PackageLocks{}, host.busy, nil
 }
@@ -621,7 +636,8 @@ func (host *controlledHost) InspectRunning(_ context.Context, _ hostadapter.Setu
 		OSID: "ubuntu", OSVersion: "24.04", Architecture: "amd64", PublicIPv4: "8.8.8.8", Host: hostFact, PublicIPv4Matches: fact(true),
 		Ownership: fact(bytes.Equal(ownership, host.ownership)), TransactionFilesAbsent: fact(true), APTKey: fact(prepared), APTSource: fact(prepared), Package: fact(prepared), Hold: fact(prepared),
 		PackageIdentity: fact(prepared), Configuration: configuration, State: fact(prepared), Validation: fact(prepared), ServiceProvenance: fact(prepared),
-		ServiceEnabled: fact(host.enabled), ServiceActive: active, Listener: fact(host.listener),
+		LockProvisioning: fact(true),
+		ServiceEnabled:   fact(host.enabled), ServiceActive: active, Listener: fact(host.listener),
 	}
 }
 
@@ -3235,7 +3251,7 @@ func TestSoftwareUpdateAdmissionUsesExactIdleProxyAuthorityAndBothReleases(t *te
 	installation.Execute(t.Context(), *rotate.Prepared, Approved, nil)
 	source := testInstalledIdentity()
 	support := &softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.RecurringSubscriptionUpgrade, Contract: softwarelifecycle.SubscriptionUpdateContract, Sources: []softwarelifecycle.ReleaseIdentity{source}}
-	compatible := softwarelifecycle.UpdateTarget{Support: support, Identity: source, Executable: []byte(expandedProxyAuthorityCapability)}
+	compatible := softwarelifecycle.UpdateTarget{Support: support, Identity: source, Executable: []byte(expandedProxyAuthorityCapability + " " + hostadapter.LockProvisioningCapability())}
 	if !AdmitSoftwareUpdate(host.ownership, source, nil) || !AdmitSoftwareUpdate(host.ownership, source, &compatible) {
 		t.Fatal("compatible source was refused")
 	}
@@ -3245,7 +3261,7 @@ func TestSoftwareUpdateAdmissionUsesExactIdleProxyAuthorityAndBothReleases(t *te
 	if AdmitSoftwareUpdate(host.ownership, source, &unsupported) {
 		t.Fatal("candidate without expanded-authority compatibility was admitted")
 	}
-	supported := softwarelifecycle.UpdateTarget{Support: support, Identity: target, Executable: []byte("prefix " + expandedProxyAuthorityCapability + " suffix")}
+	supported := softwarelifecycle.UpdateTarget{Support: support, Identity: target, Executable: []byte("prefix " + expandedProxyAuthorityCapability + " " + hostadapter.LockProvisioningCapability() + " suffix")}
 	if !AdmitSoftwareUpdate(host.ownership, source, &supported) {
 		t.Fatal("candidate with expanded-authority compatibility was refused")
 	}

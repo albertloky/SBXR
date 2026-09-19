@@ -227,12 +227,25 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     [ "$ip1" -lt 224 ] || path_refused
     if { [ "$ip1" -eq 100 ] && [ "$ip2" -ge 64 ] && [ "$ip2" -le 127 ]; } || { [ "$ip1" -eq 172 ] && [ "$ip2" -ge 16 ] && [ "$ip2" -le 31 ]; } || { [ "$ip1" -eq 198 ] && { [ "$ip2" -eq 18 ] || [ "$ip2" -eq 19 ]; }; }; then path_refused; fi
   fi
+  lock_provisioning_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"lock_provisioning":' "$removal_record"; then
+    [ -n "$config_sha" ] || path_refused
+    lock_provisioning=$("$ROOT/usr/bin/sed" -n 's/.*,"lock_provisioning":\({"unit_sha256":"[0-9a-f]*"}\).*/\1/p' "$removal_record")
+    printf '%s\n' "$lock_provisioning" | "$ROOT/usr/bin/grep" -Eqx '\{"unit_sha256":"440c4153f2db3ee3b8cd00f1297d9fcedda633c2761b00fa71429c222280dc40"\}' || path_refused
+    resources=${resources%]}',"/etc/systemd/system/sbxr-mutation-lock.service root:root 0644 one-link sha256:440c4153f2db3ee3b8cd00f1297d9fcedda633c2761b00fa71429c222280dc40","/etc/systemd/system/sbxr-mutation-lock.service.sbxr-next root-owned synchronized no-replace publication","/etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service root-owned symlink ../sbxr-mutation-lock.service"]'
+    provenance_count=$((provenance_count + 3))
+    lock_provisioning_suffix=',"lock_provisioning":\{"unit_sha256":"440c4153f2db3ee3b8cd00f1297d9fcedda633c2761b00fa71429c222280dc40"\}'
+  fi
   serving_suffix=''
   if "$ROOT/usr/bin/grep" -Fq '"serving":' "$removal_record"; then
     [ "$schema" -eq 2 ] && [ -n "$config_sha" ] || path_refused
     serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\)}$/\1/p' "$removal_record")
     if "$ROOT/usr/bin/grep" -Fq '"renewal":' "$removal_record"; then
       serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\),"renewal":.*/\1/p' "$removal_record")
+    elif "$ROOT/usr/bin/grep" -Fq '"proxy_startup":' "$removal_record"; then
+      serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\),"proxy_startup":.*/\1/p' "$removal_record")
+    elif [ -n "$lock_provisioning_suffix" ]; then
+      serving=$("$ROOT/usr/bin/sed" -n 's/.*,"serving":\(.*\),"lock_provisioning":.*/\1/p' "$removal_record")
     fi
     printf '%s\n' "$serving" | "$ROOT/usr/bin/grep" -Eqx '\{"link_id":"[0-9a-f]{32}","credential_sha256":"[0-9a-f]{64}","certificate_generation":[1-9][0-9]{0,6},"certificate_sha256":\["[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}"\]\}' || path_refused
     if printf '%s\n' "$serving" | "$ROOT/usr/bin/grep" -Eq '"(0{32}|0{64})"'; then path_refused; fi
@@ -301,6 +314,11 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
   if "$ROOT/usr/bin/grep" -Fq '"subscription_resources":' "$removal_record"; then
     [ -n "$renewal_suffix" ] || path_refused
     subscription=$("$ROOT/usr/bin/sed" -n 's/.*,"subscription_resources":\(.*\)}$/\1/p' "$removal_record")
+    if "$ROOT/usr/bin/grep" -Fq '"proxy_startup":' "$removal_record"; then
+      subscription=$("$ROOT/usr/bin/sed" -n 's/.*,"subscription_resources":\(.*\),"proxy_startup":.*/\1/p' "$removal_record")
+    elif [ -n "$lock_provisioning_suffix" ]; then
+      subscription=$("$ROOT/usr/bin/sed" -n 's/.*,"subscription_resources":\(.*\),"lock_provisioning":.*/\1/p' "$removal_record")
+    fi
     printf '%s\n' "$subscription" | "$ROOT/usr/bin/grep" -Eqx '\{"public_ipv4":"'"$ip"'","firewall_sha256":"[0-9a-f]{64}","snapd_created":(true|false),"certbot_created":(true|false)\}' || path_refused
     firewall_sha=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"firewall_sha256":"\([0-9a-f]*\)".*/\1/p')
     [ "$firewall_sha" != 0000000000000000000000000000000000000000000000000000000000000000 ] || path_refused
@@ -309,6 +327,24 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     resources=${resources%]}',"/etc/systemd/system/sbxr-subscription-firewall.service root:root 0644 one-link sha256:'"$firewall_sha"'","iptables filter INPUT '"$ip"'/32 tcp/80 comment=sbxr-subscription exact-owned","iptables filter INPUT '"$ip"'/32 tcp/8443 comment=sbxr-subscription exact-owned","snapd dependency '"$snapd"'","official Certbot snap dependency '"$certbot"'"]'
     provenance_count=$((provenance_count + 5))
     subscription_suffix=',"subscription_resources":'$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+  fi
+  startup_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"proxy_startup":' "$removal_record"; then
+    [ "$schema" -eq 2 ] && [ -n "$config_sha" ] || path_refused
+    startup=$("$ROOT/usr/bin/sed" -n 's/.*,"proxy_startup":\(.*\)}$/\1/p' "$removal_record")
+    if [ -n "$lock_provisioning_suffix" ]; then
+      startup=$("$ROOT/usr/bin/sed" -n 's/.*,"proxy_startup":\(.*\),"lock_provisioning":.*/\1/p' "$removal_record")
+    fi
+    printf '%s\n' "$startup" | "$ROOT/usr/bin/grep" -Eqx '\{"drop_in_sha256":"[0-9a-f]{64}","directory_created":(true|false)\}' || path_refused
+    startup_sha=$(printf '%s' "$startup" | "$ROOT/usr/bin/sed" -n 's/.*"drop_in_sha256":"\([0-9a-f]*\)".*/\1/p')
+    [ "$startup_sha" != 0000000000000000000000000000000000000000000000000000000000000000 ] || path_refused
+    resources=${resources%]}',"/etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf root:root 0644 one-link sha256:'"$startup_sha"'"]'
+    provenance_count=$((provenance_count + 1))
+    if printf '%s' "$startup" | "$ROOT/usr/bin/grep" -Fq '"directory_created":true'; then
+      resources=${resources%]}',"/etc/systemd/system/sing-box.service.d root:root 0755 SBXR-created empty-after-drop-in-removal"]'
+      provenance_count=$((provenance_count + 1))
+    fi
+    startup_suffix=',"proxy_startup":'$(printf '%s' "$startup" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
   fi
   if [ "${correction:-}" = 'renew owned certificate' ] && [ "${certificate_target_valid:-0}" -eq 1 ] && [ "$target" != "$serving" ]; then
     target_hashes=$(printf '%s' "$target" | "$ROOT/usr/bin/sed" -n 's/.*"certificate_sha256":\["\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)","\([0-9a-f]*\)"\]}/\1 \2 \3 \4/p')
@@ -331,7 +367,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     suffix=$suffix',"resource_creating_releases":\['"$identity"'(,'"$identity"'){'"$((provenance_count - 1))"'}\],"finishing_release_identity":'"$identity"
     selector='finishing_release_identity'
   fi
-  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$repair_suffix$subscription_suffix"'\}$' "$removal_record" || path_refused
+  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$repair_suffix$subscription_suffix$startup_suffix$lock_provisioning_suffix"'\}$' "$removal_record" || path_refused
   if [ "$removal_record" = "$final_removal_record" ]; then
     final_checkpoint=3
     [ -z "$config_sha" ] || final_checkpoint=11
@@ -508,7 +544,7 @@ fi
 
 # A clean installation never reclaims an existing product or protected state.
 [ ! -e "$active" ] && [ ! -L "$active" ] && [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ] || path_refused
-for resource in /etc/sing-box /var/lib/sing-box /usr/bin/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-subscription.service /etc/systemd/system/sbxr-subscription-firewall.service /etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf /etc/letsencrypt/live/sbxr-subscription /etc/letsencrypt/archive/sbxr-subscription /etc/letsencrypt/renewal/sbxr-subscription.conf /etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription /etc/letsencrypt/renewal-hooks/post/sbxr-subscription /etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf; do
+for resource in /etc/sing-box /var/lib/sing-box /usr/bin/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-mutation-lock.service /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service /etc/systemd/system/sbxr-subscription.service /etc/systemd/system/sbxr-subscription-firewall.service /etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf /etc/letsencrypt/live/sbxr-subscription /etc/letsencrypt/archive/sbxr-subscription /etc/letsencrypt/renewal/sbxr-subscription.conf /etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription /etc/letsencrypt/renewal-hooks/post/sbxr-subscription /etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf; do
   [ ! -e "$ROOT$resource" ] && [ ! -L "$ROOT$resource" ] || path_refused
 done
 RECLAIMING=1

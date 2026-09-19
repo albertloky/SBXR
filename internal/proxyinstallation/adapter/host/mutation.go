@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,10 +61,11 @@ const (
 )
 
 type OperationInput struct {
-	Operation Operation
-	Spec      SetupSpec
-	Body      []byte
-	SHA256    string
+	Operation        Operation
+	Spec             SetupSpec
+	Body             []byte
+	SHA256           string
+	LockProvisioning *LockProvisioningAuthority
 }
 
 type OperationResult struct {
@@ -88,13 +90,13 @@ func (authority ProxyStartupAuthority) Valid() bool {
 }
 
 type RunningInspection struct {
-	OSID, OSVersion, Architecture, PublicIPv4 string
-	Host, PublicIPv4Matches                   Observation
-	Ownership, TransactionFilesAbsent         Observation
-	APTKey, APTSource, Package, Hold          Observation
-	PackageIdentity, Configuration, State     Observation
-	Validation, ServiceProvenance             Observation
-	ServiceEnabled, ServiceActive, Listener   Observation
+	OSID, OSVersion, Architecture, PublicIPv4       string
+	Host, PublicIPv4Matches                         Observation
+	Ownership, TransactionFilesAbsent               Observation
+	APTKey, APTSource, Package, Hold                Observation
+	PackageIdentity, Configuration, State           Observation
+	Validation, ServiceProvenance, LockProvisioning Observation
+	ServiceEnabled, ServiceActive, Listener         Observation
 }
 
 type RemovalInspection struct {
@@ -436,7 +438,14 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 	case InstallAPTSource:
 		return adapter.writeFile(spec.APTSourcePath, input.Body, 0o644)
 	case MaskService:
-		return typed(adapter.command(ctx, "systemctl", "mask", spec.Service), "service masked")
+		result := typed(adapter.command(ctx, "systemctl", "mask", spec.Service), "service masked")
+		if !result.OK || input.LockProvisioning == nil {
+			return result
+		}
+		if !adapter.InstallLockProvisioning(ctx, *input.LockProvisioning) {
+			return OperationResult{}
+		}
+		return result
 	case InstallConfiguration:
 		result := adapter.writeFile(spec.ConfigurationPath, input.Body, 0o640)
 		if result.OK && adapter.root == "/" {
@@ -484,6 +493,9 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		process := adapter.command(ctx, "pgrep", "-x", spec.PackageName)
 		listener := adapter.command(ctx, "ss", "-H", "-ltnp", "sport", "=", ":"+spec.ListenerPort)
 		if serviceStopped(load, enabled, active, process, listener, spec.PackageName) {
+			if input.LockProvisioning != nil && !adapter.RemoveLockProvisioning(ctx, *input.LockProvisioning) {
+				return OperationResult{}
+			}
 			return OperationResult{OK: true, Fact: "service stopped and disabled"}
 		}
 		return OperationResult{}
@@ -643,6 +655,17 @@ func (adapter Adapter) inspectRunning(ctx context.Context, spec SetupSpec, sourc
 	aptKey, aptKeyObserved := adapter.boundFileInspection(spec.APTKeyPath, spec.APTKeySHA256, 0o644, 1<<20)
 	aptSource, aptSourceObserved := adapter.boundFileInspection(spec.APTSourcePath, digest(sourceBody), 0o644, 4096)
 	configuration, configurationObserved := adapter.boundFileGroupInspection(spec.ConfigurationPath, configurationDigest, 0o640, 1<<20, groupGID, groupIDOK)
+	lockProvisioning := observation(true, true)
+	if len(ownership) > 0 {
+		var envelope struct {
+			LockProvisioning *LockProvisioningAuthority `json:"lock_provisioning,omitempty"`
+		}
+		if json.Unmarshal(ownership, &envelope) != nil {
+			lockProvisioning = Observation{}
+		} else if envelope.LockProvisioning != nil {
+			lockProvisioning = adapter.InspectLockProvisioning(*envelope.LockProvisioning)
+		}
+	}
 	return RunningInspection{
 		OSID: osID, OSVersion: osVersion, Architecture: adapter.architecture, PublicIPv4: observedPublicIPv4,
 		Host:              observation(osID == "ubuntu" && osVersion == "24.04" && adapter.architecture == spec.Architecture, osID != "" && osVersion != "" && adapter.architecture != ""),
@@ -659,6 +682,7 @@ func (adapter Adapter) inspectRunning(ctx context.Context, spec SetupSpec, sourc
 		State:             observation(stateErr == nil && stateStatOK && stateInfo.IsDir() && stateInfo.Mode().Perm() == 0o755 && stateInfo.Mode()&os.ModeSymlink == 0 && userIDsOK && groupIDOK && stateStat.Uid == userUID && stateStat.Gid == groupGID, (stateErr == nil || errors.Is(stateErr, os.ErrNotExist)) && user.Observed && group.Observed),
 		Validation:        observation(validation.OK, validation.Observed || validation.OK),
 		ServiceProvenance: observation(provenance.OK && strings.HasPrefix(provenance.Fact, spec.PackageName+":"), provenance.Observed),
+		LockProvisioning:  lockProvisioning,
 		ServiceEnabled:    observation(enabled.OK && enabled.Fact == "enabled", enabled.Observed),
 		ServiceActive:     observation(active.OK && active.Fact == "active", active.Observed),
 		Listener:          observation(listener.OK && strings.Contains(listener.Fact, spec.PackageName) && (strings.Contains(listener.Fact, publicIPv4+":"+spec.ListenerPort) || strings.Contains(listener.Fact, "*:"+spec.ListenerPort) || strings.Contains(listener.Fact, "[::]:"+spec.ListenerPort)), listener.Observed),
