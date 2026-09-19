@@ -6,6 +6,11 @@
 procedure for `mvp-live-v1`. It covers the five normal journeys and the explicit
 operator observation handoff. Use it with [ADR-0023](../adr/0023-mvp-live-acceptance.md).
 
+[Temporary MVP log-parent windows](mvp-protected-log-parent-2026-09-19.md)
+records the bounded operator plan for the existing protected-parent prerequisite
+on the retained Ubuntu host shape. It requires fresh host evidence and review,
+adds no MVP journey, and does not establish current readiness or acceptance.
+
 ## Historical material
 
 [v4-operator-procedures.md](v4-operator-procedures.md) and the companion

@@ -10,6 +10,7 @@ explicit human observations and does not run the historical V4 protocol.
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
+| Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md) |
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh` |
 | Authenticated release asset reads | `download-release-asset.py` |
@@ -26,6 +27,12 @@ The log-parent wrapper qualification is destructive and runs only as root on a
 prepared disposable Ubuntu/systemd VM. With the wrapper, supervisor, and test
 script staged in `/root/recovery/log-parent-qualification`, invoke it exactly as
 `bash /root/recovery/log-parent-qualification/with-protected-log-parent-test.sh`.
+
+`test_mvp_protected_menu.py` separately tests the real menu driver through the
+temporary launcher and unchanged wrapper. It also requires a marked disposable
+root Linux VM and refuses existing product/staging/Certbot-log fixture paths.
+Use the operator plan for its scope and the adjacent Go Linux test for real
+systemd/TLS behavior. Neither test contacts a public CA or qualifies a release.
 
 `python3 .github/scripts/sbxr-snapshot-recovery/test_runbook.py` executes the
 runbook's actual listener-comparison program against preservation and refusal
