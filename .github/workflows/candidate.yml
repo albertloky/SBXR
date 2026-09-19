@@ -561,7 +561,7 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           trap 'rm -f ssh.key known_hosts' EXIT
-          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -e /run/sbxr-qualification && test ! -e /root/sbxr-qualification-v3 && test ! -e /root/sbxr-qualification-evidence'
+          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -L /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -L /var/lib/sbxr && test ! -e /run/sbxr-qualification && test ! -L /run/sbxr-qualification && test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && test ! -e /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence'
       - name: Create the complete qualification manifest after approval
         env:
           GH_TOKEN: ${{ github.token }}
@@ -704,7 +704,7 @@ jobs:
                 trap - EXIT
                 restored=false
                 for retry in {1..12}; do
-                  if ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3; then exit 0; fi; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then find /root/sbxr-qualification-v3 -depth -delete; else test ! -e /root/sbxr-qualification-v3; fi'; then restored=true; break; fi
+                  if ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then exit 0; fi; test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 || exit 1; test -f /root/sbxr-qualification-v3/staging-owned && test ! -L /root/sbxr-qualification-v3/staging-owned || exit 1; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test ! -e /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then find /root/sbxr-qualification-v3 -depth -delete; else exit 1; fi'; then restored=true; break; fi
                   sleep 5
                 done
                 if test "$restored" != true; then
@@ -715,7 +715,7 @@ jobs:
                 exit "$status"
               }
               trap cleanup_v3_transport EXIT
-              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && install -d -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
+              ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && install -d -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
               ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3; chmod 0600 /root/sbxr-qualification-v3/qualification-manifest.json; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
               ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up'
             fi
@@ -810,7 +810,11 @@ jobs:
           test "$(uname -m)" = x86_64
           command -v strace >/dev/null
           test ! -e /usr/local/bin/sbxr
+          test ! -L /usr/local/bin/sbxr
           test ! -e /var/lib/sbxr
+          test ! -L /var/lib/sbxr
+          test ! -e /run/sbxr-qualification
+          test ! -L /run/sbxr-qualification
           install -d -m 0700 /run/sbxr-qualification
           tar -xzf /root/qualification-handoff.tgz -C /run/sbxr-qualification
           chmod 0700 /run/sbxr-qualification/sbxr-release /run/sbxr-qualification/installer-updater-vps.sh /run/sbxr-qualification/qualification-gateway-readiness.sh /run/sbxr-qualification/v3-packaged-live.sh /run/sbxr-qualification/v3-menu-session.py
@@ -884,7 +888,9 @@ jobs:
           curl -fsSI https://github.com/ >/dev/null
           if test "$MODE" = v3; then
             test ! -e /usr/local/bin/sbxr
+            test ! -L /usr/local/bin/sbxr
             test ! -e /var/lib/sbxr
+            test ! -L /var/lib/sbxr
           else
             test "$(find /var/lib/sbxr -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed.json
             printf '0\n' | script -qec 'env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null | grep -F 'Status: Ready'

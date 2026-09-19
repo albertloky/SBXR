@@ -594,6 +594,10 @@ func (source Source) bundle(ctx context.Context, attestation githubAttestation) 
 	if err != nil {
 		return nil, err
 	}
+	decodedLen, err := snappy.DecodedLen(compressed)
+	if err != nil || decodedLen <= 0 || decodedLen > maxBundleBytes {
+		return nil, errors.New("bundle refused")
+	}
 	body, err := snappy.Decode(nil, compressed)
 	if err != nil || len(body) == 0 || len(body) > maxBundleBytes || softwarelifecycle.ValidateUniqueJSON(body) != nil {
 		return nil, errors.New("bundle refused")

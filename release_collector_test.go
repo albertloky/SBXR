@@ -36,7 +36,16 @@ func TestRecurringV3UsesTheExistingQualificationWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"v3-scenario-result", "v3-scenario-failure", "stop_test_mutations", "qualification <", "completed_at", "300", "7200", "STOP", "failure-recorded", "retained-failure.json", ".failure.scenario_id == $scenario"} {
+	for _, required := range []string{
+		"v3-scenario-result", "v3-scenario-failure", "stop_test_mutations",
+		"qualification <", "completed_at", "300", "7200", "STOP",
+		"failure-recorded", "retained-failure.json", ".failure.scenario_id == $scenario",
+		`test ! -L /root/sbxr-qualification-evidence`,
+		`test ! -L /root/sbxr-qualification-evidence/result.json`,
+		`test ! -L '$mvp_observation_remote'`,
+		`test ! -L /usr/local/bin/sbxr`,
+		`test ! -L /var/lib/sbxr`,
+	} {
 		if !strings.Contains(string(collector), required) {
 			t.Fatalf("missing evidence handoff contract %q", required)
 		}
@@ -74,6 +83,160 @@ func TestRecurringCollectorPreservesScenarioInputAndLastFailureIdentity(t *testi
 				t.Fatalf("scenario loop lost input or failure identity: %v, output = %q", err, output)
 			}
 		})
+	}
+}
+
+func TestRecurringCollectorRequestPublicationPreservesUnsafePaths(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remoteCommand string
+	for _, line := range strings.Split(string(source), "\n") {
+		if !strings.Contains(line, `cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"`) {
+			continue
+		}
+		start := strings.Index(line, "'")
+		end := strings.LastIndex(line, `' < "$directory/request.json"`)
+		if start < 0 || end <= start {
+			t.Fatal("collector request command boundary changed")
+		}
+		remoteCommand = line[start+1 : end]
+		break
+	}
+	if remoteCommand == "" {
+		t.Fatal("collector request command not found")
+	}
+	for _, test := range []struct {
+		name, symlink string
+		targetExists  bool
+		resultExists  bool
+		accept        bool
+	}{
+		{name: "regular request", accept: true},
+		{name: "existing result", resultExists: true},
+		{name: "dangling result", symlink: "result.json"},
+		{name: "linked result", symlink: "result.json", targetExists: true},
+		{name: "dangling request", symlink: "request.json"},
+		{name: "linked request", symlink: "request.json", targetExists: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			remoteRoot := t.TempDir()
+			request := filepath.Join(remoteRoot, "request.json")
+			result := filepath.Join(remoteRoot, "result.json")
+			if err := os.WriteFile(request, []byte("original request\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if test.resultExists {
+				if err := os.WriteFile(result, []byte("original result\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target := filepath.Join(remoteRoot, "foreign-target")
+			link := filepath.Join(remoteRoot, test.symlink)
+			if test.symlink != "" {
+				if test.symlink == "request.json" {
+					if err := os.Remove(request); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if test.targetExists {
+					if err := os.WriteFile(target, []byte("foreign sentinel\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+			}
+			command := exec.Command("bash", "-c", strings.ReplaceAll(remoteCommand, "/root/sbxr-qualification-evidence", remoteRoot))
+			command.Stdin = strings.NewReader("new request\n")
+			output, err := command.CombinedOutput()
+			if (err == nil) != test.accept {
+				t.Fatalf("request publication accepted = %v, error = %v, output = %s", err == nil, err, output)
+			}
+			if test.accept {
+				assertFileBody(t, request, "new request\n")
+			} else if test.symlink != "request.json" {
+				assertFileBody(t, request, "original request\n")
+			}
+			if test.resultExists {
+				assertFileBody(t, result, "original result\n")
+			}
+			if test.symlink != "" {
+				if got, err := os.Readlink(link); err != nil || got != target {
+					t.Fatalf("link changed: got %q, %v", got, err)
+				}
+				if test.targetExists {
+					assertFileBody(t, target, "foreign sentinel\n")
+				} else if _, err := os.Lstat(target); !os.IsNotExist(err) {
+					t.Fatalf("dangling link target was created: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRecurringCollectorNeverFollowsEvidenceDirectoryForStopOrCleanup(t *testing.T) {
+	source, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, needle, suffix string
+	}{
+		{name: "failure stop", needle: `printf "%s\n" STOP`, suffix: `' || true`},
+		{name: "successful cleanup", needle: `rmdir /root/sbxr-qualification-evidence`, suffix: `'`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var remoteCommand string
+			for _, line := range strings.Split(string(source), "\n") {
+				if !strings.Contains(line, test.needle) {
+					continue
+				}
+				start := strings.Index(line, "'")
+				end := strings.LastIndex(line, test.suffix)
+				if start < 0 || end <= start {
+					t.Fatal("collector evidence-directory command boundary changed")
+				}
+				remoteCommand = line[start+1 : end]
+				break
+			}
+			if remoteCommand == "" {
+				t.Fatal("collector evidence-directory command not found")
+			}
+			fixture := t.TempDir()
+			foreign := filepath.Join(fixture, "foreign")
+			if err := os.Mkdir(foreign, 0700); err != nil {
+				t.Fatal(err)
+			}
+			request := filepath.Join(foreign, "request.json")
+			if err := os.WriteFile(request, []byte("foreign sentinel\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			evidence := filepath.Join(fixture, "evidence")
+			if err := os.Symlink(foreign, evidence); err != nil {
+				t.Fatal(err)
+			}
+			remoteCommand = strings.ReplaceAll(remoteCommand, "/root/sbxr-qualification-evidence", evidence)
+			remoteCommand = strings.ReplaceAll(remoteCommand, "/usr/local/bin/sbxr", filepath.Join(fixture, "absent-product"))
+			remoteCommand = strings.ReplaceAll(remoteCommand, "/var/lib/sbxr", filepath.Join(fixture, "absent-state"))
+			if output, err := exec.Command("bash", "-c", remoteCommand).CombinedOutput(); err == nil {
+				t.Fatalf("symlinked evidence directory admitted: %s", output)
+			}
+			assertFileBody(t, request, "foreign sentinel\n")
+			if target, err := os.Readlink(evidence); err != nil || target != foreign {
+				t.Fatalf("evidence directory link changed: got %q, %v", target, err)
+			}
+		})
+	}
+}
+
+func assertFileBody(t *testing.T, name, want string) {
+	t.Helper()
+	body, err := os.ReadFile(name)
+	if err != nil || string(body) != want {
+		t.Fatalf("%s changed: got %q, %v", name, body, err)
 	}
 }
 

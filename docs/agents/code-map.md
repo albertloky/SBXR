@@ -78,6 +78,11 @@ group. On macOS, `/private/tmp` can instead give them the `wheel` group. If that
 causes ownership assertions to fail, set `TMPDIR` to a temporary directory owned
 by the current user and group before running the tests.
 
+On macOS, runtime-start tests also create Unix sockets under `TMPDIR`. Long
+absolute paths can exceed the operating system's socket-path limit and fail
+with `bind: invalid argument`. Use a short workspace-local run directory, such
+as `.scratch/acceptance/r1/t`, for `TMPDIR`.
+
 The tables identify narrower package tests during development. Root Go tests
 cover architecture, dependencies, script integration, and workflow contracts;
 they are intentionally rooted here because they read repository-relative files.

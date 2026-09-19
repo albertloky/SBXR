@@ -886,10 +886,7 @@ func installerPayload(t *testing.T, architecture string) []byte {
 	if body := installerPayloadCache.values[architecture]; body != nil {
 		return append([]byte(nil), body...)
 	}
-	directory, err := os.MkdirTemp("", "sbxr-installer-payload-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	directory := t.TempDir()
 	source := filepath.Join(directory, "main.go")
 	if err := os.WriteFile(source, []byte(`package main
 import "os"

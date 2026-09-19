@@ -10,6 +10,15 @@ hosts=/etc/hosts
 hosts_line='127.0.0.2 api.github.com github.com # sbxr-qualification-v3'
 redirect=(-p tcp -d 127.0.0.2 --dport 443 -m comment --comment sbxr-qualification-v3 -j REDIRECT --to-ports 9443)
 
+path_absent() {
+  test ! -e "$1" && test ! -L "$1"
+}
+
+transport_owned() {
+  test -f "$root/transport-owned"
+  test ! -L "$root/transport-owned"
+}
+
 has_redirect() {
   local status
   if iptables -w -t nat -C OUTPUT "${redirect[@]}" 2>/dev/null; then return 0; else status=$?; fi
@@ -28,7 +37,8 @@ route_down() {
   else
     sed -i '\|^127\.0\.0\.2 api\.github\.com github\.com # sbxr-qualification-v3$|d' "$hosts"
   fi
-  if test -e "$ca"; then
+  if ! path_absent "$ca"; then
+    test ! -L "$ca"
     cmp -s "$root/ca.crt" "$ca"
     rm "$ca"
   fi
@@ -37,9 +47,9 @@ route_down() {
 }
 check_start() {
     test -d "$root"
-    test ! -e "$root/transport-owned"
-    test ! -e "$unit_path"
-    test ! -e "$ca"
+    path_absent "$root/transport-owned"
+    path_absent "$unit_path"
+    path_absent "$ca"
     if grep -Fq 'sbxr-qualification-v3' "$hosts"; then exit 1; fi
     if has_redirect; then exit 1; fi
     listeners="$(ss -H -ltn 'sport = :9443')"
@@ -85,9 +95,14 @@ UNIT
     exec timeout --signal=TERM "$remaining" "$root/sbxr-release" gateway -manifest "$root/qualification-manifest.json" -bundle "$root/qualification.bundle" -assets "$root/assets" -certificate "$root/gateway.crt" -key "$root/gateway.key" -listen 127.0.0.1:9443
     ;;
   route-up)
-    test -f "$root/transport-owned"
+    transport_owned
     test "$(date +%s)" -lt "$(cat "$root/deadline")"
-    if test -e "$ca"; then cmp -s "$root/ca.crt" "$ca"; else install -m 0644 "$root/ca.crt" "$ca"; fi
+    if path_absent "$ca"; then
+      install -m 0644 "$root/ca.crt" "$ca"
+    else
+      test ! -L "$ca"
+      cmp -s "$root/ca.crt" "$ca"
+    fi
     update-ca-certificates >/dev/null
     if ! grep -Fxq "$hosts_line" "$hosts"; then
       cp "$hosts" "$root/hosts.before"
@@ -101,22 +116,24 @@ UNIT
     if ! has_redirect; then iptables -w -t nat -A OUTPUT "${redirect[@]}"; fi
     ;;
   route-down)
-    test -f "$root/transport-owned"
+    transport_owned
     route_down
     ;;
   down)
-    test -f "$root/transport-owned"
-    if test -e "$unit_path"; then
+    transport_owned
+    if ! path_absent "$unit_path"; then
+      test ! -L "$unit_path"
       cmp -s "$root/unit" "$unit_path"
       systemctl disable "$unit" >/dev/null
       systemctl stop "$unit"
     fi
     route_down
-    if test -e "$unit_path"; then rm "$unit_path"; fi
+    if ! path_absent "$unit_path"; then rm "$unit_path"; fi
     systemctl daemon-reload
     if has_redirect; then exit 1; fi
     if grep -Fxq "$hosts_line" "$hosts"; then exit 1; fi
-    test ! -e "$ca"
+    path_absent "$unit_path"
+    path_absent "$ca"
     # This directory contains only this workflow's handoff and transport keys.
     find "$root" -depth -delete
     ;;

@@ -2,18 +2,83 @@ package github
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
+	"github.com/klauspost/compress/snappy"
 )
 
 const fixtureCommit = "0123456789abcdef0123456789abcdef01234567"
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func TestBundleRefusesOversizedDecodedResponseBeforeAllocation(t *testing.T) {
+	valid := snappy.Encode(nil, []byte(`{"fixture":true}`))
+	oversized := make([]byte, binary.MaxVarintLen64)
+	oversized = oversized[:binary.PutUvarint(oversized, maxBundleBytes+1)]
+	responses := map[string][]byte{
+		"/valid":     valid,
+		"/malformed": {1},
+		"/empty":     {},
+		"/oversized": oversized,
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = writer.Write(responses[request.URL.Path])
+	}))
+	t.Cleanup(server.Close)
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := server.Client().Transport
+	client := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		rewritten := request.Clone(request.Context())
+		rewritten.URL.Scheme = serverURL.Scheme
+		rewritten.URL.Host = serverURL.Host
+		return transport.RoundTrip(rewritten)
+	})}
+	source := Source{client: client}
+	remote := func(path string) githubAttestation {
+		return githubAttestation{BundleURL: "https://tmaproduction.blob.core.windows.net" + path}
+	}
+
+	if body, err := source.bundle(t.Context(), remote("/valid")); err != nil || string(body) != `{"fixture":true}` {
+		t.Fatalf("valid compressed bundle = %q, %v", body, err)
+	}
+	for _, path := range []string{"/malformed", "/empty"} {
+		if body, err := source.bundle(t.Context(), remote(path)); err == nil || body != nil {
+			t.Fatalf("%s compressed bundle = %q, %v", path, body, err)
+		}
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	body, err := source.bundle(t.Context(), remote("/oversized"))
+	runtime.ReadMemStats(&after)
+	if err == nil || body != nil {
+		t.Fatalf("oversized compressed bundle = %q, %v", body, err)
+	}
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("oversized compressed bundle refusal allocated %d bytes", allocated)
+	if allocated >= maxBundleBytes/2 {
+		t.Fatalf("oversized compressed bundle allocated %d bytes before refusal", allocated)
+	}
+}
 
 func TestSourceChecksOnlyTheQualifiedFourAssetLatestRelease(t *testing.T) {
 	fixture := newLatestReleaseFixture(t)

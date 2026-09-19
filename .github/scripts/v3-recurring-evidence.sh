@@ -82,7 +82,7 @@ stop_attempt() {
   if ! cleanup_mvp_observation; then status=1; fi
   if test "$status" -ne 0; then
     # Do not fetch raw output or run product cleanup against uncertain state.
-    "${remote[@]}" 'test ! -d /root/sbxr-qualification-evidence || printf "%s\n" STOP > /root/sbxr-qualification-evidence/request.json' || true
+    "${remote[@]}" 'if test -e /root/sbxr-qualification-evidence || test -L /root/sbxr-qualification-evidence; then test -d /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence && request=/root/sbxr-qualification-evidence/request.json && test -f "$request" && test ! -L "$request" && printf "%s\n" STOP > "$request"; fi' || true
     mkdir -p handoff/failure-evidence
     if test "$reason" = failure-recorded; then
       cp "$directory/retained-failure.json" "$directory/failure.json"
@@ -101,7 +101,7 @@ trap stop_attempt EXIT
 
 actual_vps="$("${remote[@]}" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && sha256sum /etc/machine-id' | cut -d' ' -f1)"
 test "$actual_vps" = "$(jq -r .v3_attempt.vps_identity_sha256 "$manifest")"
-"${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence && install -d -m 0700 /root/sbxr-qualification-evidence'
+"${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence && install -d -m 0700 /root/sbxr-qualification-evidence'
 
 index=0
 while IFS= read -r next_scenario <&3; do
@@ -114,13 +114,14 @@ while IFS= read -r next_scenario <&3; do
   deadline=$((started + limit))
   required_checks=$(mvp_required_checks "$scenario")
   jq -cnS --arg scenario "$scenario" --arg digest "$digest" --arg checks "$required_checks" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,required_checks:($checks | split(" ")),scenario_id:$scenario,scenario_limit_seconds:$limit}' | tr -d '\n' > "$directory/request.json"
-  "${remote[@]}" 'umask 077; test ! -e /root/sbxr-qualification-evidence/result.json; cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"
-  while ! "${remote[@]}" 'test -f /root/sbxr-qualification-evidence/result.json'; do
+  "${remote[@]}" 'set -eu; umask 077; test ! -e /root/sbxr-qualification-evidence/result.json; test ! -L /root/sbxr-qualification-evidence/result.json; test ! -L /root/sbxr-qualification-evidence/request.json; cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"
+  while ! "${remote[@]}" 'test -f /root/sbxr-qualification-evidence/result.json && test ! -L /root/sbxr-qualification-evidence/result.json'; do
+    if "${remote[@]}" 'test -L /root/sbxr-qualification-evidence/result.json'; then reason=evidence-refused; exit 1; fi
     if "${remote[@]}" 'test -e /root/sbxr-qualification-evidence/observation.json || test -L /root/sbxr-qualification-evidence/observation.json'; then
       reason=evidence-refused
       test -z "$mvp_observation_remote"
       mvp_observation_remote=/root/sbxr-qualification-evidence/observation.json
-      "${remote[@]}" "test \"\$(stat -c '%a:%u:%h:%F' '$mvp_observation_remote')\" = '600:0:1:regular file' && test \"\$(stat -c %s '$mvp_observation_remote')\" -le 1000000 && cat '$mvp_observation_remote'" > "$directory/mvp-observation.json"
+      "${remote[@]}" "test ! -L '$mvp_observation_remote' && test \"\$(stat -c '%a:%u:%h:%F' '$mvp_observation_remote')\" = '600:0:1:regular file' && test \"\$(stat -c %s '$mvp_observation_remote')\" -le 1000000 && cat '$mvp_observation_remote'" > "$directory/mvp-observation.json"
       python3 .github/scripts/v3-mvp-evidence.py --manifest "$manifest" --boundary "$boundary" --request "$directory/request.json" --previous "$directory/previous.json" --observation "$directory/mvp-observation.json" --output "$directory/mvp-facts.json"
       "$tool" qualification < "$directory/mvp-facts.json" > "$directory/mvp-decision.json"
       jq -e '.outcome == "accepted" and .records == []' "$directory/mvp-decision.json" >/dev/null
@@ -132,7 +133,7 @@ while IFS= read -r next_scenario <&3; do
   done
 
   reason=evidence-refused
-  "${remote[@]}" 'test "$(stat -c "%a:%u:%h:%F" /root/sbxr-qualification-evidence/result.json)" = "600:0:1:regular file" && test "$(stat -c %s /root/sbxr-qualification-evidence/result.json)" -le 16777216 && cat /root/sbxr-qualification-evidence/result.json' > "$directory/input.json"
+  "${remote[@]}" 'test ! -L /root/sbxr-qualification-evidence/result.json && test "$(stat -c "%a:%u:%h:%F" /root/sbxr-qualification-evidence/result.json)" = "600:0:1:regular file" && test "$(stat -c %s /root/sbxr-qualification-evidence/result.json)" -le 16777216 && cat /root/sbxr-qualification-evidence/result.json' > "$directory/input.json"
   # Validate original bytes before jq so duplicate and unknown keys cannot disappear.
   "$tool" qualification < "$directory/input.json" > "$directory/decision.json"
   if jq -e '.stage == "v3-scenario-failure"' "$directory/input.json" >/dev/null; then
@@ -159,7 +160,7 @@ while IFS= read -r next_scenario <&3; do
   reason=unexpected-failure
 done 3< <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
 
-"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && rm /root/sbxr-qualification-evidence/request.json && rmdir /root/sbxr-qualification-evidence'
+"${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -L /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -L /var/lib/sbxr && test -d /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence && test -f /root/sbxr-qualification-evidence/request.json && test ! -L /root/sbxr-qualification-evidence/request.json && rm /root/sbxr-qualification-evidence/request.json && rmdir /root/sbxr-qualification-evidence'
 jq -cS --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.stage = "v3-packaged-live-result" | .evaluation_time = $now' "$directory/input.json" | tr -d '\n' > "$directory/final.json"
 "$tool" qualification < "$directory/final.json" > "$directory/decision.json"
 jq -e '.outcome == "accepted" and (.records | length) == 1' "$directory/decision.json" >/dev/null
