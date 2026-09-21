@@ -23,6 +23,15 @@ treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
 
+For the current MVP's installed-candidate check, use the
+[documented SSH handoff](../../docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh).
+It streams this module and calls only `exact_candidate`; the current transport
+does not stage `/run/sbxr-qualification/v3-packaged-live.sh`. The existing four-file
+temporary-menu staging is unchanged. `release_candidate_handoff_test.go` covers
+fresh-shell and streamed-source identity checks; `test_ssh_boundary.py` executes
+the documented command over real SSH with the old helper path absent, and proves
+refusal stops continuation without changing the synthetic installation.
+
 The log-parent wrapper qualification is destructive and runs only as root on a
 prepared disposable Ubuntu/systemd VM. With the wrapper, supervisor, and test
 script staged in `/root/recovery/log-parent-qualification`, invoke it exactly as

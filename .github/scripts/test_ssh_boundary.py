@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import shutil
 import signal
 import socket
@@ -16,7 +18,7 @@ import tempfile
 import time
 
 
-CASE_TOTAL = 12
+CASE_TOTAL = 21
 CONFIG = '{"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2080}],"outbounds":[{"type":"vless","uuid":"11111111-1111-4111-8111-111111111111"}]}'
 
 
@@ -101,6 +103,93 @@ def clean_results(base):
     remote(base, "rm -f /root/sbxr-qualification-evidence/result.tmp /root/sbxr-qualification-evidence/result.json")
 
 
+def candidate_handoff(base, source):
+    """Execute the documented command with real SSH and unchanged helper bytes."""
+    examples = re.findall(
+        r"<!-- mvp-exact-candidate-ssh -->\n```sh\n(.*?)\n```",
+        (source / "mvp-live-acceptance.md").read_text(), re.DOTALL)
+    if len(examples) != 1:
+        raise Refused("candidate-handoff-example")
+    repository = source / "operator-checkout"
+    scripts = repository / ".github" / "scripts"
+    scripts.mkdir(parents=True)
+    module = scripts / "v3-packaged-live.sh"
+    original = (source / "v3-packaged-live.sh").read_bytes()
+    write(module, original)
+    # Only this namespace sees these mounts. Use the helper's actual default
+    # paths, not source-text substitutions or an alternative identity check.
+    run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/var/lib"])
+    run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/usr/local/bin"])
+    transport = Path("/root/sbxr-qualification-v3")
+    transport.mkdir(mode=0o700)
+    installed_dir = Path("/var/lib/sbxr")
+    installed_dir.mkdir(mode=0o700)
+    manifest = transport / "qualification-manifest.json"
+    request = Path("/root/sbxr-qualification-evidence/request.json")
+    installed = installed_dir / "installed.json"
+    executable = Path("/usr/local/bin/sbxr")
+    write(executable, "#!/bin/sh\ntouch /run/product-was-executed\nexit 9\n", 0o700)
+    candidate = {"tag": "v3.1.50", "commit": "1" * 40, "sequence": 131,
+                 "release_identity": {"repository": "albertloky/SBXR",
+                                      "tag": "v3.1.50", "commit": "1" * 40,
+                                      "release_index_sha256": "2" * 64}}
+    write(manifest, json.dumps({"mode": "v3", "schema": "sbxr-qualification-manifest-v3",
+                               "source_state": "v3-subscription-clean",
+                               "releases": [candidate]}))
+    write(request, json.dumps({"qualification_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()}))
+    record = dict(candidate["release_identity"], sequence=131, architecture="amd64",
+                  executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
+    write(installed, json.dumps(record))
+    paths = [manifest, request, installed, executable]
+    baseline = {p: p.read_bytes() for p in paths}
+    # The exact documented shell command gets only authenticated connection
+    # options. The server's login directory is unrelated to this local checkout.
+    prefix = ("set -euo pipefail\nssh_options=(" + shlex.join(base[1:-1]) + ")\n"
+              "acceptance_host=" + shlex.quote(base[-1]) + "\n")
+    command = ["bash", "-c", prefix + examples[0] + "\nprintf 'identity-accepted\\n'"]
+    missing = "/run/sbxr-qualification/v3-packaged-live.sh"
+    if os.path.lexists(missing):
+        raise Refused("candidate-legacy-helper-present")
+    old = remote(base, "bash " + missing + " remote-exact-candidate", ok=False)
+    if old.returncode != 127:
+        raise Refused("candidate-original-failure-not-reproduced")
+
+    def check(valid):
+        before = {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode)
+                  for p in paths if p.exists()}
+        result = run(command, cwd=repository, ok=valid)
+        if result.stdout != (b"identity-accepted\n" if valid else b""):
+            raise Refused("candidate-handoff-continuation")
+        if before != {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_mode)
+                      for p in paths if p.exists()} or Path("/run/product-was-executed").exists():
+            raise Refused("candidate-handoff-mutated-host")
+        if os.path.lexists(missing) or sorted(p.name for p in transport.iterdir()) != [manifest.name]:
+            raise Refused("candidate-handoff-staged-helper")
+
+    check(True)
+    for path in (manifest, request, installed, executable):
+        changed = baseline[path] + b"changed"
+        if path == installed:
+            changed = json.dumps(dict(record, sequence=130)).encode()
+        elif path == request:
+            changed = json.dumps({"qualification_manifest_sha256": "0" * 64}).encode()
+        write(path, changed)
+        check(False)
+        write(path, baseline[path], 0o700 if path == executable else 0o600)
+    request.unlink()
+    check(False)
+    write(request, baseline[request])
+    module.unlink()
+    check(False)  # Local redirection refuses before the SSH command starts.
+    write(module, b"")
+    check(False)  # A dropped stream must not report a successful identity check.
+    write(module, original)
+    for path in paths:
+        path.unlink()
+    transport.rmdir()
+    installed_dir.rmdir()
+
+
 def inside(root):
     if os.getpid() != 1:
         raise Refused("inside-not-pid-one")
@@ -177,6 +266,7 @@ LogLevel ERROR
             raise Refused("sshd-ready")
 
         source = root / "source"
+        candidate_handoff(base, source)
         module_bytes = (source / "v3-packaged-live.sh").read_bytes()
         staged = work / "v3-packaged-live.sh"
         driver = work / "v3-menu-session.py"
@@ -364,6 +454,8 @@ def outer():
         for filename in ("v3-packaged-live.sh", "v3-menu-session.py",
                          "v3-recurring-evidence.sh"):
             shutil.copyfile(source_dir / filename, copied / filename)
+        shutil.copyfile(source_dir.parents[1] / "docs/acceptance/mvp-live-acceptance.md",
+                        copied / "mvp-live-acceptance.md")
         command = ["unshare", "--mount", "--pid", "--fork", "--mount-proc",
                    "--kill-child=KILL", sys.executable, str(script), "--inside", name]
         parent_pid = os.getpid()

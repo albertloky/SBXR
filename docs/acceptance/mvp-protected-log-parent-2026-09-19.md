@@ -142,6 +142,8 @@ and supervisor remain:
 The launcher itself pins the wrapper hash; the wrapper pins its supervisor.
 Neither establishes the installed candidate identity. Complete the normal
 packaged candidate/attestation checks independently before any menu action.
+Use the [current streamed SSH identity check](mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
+after installation; it needs no additional staged file or permission window.
 
 For example, the reviewed replacement remains one menu-driver call:
 

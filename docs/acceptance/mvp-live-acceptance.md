@@ -36,6 +36,43 @@ path validates this declaration and skips the V4 `check-readiness.py`
 prerequisite. Normal release identity, artifact verification and failed-run
 handling remain. Do not rewrite a signed historical attempt into this policy.
 
+## Checking the installed candidate over SSH
+
+The manifest-v3 workflow stages its transport under
+`/root/sbxr-qualification-v3`. It does **not** stage
+`/run/sbxr-qualification/v3-packaged-live.sh`. Do not assume that historical
+helper location exists or add another host-side copy to work around its absence.
+
+Use the unchanged `exact_candidate` function from the reviewed source checkout.
+Before installation, confirm the local `.github/scripts/v3-packaged-live.sh`
+is present and passes `bash -n`. After the packaged installer succeeds, run the
+following from that checkout's repository root, before Start setup. Reuse the
+authenticated `acceptance_host` and `ssh_options` Bash array from the reviewed
+connection; the array must not contain `-n` or `StdinNull=yes`, because this call
+carries the module on standard input.
+
+<!-- mvp-exact-candidate-ssh -->
+```sh
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  "${ssh_options[@]}" "$acceptance_host" \
+  'bash -c "set -euo pipefail; source /dev/stdin; exact_candidate"' \
+  < .github/scripts/v3-packaged-live.sh
+```
+
+Require exit 0 before proceeding. The remote Bash sources the complete module
+without entering its standalone journey dispatcher, then runs only its read-only
+identity check. It reads the current collector request, its bound manifest, the
+Installed Record and executable at their existing paths; it neither stages a
+helper nor executes the product. No candidate identity is inherited from a
+previous SSH shell. Missing source/input, failed transport or an identity
+mismatch stops the handoff; retain the original failure rather than bypassing
+the check or continuing setup.
+
+This check binds the installation to the **already verified** candidate. It does
+not replace artifact/attestation review, complete `mvp-install`, or authorize a
+new attempt. It needs no log-parent permission window. The later public menu
+processes still use the applicable [log-parent plan](mvp-protected-log-parent-2026-09-19.md).
+
 ## Observing the journeys
 
 Run the following normal product journeys in one practical session where their

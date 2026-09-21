@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -75,7 +76,49 @@ exact_candidate manifest request installed sbxr`, "check", dir, script)
 			if strings.Contains(string(out), "unbound variable") {
 				t.Fatalf("candidate depends on inherited state: %s", out)
 			}
+			// The MVP operator streams this unchanged module, rather than
+			// assuming the transport stages a second copy on the host.
+			body, err := os.ReadFile(script)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream := exec.Command("bash", "-c", `set -euo pipefail
+cd "$1"
+source /dev/stdin
+TAG=stale SEQUENCE=1 COMMIT=stale INDEX=stale
+exact_candidate manifest request installed sbxr`, "stream-check", dir)
+			stream.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir}
+			stream.Stdin = strings.NewReader(string(body))
+			out, err = stream.CombinedOutput()
+			if (err == nil) != valid {
+				t.Fatalf("streamed candidate check: %v %s", err, out)
+			}
 		})
+	}
+}
+
+func TestMVPCandidateHandoffDocumentsStreamedSource(t *testing.T) {
+	procedure, err := os.ReadFile("docs/acceptance/mvp-live-acceptance.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	examples := regexp.MustCompile("(?s)<!-- mvp-exact-candidate-ssh -->\\n```sh\\n(.*?)\\n```").FindAllSubmatch(procedure, -1)
+	if len(examples) != 1 {
+		t.Fatal("MVP procedure must have one executable exact-candidate SSH example")
+	}
+	command := string(examples[0][1])
+	for _, required := range []string{"ssh -T", "BatchMode=yes", "StrictHostKeyChecking=yes", "source /dev/stdin; exact_candidate", "< .github/scripts/v3-packaged-live.sh"} {
+		if !strings.Contains(command, required) {
+			t.Fatalf("MVP handoff is missing %q", required)
+		}
+	}
+	if strings.Contains(command, "/run/sbxr-qualification/") {
+		t.Fatal("MVP handoff assumes the transport stages the legacy helper")
+	}
+	check := exec.Command("bash", "-n")
+	check.Stdin = strings.NewReader(command)
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("MVP handoff shell syntax: %v %s", err, output)
 	}
 }
 
