@@ -15,6 +15,12 @@ candidate, each journey, and its actual result. Do not substitute the historical
 V4 operator/tracer procedure for this handoff; the existing collector selects
 the MVP observation path from the declared policy.
 
+Before live work, review the [current acceptance prerequisites](README.md#current-procedure).
+For the retained Ubuntu host configuration with the `/var/log` protected-parent
+prerequisite, also follow the [bounded log-parent operator plan](mvp-protected-log-parent-2026-09-19.md),
+including its applicability, fresh-evidence, and review gates. That plan adds no
+journey and is not blanket authorization to change permissions on other hosts.
+
 ## Preparing the reduced scope
 
 In the complete unsigned attempt declaration, select `evidence_policy:
@@ -146,7 +152,7 @@ jq '
     scenario_id,
     started_at: null,
     completed_at: null,
-    checks: [required_checks[] | {
+    checks: [.required_checks[] | {
       check: ., observed_at: null, result: null
     }]
   }

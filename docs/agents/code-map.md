@@ -65,23 +65,37 @@ the current MVP path.
 
 ## Choosing validation
 
-Use the Go toolchain declared in [go.mod](../../go.mod). From the repository root:
+Use the Go toolchain declared in [go.mod](../../go.mod). From the repository root,
+choose a short local run name (replace `r1` as needed):
 
 ```sh
-umask 022
-GOTOOLCHAIN=go1.26.6 go test ./...
-GOTOOLCHAIN=go1.26.6 go vet ./...
+(
+  set -eu
+  umask 022
+  run="$PWD/.scratch/acceptance/r1"
+  mkdir -p "$run"
+  export TMPDIR="$run/t"
+  mkdir "$TMPDIR" # Refuse to reuse an existing temporary directory.
+  trap 'rmdir "$TMPDIR" || exit 1' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  GOTOOLCHAIN=go1.26.6 go test ./...
+  GOTOOLCHAIN=go1.26.6 go vet ./...
+)
 ```
 
-Host-adapter fixtures expect newly created files to have the current user's
-group. On macOS, `/private/tmp` can instead give them the `wheel` group. If that
-causes ownership assertions to fail, set `TMPDIR` to a temporary directory owned
-by the current user and group before running the tests.
+The subshell keeps these settings local and removes its newly created temporary
+directory after the tools clean their fixtures. If a failure or interruption
+leaves files behind, cleanup fails rather than deleting them; inspect and clean
+only that run's disposable fixtures. Retain logs and useful evidence outside `t/`.
+
+Host-adapter fixtures expect newly created files to have the current user's group.
+Use a workspace-local directory owned by that user and group, not macOS
+`/private/tmp`, which can give fixtures the `wheel` group.
 
 On macOS, runtime-start tests also create Unix sockets under `TMPDIR`. Long
 absolute paths can exceed the operating system's socket-path limit and fail
-with `bind: invalid argument`. Use a short workspace-local run directory, such
-as `.scratch/acceptance/r1/t`, for `TMPDIR`.
+with `bind: invalid argument`. Keep the run name short, as in the recipe above.
 
 The tables identify narrower package tests during development. Root Go tests
 cover architecture, dependencies, script integration, and workflow contracts;
@@ -113,7 +127,7 @@ Local scratch and research files may contain unfinished user work. Inspect their
 Git status before reorganizing them; use tracked source and current procedures
 to determine implemented behavior.
 
-Follow [the test-file and artifact locations in AGENTS.md](../../AGENTS.md#test-files-and-local-artifacts).
+Follow [the test-file and artifact locations guide](files-and-artifacts.md).
 Tests live beside their code, run artifacts under `.scratch/acceptance/`, and
 readable reports under `docs/acceptance/`. `.scratch/` is excluded from Git and
 normal source searches.

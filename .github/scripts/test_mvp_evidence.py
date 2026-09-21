@@ -4,6 +4,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -97,6 +99,33 @@ class MVPEvidenceTest(unittest.TestCase):
             self.assertEqual(item["sha256"], sha(canon(item["record"])))
         self.assertEqual(facts["detailed_evidence_sha256"],
                          sha(canon(facts["detailed_evidence"])))
+
+    def test_documented_template_preserves_checks_but_cannot_be_submitted(self):
+        request, _ = self.scenario_files()
+        procedure = SCRIPT.parents[2] / "docs/acceptance/mvp-live-acceptance.md"
+        examples = re.findall(r"```sh\n(.*?)\n```", procedure.read_text(), re.DOTALL)
+        templates = [example for example in examples
+                     if "request=/root/sbxr-qualification-evidence/request.json" in example]
+        self.assertEqual(len(templates), 1, "expected one documented observation template")
+        draft = self.root / "draft.json"
+        # Run the actual shell example, relocating only its live-host file paths.
+        script = templates[0].replace("/root/sbxr-qualification-evidence/request.json",
+                                      shlex.quote(str(request)))
+        script = script.replace("/root/mvp-observation-draft.json", shlex.quote(str(draft)))
+        result = subprocess.run(["bash", "-c", script], cwd=self.root,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(draft.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(draft.read_bytes()), {
+            "scenario_id": "mvp-install", "started_at": None, "completed_at": None,
+            "checks": [{"check": check, "observed_at": None, "result": None}
+                       for check in MVP.SCENARIOS["mvp-install"]],
+        })
+
+        result = subprocess.run(self.command(request, draft), capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("observation start is not an RFC3339 UTC second", result.stderr)
+        self.assertFalse((self.root / "facts.json").exists())
 
     def test_missing_reordered_or_unobserved_check_is_refused_without_output(self):
         valid = [{"check": check,
