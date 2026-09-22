@@ -19,16 +19,24 @@ func TestV3RealSSHBoundaries(t *testing.T) {
 			t.Skipf("isolated SSH fixture requires %s", tool)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	command := exec.CommandContext(ctx, "python3", ".github/scripts/test_ssh_boundary.py")
-	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
-	command.WaitDelay = 10 * time.Second
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("real SSH boundary regression: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "SSH_BOUNDARY_CASES_PASSED") {
-		t.Fatalf("real SSH boundary fixture did not exercise its cases:\n%s", output)
+	for _, fixture := range []struct{ name, script, marker string }{
+		{"boundaries", "test_ssh_boundary.py", "SSH_BOUNDARY_CASES_PASSED count=21"},
+		{"locked-account", "test_ssh_boundary_account.py", "Ran 2 tests"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			command := exec.CommandContext(ctx, "python3", ".github/scripts/"+fixture.script)
+			command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
+			command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
+			command.WaitDelay = 10 * time.Second
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("real SSH boundary regression: %v\n%s", err, output)
+			}
+			if !strings.Contains(string(output), fixture.marker) || strings.Contains(string(output), "skipped=") {
+				t.Fatalf("real SSH boundary fixture did not exercise its cases:\n%s", output)
+			}
+		})
 	}
 }

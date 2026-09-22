@@ -31,6 +31,14 @@ temporary-menu staging is unchanged. `release_candidate_handoff_test.go` covers
 fresh-shell and streamed-source identity checks; `test_ssh_boundary.py` executes
 the documented command over real SSH with the old helper path absent, and proves
 refusal stops continuation without changing the synthetic installation.
+The fixture supplies a read-only, synthetic password-disabled root shadow
+record inside its private mount namespace, so key-only SSH does not inherit a
+cloud image's locked-root/PAM policy. It never unlocks the host account.
+`test_ssh_boundary_account.py` runs the same 21 real-SSH cases beneath a
+deliberately locked caller account and exercises post-readiness failure cleanup;
+both paths preserve the caller and host shadow records. The root Go integration
+test includes both scripts. These Linux/root namespace tests are local regression
+checks, not live acceptance.
 
 The log-parent wrapper qualification is destructive and runs only as root on a
 prepared disposable Ubuntu/systemd VM. With the wrapper, supervisor, and test
@@ -42,6 +50,19 @@ temporary launcher and unchanged wrapper. It also requires a marked disposable
 root Linux VM and refuses existing product/staging/Certbot-log fixture paths.
 Use the operator plan for its scope and the adjacent Go Linux test for real
 systemd/TLS behavior. Neither test contacts a public CA or qualifies a release.
+
+The read-only `mvp-inspect-window.py` replaces run-local package/window probes.
+Use its [documented SSH call and receipt inputs](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22).
+It queries the installed held package independently of the deliberately removed
+DEB and compares the Ownership Record string, not the declaration object.
+`test_mvp_inspect_window.py` covers portable contracts;
+`test_mvp_inspect_window_linux.py VERIFIED_DEB` exercises the exact documented
+call through loopback SSH, real dpkg install/hold/purge of the pinned official
+amd64 package, the existing driver/launcher/wrapper, timer/lock refusals and
+fixture cleanup. It refuses anything other than an explicitly marked disposable
+root amd64 Linux VM with absent fixture resources. SBXR records/menu and snap
+CLI/images are synthetic; no CA or product acceptance is claimed. Keep egress
+restricted. The opt-in root Go wrapper uses `SBXR_MVP_OBSERVER_DEB`.
 
 `python3 .github/scripts/sbxr-snapshot-recovery/test_runbook.py` executes the
 runbook's actual listener-comparison program against preservation and refusal

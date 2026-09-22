@@ -209,6 +209,13 @@ def inside(root):
             os.close(fixture_fd)
     run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/run"])
     Path("/run/sshd").mkdir(mode=0o755)
+    # UsePAM=no key authentication still checks the root account's lock state.
+    # Supply only a synthetic, non-expired, password-disabled record inside this
+    # private mount namespace; never unlock or copy the host's shadow records.
+    shadow = root / "shadow"
+    write(shadow, "root:*:20000:0:99999:7:::\n")
+    run(["mount", "--bind", str(shadow), "/etc/shadow"])
+    run(["mount", "-o", "remount,bind,ro", "/etc/shadow"])
     Path("/root/.ssh").mkdir(mode=0o700)
     evidence = Path("/root/sbxr-qualification-evidence")
     evidence.mkdir(mode=0o700)

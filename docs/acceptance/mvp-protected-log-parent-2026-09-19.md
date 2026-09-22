@@ -117,6 +117,77 @@ Reverify the declared/installed package identity. That retained result does not
 authorize installation or removal of other packages inside a window, nor does
 it prove the future candidate's complete removal journey.
 
+## Read-only state checks (corrected September 22)
+
+Use the source-owned [window observer](../../.github/scripts/mvp-inspect-window.py)
+instead of a copied run-local `inspect-window.py` or handwritten package
+comparison. It is streamed, not a fifth staged operator file. A failed check
+stops the command sequence; it never opens a permission window or runs SBXR.
+Do not reuse historical observations as current expectations.
+
+Prepare a local, private `expectation_file` from the **reviewed current**
+candidate declaration, fresh host observations, and exact source checkout:
+
+| JSON field | Expected value / authority |
+|---|---|
+| `proxy_package` | The unchanged `v3_attempt.proxy_package` from the verified qualification manifest (or reviewed declaration before signing). |
+| `installed_binary_sha256` | SHA-256 of `./usr/bin/sing-box` extracted locally from that receipt's size/SHA-256-verified DEB. This is **not** the DEB digest. |
+| `snap_packages` | Fresh reviewed `certbot`, `core24`, `snapd` entries, each containing only `version`, `revision`, `snap_sha256`, `snap_size`. Compare Certbot and snapd version/size/digest to the declared packages; preserve the reviewed core24 receipt. |
+| `operator_sha256` | Map of the four staged basenames below to hashes of their reviewed source files. |
+| `log_parent`, `log_children` | Fresh reviewed `metadata` and immediate directory/symlink inventory in the observer's JSON shape (`device`, `inode`, `uid`, `gid`, `mode` as an octal string, `links`, `directory`, `symlink`, `xattrs`). Use the original 0775 identity; do not adopt drift as a new baseline. |
+
+The archive and Installed Record are separate authorities. Running requires
+`dpkg-query` to report the declared version and architecture with **`hold ok
+installed`** (abbreviated `hi `), even when the downloaded DEB is absent.
+Successful setup intentionally removes `/var/lib/sbxr/sing-box_1.13.19_amd64.deb`;
+its presence, including a broken symlink, is a refusal in these steady states.
+The Ownership Record's `proxy_package_identity` is the space-joined string
+`repository name version architecture size sha256`, **not** the declaration
+object and not its signing-key field. The observer performs that comparison.
+Renewal-attempt completion is checked independently of the temporary DEB.
+
+Use `phase=not-installed` before installation; `not-set-up` after successful
+installation/streamed candidate verification but before Start setup; `running`
+after successful setup and before/after each subsequent menu process; and
+`removed` after successful Complete removal, before deleting operator files.
+The first, second and last phases require package absence; only `not-set-up`
+expects the SBXR executable and Installed Record to remain. A transition or
+incomplete state is **not** Running; stop and review it instead of relabelling
+it to make this check pass. Reviewed failure cleanup still needs the separate
+legal-action assessment described below.
+
+Set `window_seconds=900`, or the smaller reviewed driver/collector bound, and
+set `observation_file` to a fresh local run artifact. Use the same authenticated
+connection options as the installed-candidate check. Neither `-n` nor
+`StdinNull=yes` is permitted. From the source checkout:
+
+<!-- mvp-window-observer-ssh -->
+```sh
+case "$phase" in not-installed|not-set-up|running|removed) ;; *) exit 1 ;; esac
+case "$window_seconds" in ''|*[!0-9]*) exit 1 ;; esac
+expectation_b64=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1], "rb").read()).decode())' "$expectation_file")
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  "${ssh_options[@]}" "$acceptance_host" \
+  "python3 - '$phase' '$expectation_b64' --window-seconds '$window_seconds'" \
+  < .github/scripts/mvp-inspect-window.py > "$observation_file"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["phase"] == sys.argv[2] and d["operator_files_verified"] and d["locks_unheld"] and d["writers_idle"]' "$observation_file" "$phase"
+```
+
+Run under `set -euo pipefail` (as in the candidate handoff) and require exit 0
+before continuing. Base64 only transports non-secret receipt JSON safely through
+the SSH command; it provides no authenticity. The local JSON check also refuses
+an empty/missing streamed program instead of accepting Python's empty-input exit.
+Never replace the resulting structured package observation with an `ii` string
+assertion or infer package absence from a missing download. The observer checks
+all declared snap receipts, original log identities, four staged files, retained
+state absence, timer margin, writer processes, kernel locks and package/renewal
+state. It emits no private Ownership Record contents or process command lines.
+
+This supplements, rather than replaces, installed-candidate verification,
+product menu Review, full protected-footprint absence after removal, logging
+health, CA budget and outside/Karing observations. It is a point-in-time check,
+not a lock against subsequent unrelated host activity or an acceptance pass.
+
 ## Staging and invocation
 
 After the preceding live gate is accepted, create a new root:root 0700
@@ -269,6 +340,14 @@ their relative paths, and run `python3 .github/scripts/test_mvp_protected_menu.p
 as root. It refuses existing product, launcher-directory and shared-log fixture
 paths and cleans its own files even on assertion failure.
 
+The driver's three-second deadline fixture counts launcher/wrapper startup in
+its budget. The [September 22 timing investigation](mvp-driver-deadline-investigation-2026-09-22.md)
+reproduced expiration before fixture startup in a slow software-emulated guest,
+then verified the full unchanged suite on an ARM64/HVF guest. Use an adequately
+fast disposable Linux environment for this active-process cleanup test; retain
+any earlier expiration as a failure, rather than lengthening the timeout,
+skipping the case or counting an empty process journal as cleanup proof.
+
 For the separate systemd test, cross-build `go test -c
 ./internal/proxyinstallation` using Go 1.26.6 for the VM architecture. Stage the
 unchanged wrapper (0700) and supervisor (0600) under a root:root 0700 directory,
@@ -278,3 +357,44 @@ then invoke the test executable as root with `SBXR_ISOLATED_SYSTEMD=1`,
 Use a private run-local `TMPDIR`. Its fixtures clean the synthetic installation,
 services, certificates, group, address and log-parent mode. Neither executable
 test is permitted on the real VPS.
+
+## Observer regression rehearsal
+
+The source-owned observer has portable contract tests and a separate disposable
+amd64 Ubuntu VM rehearsal. This second fixture is different from the synthetic
+systemd/TLS test above: it installs, holds, removes and purges the actual pinned
+sing-box DEB, without starting sing-box. The SBXR records/menu and snap CLI/images
+are synthetic. Real OpenSSH executes the documented streamed observer against
+real dpkg, filesystem metadata, a real systemd timer and kernel locks. Successful
+menu and purge windows use the unchanged launcher/driver/wrapper. No public CA,
+VPS, outside traffic or Karing action belongs in this regression.
+
+Only in a freshly marked disposable **amd64** VM, with restricted egress and no
+preexisting fixture resources, stage this checkout and the independently verified
+pinned DEB. Keep the source tree layout intact. Use a new temporary directory
+under that checkout's `.scratch/acceptance/<run>/` and run:
+
+```sh
+python3 .github/scripts/test_mvp_inspect_window_linux.py /absolute/path/to/verified-sing-box.deb
+```
+
+The marker and exact DEB checks are mandatory, and the fixture refuses existing
+product, shared Certbot, operator, lock and timer paths. Its `finally`/cleanup
+stack purges the package and removes its own fixtures even on an assertion
+failure. Set `MVP_OBSERVER_INJECT_FAILURE=1` only for the separate expected-failure
+cleanup check; require its named assertion, then independently audit fixture
+absence and restored original log identity. Never run this fixture on the VPS.
+Retained wrapper state is not blindly deleted if restoration fails. The ordinary
+Go wrapper is opt-in via `SBXR_MVP_OBSERVER_DEB`; portable contracts always run.
+
+The [September 22 observer repair report](mvp-operator-observer-repair-2026-09-22.md)
+retains the successful focused lifecycle rehearsal and original emulated-driver
+failure. The [deadline investigation](mvp-driver-deadline-investigation-2026-09-22.md)
+explains that timing failure and verifies the unchanged driver suite, while
+recording a separate incomplete SSH-fixture replay. The subsequent
+[SSH readiness repair](mvp-ssh-fixture-readiness-repair-2026-09-22.md) closes that
+replay gap: the fixture now isolates its account record rather than inheriting
+the host root lock, and all 21 real-SSH cases plus locked-account success/failure
+regressions pass locally. Host accounts and the four staged operator files stay
+unchanged. These are complementary local regression results, not live
+qualification or authorization to dispatch a candidate.
