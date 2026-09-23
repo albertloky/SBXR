@@ -80,7 +80,7 @@ def main(deb):
             cleanup.callback(lambda: path.unlink(missing_ok=True))
         for path in (ROOT, OWNED, Path('/etc/letsencrypt'), Path('/var/lib/letsencrypt'), Path('/var/log/letsencrypt')):
             directory(path)
-        for parent in (Path('/var/lib/snapd'), Path('/var/lib/snapd/snaps')):
+        for parent in (Path('/var/lib/snapd'), Path('/var/lib/snapd/snaps'), Path('/var/lib/snapd/cache')):
             if not parent.exists():
                 directory(parent)
         expected = dict(observer.log_observation(), proxy_package=RECEIPT,
@@ -95,7 +95,13 @@ def main(deb):
         for name in ('certbot', 'core24', 'snapd'):
             path = Path('/var/lib/snapd/snaps') / (name + '_999999.snap')
             assert not os.path.lexists(path)
-            file(path, 'not a snap: isolated observer fixture\n')
+            file(path, 'not a snap: isolated observer fixture ' + name + '\n')
+            cache = Path('/var/lib/snapd/cache') / ('mvp-observer-' + name)
+            assert not os.path.lexists(cache)
+            os.link(path, cache)
+            cleanup.callback(lambda p=cache: p.unlink(missing_ok=True))
+            paths.extend((path, cache))
+            assert path.stat().st_nlink == 2 and os.path.samefile(path, cache)
             expected['snap_packages'][name] = {'version': 'fixture', 'revision': '999999',
                                                'snap_sha256': observer.digest(path), 'snap_size': path.stat().st_size}
         snap_state = work / 'snap-state.json'
@@ -223,6 +229,14 @@ LogLevel ERROR
             run(['systemctl', 'daemon-reload'])
         cleanup.callback(purge)
         check('not-installed')
+        # Cache links are allowed only for snaps, never staged operator files.
+        for name in observer.OPERATOR_MODES:
+            link = work / 'operator-link'
+            os.link(ROOT / name, link)
+            try:
+                check('not-installed', 'unsafe-file:')
+            finally:
+                link.unlink()
         write(PRODUCT, menu, 0o700)
         write(OWNED / 'installed.json', '{}')
         check('not-set-up')

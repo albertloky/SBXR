@@ -146,6 +146,14 @@ The Ownership Record's `proxy_package_identity` is the space-joined string
 object and not its signing-key field. The observer performs that comparison.
 Renewal-attempt completion is checked independently of the temporary DEB.
 
+Snap images may have multiple hard links because snapd uses a content cache.
+The observer still requires regular root:root files, no group/other write bits
+or extended attributes, and the exact reviewed version, revision, size and
+SHA-256. It does not require a cache entry or a fixed link count and does not
+modify either link. Operator files, installed records, executables and lock
+files retain their one-link requirement; this exception changes no product
+trust check.
+
 Use `phase=not-installed` before installation; `not-set-up` after successful
 installation/streamed candidate verification but before Start setup; `running`
 after successful setup and before/after each subsequent menu process; and

@@ -53,10 +53,10 @@ def metadata(path):
             "xattrs": os.listxattr(path, follow_symlinks=False)}
 
 
-def protected_file(path, mode=None):
+def protected_file(path, mode=None, *, allow_hardlinks=False):
     info = os.lstat(path)
     require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0
-            and info.st_nlink == 1 and not info.st_mode & 0o022
+            and (allow_hardlinks or info.st_nlink == 1) and not info.st_mode & 0o022
             and (mode is None or stat.S_IMODE(info.st_mode) == mode)
             and not os.listxattr(path, follow_symlinks=False), "unsafe-file:" + str(path))
 
@@ -64,6 +64,23 @@ def protected_file(path, mode=None):
 def ownership_identity(receipt):
     return " ".join(str(receipt[key]) for key in
                     ("repository", "name", "version", "architecture", "size", "sha256"))
+
+
+def snap_observation(expected):
+    snaps = {}
+    for name in ("certbot", "core24", "snapd"):
+        lines = command("snap", "list", name).splitlines()
+        require(len(lines) == 2, "snap-list")
+        fields = lines[1].split()
+        require(len(fields) >= 3 and fields[0] == name and fields[2].isdigit(), "snap-list")
+        path = Path("/var/lib/snapd/snaps") / (name + "_" + fields[2] + ".snap")
+        # snapd's content cache hard-links package images. Their identity is
+        # the reviewed receipt below, not a one-link private-file invariant.
+        protected_file(path, allow_hardlinks=True)
+        snaps[name] = {"version": fields[1], "revision": fields[2],
+                       "snap_sha256": digest(path), "snap_size": path.stat().st_size}
+    require(snaps == expected, "snap-receipt-drift")
+    return snaps
 
 
 def package_observation(phase, expected):
@@ -153,17 +170,7 @@ def observe(phase, expected, window_seconds):
         info = metadata(name)
         require(info["directory"] and info["uid"] == 0
                 and not int(info["mode"], 8) & 0o022 and not info["xattrs"], "certbot-directory")
-    snaps = {}
-    for name in ("certbot", "core24", "snapd"):
-        lines = command("snap", "list", name).splitlines()
-        require(len(lines) == 2, "snap-list")
-        fields = lines[1].split()
-        require(len(fields) >= 3 and fields[0] == name and fields[2].isdigit(), "snap-list")
-        path = Path("/var/lib/snapd/snaps") / (name + "_" + fields[2] + ".snap")
-        protected_file(path)
-        snaps[name] = {"version": fields[1], "revision": fields[2],
-                       "snap_sha256": digest(path), "snap_size": path.stat().st_size}
-    require(snaps == expected["snap_packages"], "snap-receipt-drift")
+    snaps = snap_observation(expected["snap_packages"])
     changes = command("snap", "changes").splitlines()
     require(all(len(line.split()) >= 2 and line.split()[1] in ("Done", "Error", "Undone", "Hold")
                 for line in changes[1:] if line.strip()), "active-snap-change")

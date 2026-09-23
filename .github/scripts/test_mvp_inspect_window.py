@@ -2,6 +2,7 @@
 """Portable contract regressions; real dpkg/SSH/window rehearsal is adjacent."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import sys
@@ -118,6 +119,133 @@ class PackageObservation(unittest.TestCase):
             with self.subTest(phase=phase):
                 with self.assertRaisesRegex(OBSERVER.Refused, 'unexpected-proxy-package'):
                     self.observe(phase)
+
+
+@unittest.skipUnless(sys.platform.startswith('linux') and os.geteuid() == 0,
+                     'real root-owned snap/cache filesystem tests require root Linux')
+class SnapObservation(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='mvp-snap-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.snaps = self.root / 'snaps'
+        self.cache = self.root / 'cache'
+        self.snaps.mkdir(mode=0o755)
+        self.cache.mkdir(mode=0o700)
+        self.expected = {}
+        for name in ('certbot', 'core24', 'snapd'):
+            path = self.snaps / (name + '_123.snap')
+            path.write_bytes(('fixture ' + name).encode())
+            path.chmod(0o600)
+            os.link(path, self.cache / name)
+            self.assertEqual(path.stat().st_nlink, 2)
+            self.assertTrue(os.path.samefile(path, self.cache / name))
+            self.expected[name] = {'version': 'fixture', 'revision': '123',
+                                   'snap_sha256': OBSERVER.digest(path),
+                                   'snap_size': path.stat().st_size}
+        # Only the snap CLI and absolute directory are fixtures. Metadata,
+        # hard links, file reads, hashes, ownership and xattrs are real Linux.
+        paths = patch.object(OBSERVER, 'Path', side_effect=self.snap_path)
+        paths.start()
+        self.addCleanup(paths.stop)
+        commands = patch.object(OBSERVER, 'command', side_effect=self.snap_list)
+        self.command = commands.start()
+        self.addCleanup(commands.stop)
+        self.image = self.snaps / 'certbot_123.snap'
+
+    def snap_path(self, name):
+        self.assertEqual(str(name), '/var/lib/snapd/snaps')
+        return self.snaps
+
+    def snap_list(self, *args):
+        self.assertEqual(args[:2], ('snap', 'list'))
+        self.assertIn(args[2], self.expected)
+        return 'Name Version Rev\n' + args[2] + ' fixture 123'
+
+    def observe(self):
+        return OBSERVER.snap_observation(self.expected)
+
+    def test_cache_hardlinks_are_accepted_without_mutation(self):
+        before = {p: (OBSERVER.metadata(p), p.read_bytes())
+                  for parent in (self.snaps, self.cache) for p in parent.iterdir()}
+        self.assertEqual(self.observe(), self.expected)
+        self.assertEqual(self.command.call_count, 3)
+        self.assertEqual(before, {p: (OBSERVER.metadata(p), p.read_bytes()) for p in before})
+
+    def test_single_link_images_are_also_accepted(self):
+        for path in self.cache.iterdir():
+            path.unlink()
+        self.assertEqual(self.observe(), self.expected)
+
+    def test_group_or_other_writable_image_is_refused(self):
+        for mode in (0o620, 0o602, 0o666):
+            with self.subTest(mode=oct(mode)):
+                self.image.chmod(mode)
+                with self.assertRaisesRegex(OBSERVER.Refused, 'unsafe-file:'):
+                    self.observe()
+
+    def test_nonroot_owner_or_group_is_refused(self):
+        for uid, gid in ((1, 0), (0, 1)):
+            with self.subTest(uid=uid, gid=gid):
+                os.chown(self.image, uid, gid)
+                with self.assertRaisesRegex(OBSERVER.Refused, 'unsafe-file:'):
+                    self.observe()
+
+    def test_xattrs_are_refused(self):
+        os.setxattr(self.image, 'user.mvp-fixture', b'present')
+        with self.assertRaisesRegex(OBSERVER.Refused, 'unsafe-file:'):
+            self.observe()
+
+    def test_symlink_directory_and_fifo_are_refused(self):
+        self.image.unlink()
+        for kind in ('symlink', 'broken-symlink', 'directory', 'fifo'):
+            with self.subTest(kind=kind):
+                if kind == 'symlink':
+                    self.image.symlink_to(self.cache / 'certbot')
+                elif kind == 'broken-symlink':
+                    self.image.symlink_to(self.root / 'missing')
+                elif kind == 'directory':
+                    self.image.mkdir()
+                else:
+                    os.mkfifo(self.image, 0o600)
+                try:
+                    with self.assertRaisesRegex(OBSERVER.Refused, 'unsafe-file:'):
+                        self.observe()
+                finally:
+                    if kind == 'directory':
+                        self.image.rmdir()
+                    else:
+                        self.image.unlink()
+
+    def test_changed_content_through_cache_link_is_refused(self):
+        # Same length ensures the digest check, not just size, finds the drift.
+        cache = self.cache / 'certbot'
+        cache.write_bytes(b'x' * cache.stat().st_size)
+        with self.assertRaisesRegex(OBSERVER.Refused, 'snap-receipt-drift'):
+            self.observe()
+
+    def test_receipt_fields_are_still_checked(self):
+        original = dict(self.expected['certbot'])
+        for key, value in (('version', 'wrong'), ('revision', '124'),
+                           ('snap_size', 1), ('snap_sha256', '0' * 64)):
+            with self.subTest(field=key):
+                self.expected['certbot'] = dict(original, **{key: value})
+                with self.assertRaisesRegex(OBSERVER.Refused, 'snap-receipt-drift'):
+                    self.observe()
+
+    def test_other_protected_files_still_require_one_link(self):
+        # Including a .snap suffix: the exception must be explicit at the
+        # snap observation call, not inferred from a filename or global rule.
+        for name in ('operator.sh', 'installed.json', 'proxy-ownership.json',
+                     'renewal-attempts.json', 'sbxr.lock', 'unrelated.snap'):
+            with self.subTest(name=name):
+                path = self.root / name
+                path.write_bytes(b'private')
+                path.chmod(0o600)
+                OBSERVER.protected_file(path, 0o600)
+                os.link(path, self.root / (name + '.link'))
+                with self.assertRaisesRegex(OBSERVER.Refused, 'unsafe-file:'):
+                    OBSERVER.protected_file(path, 0o600)
 
 
 if __name__ == '__main__':

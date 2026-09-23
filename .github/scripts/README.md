@@ -55,13 +55,18 @@ The read-only `mvp-inspect-window.py` replaces run-local package/window probes.
 Use its [documented SSH call and receipt inputs](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22).
 It queries the installed held package independently of the deliberately removed
 DEB and compares the Ownership Record string, not the declaration object.
-`test_mvp_inspect_window.py` covers portable contracts;
+Snap images may have snapd cache hard links; root ownership, regular-file type,
+non-writable group/other permissions, no xattrs, and exact receipts are still
+required. Other protected files keep the one-link rule.
+`test_mvp_inspect_window.py` covers portable contracts and, when run as root on
+Linux, real snap/cache hard links and metadata/content refusals;
 `test_mvp_inspect_window_linux.py VERIFIED_DEB` exercises the exact documented
 call through loopback SSH, real dpkg install/hold/purge of the pinned official
 amd64 package, the existing driver/launcher/wrapper, timer/lock refusals and
 fixture cleanup. It refuses anything other than an explicitly marked disposable
 root amd64 Linux VM with absent fixture resources. SBXR records/menu and snap
-CLI/images are synthetic; no CA or product acceptance is claimed. Keep egress
+CLI/images are synthetic, with real snap/cache hard links; no CA or product
+acceptance is claimed. Keep egress
 restricted. The opt-in root Go wrapper uses `SBXR_MVP_OBSERVER_DEB`.
 
 `python3 .github/scripts/sbxr-snapshot-recovery/test_runbook.py` executes the
