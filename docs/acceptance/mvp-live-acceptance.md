@@ -7,6 +7,11 @@ The five journey identifiers are listed in [ADR-0023](../adr/0023-mvp-live-accep
 `mvp-install`, `mvp-subscription`, `mvp-credentials`, `mvp-renewal`, and
 `mvp-removal`.
 
+The separately approved [r24 late-confirmation supplement](../adr/0024-r24-late-confirmation-supplement.md)
+validates the historical evidence. Its separately approved, target-bound release
+exception applies only to v3.1.81/159; it does not change this procedure's
+deadlines or make the failed historical run pass.
+
 Prepare the candidate using the normal supported artifact and trust checks, and
 run the ordinary focused regressions for changed product paths. Use the exact
 packaged candidate on a real disposable Ubuntu Server 24.04 `amd64` host with a

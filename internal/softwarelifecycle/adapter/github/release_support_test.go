@@ -48,10 +48,21 @@ func TestUniqueRecordValueRefusesEmptyFirstAndDuplicateRecords(t *testing.T) {
 }
 
 func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy string) {
+	testCleanInstallSupportVariant(t, scope, exception, policy, false)
+}
+
+func TestLateConfirmationPublicRelease(t *testing.T) {
+	testCleanInstallSupportVariant(t, softwarelifecycle.SubscriptionCleanInstallRepair, true, softwarelifecycle.MVPLiveEvidencePolicy, true)
+}
+
+func testCleanInstallSupportVariant(t *testing.T, scope string, exception bool, policy string, late bool) {
 	fixture := newLatestReleaseFixture(t)
 	sequence := uint64(17)
 	if exception {
 		fixture.release.Tag, sequence = "v3.1.0", 83
+	}
+	if late {
+		fixture.release.Tag, sequence = softwarelifecycle.LateConfirmationTag, softwarelifecycle.LateConfirmationSequence
 	}
 	support := softwarelifecycle.ReleaseSupport{Scope: scope, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
 	var assets []softwarelifecycle.LatestAssetProof
@@ -91,10 +102,23 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 		body = strings.NewReplacer("Tag: v2.0.0", "Tag: v3.1.0", "Sequence: 17", "Sequence: 83", "Status: Qualified", "Status: Qualified by Owner exception", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION", softwarelifecycle.OwnerExceptionCode, "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Integrated Verification: "+softwarelifecycle.OwnerExceptionLive, "Codex Live Acceptance: Passed", "Codex Live Acceptance: "+softwarelifecycle.OwnerExceptionLive, "Owner Acceptance: Not required", "Owner Acceptance: One-release exception approved", "Secret-safe result: Passed", "Secret-safe result: "+softwarelifecycle.OwnerExceptionSecrets, "Karing macOS: Passed", "Karing macOS: "+softwarelifecycle.OwnerExceptionLive).Replace(body)
 		body += "Owner exception: " + softwarelifecycle.OwnerExceptionID + "\nLive qualification: Incomplete\nClient compatibility: static-official-evidence-passed-live-karing-pending\n"
 	}
+	if late {
+		body = strings.NewReplacer("Tag: v3.1.0", "Tag: "+softwarelifecycle.LateConfirmationTag, "Sequence: 83", "Sequence: 159", softwarelifecycle.OwnerExceptionID, softwarelifecycle.LateConfirmationID, softwarelifecycle.OwnerExceptionLive, softwarelifecycle.LateConfirmationLive, softwarelifecycle.OwnerExceptionSecrets, softwarelifecycle.LateConfirmationSecrets, "static-official-evidence-passed-live-karing-pending", "prior-live-karing-passed-owner-cleanup-confirmed-late").Replace(body)
+		lines := []string{}
+		for _, line := range strings.Split(body, "\n") {
+			if !strings.HasPrefix(line, "Scenario: ") {
+				lines = append(lines, line)
+			}
+		}
+		body = strings.Join(lines, "\n")
+		review := softwarelifecycle.LateConfirmationReview{BaseCommit: softwarelifecycle.LateConfirmationBase, PolicyDiffSHA256: strings.Repeat("b", 64), Reviewer: "Codex source comparison; Owner-approved exception", RuntimeTreeSHA256: softwarelifecycle.LateConfirmationRuntimeTree, SupplementSHA256: softwarelifecycle.LateConfirmationSupplement, TargetCommit: fixtureCommit, TargetSequence: 159, TargetTag: softwarelifecycle.LateConfirmationTag}
+		encoded, _ := json.Marshal(review)
+		body += "Prior live evidence: " + softwarelifecycle.LateConfirmationPriorRun + "\nLate Owner confirmation: " + softwarelifecycle.LateConfirmationTime + "\nSupplement SHA-256: " + softwarelifecycle.LateConfirmationSupplement + "\nOriginal qualification: Failed; v3.1.80 remains burned\nFresh live scenarios: Not performed\nCleanup execution time: Unknown\nApplicability review: " + string(encoded) + "\n"
+	}
 	fixture.release.Body = body
 	source := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier)
-	latest := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Tag: fixture.release.Tag}, Sequence: sequence, Support: &support}
-	refused := exception && scope == softwarelifecycle.SubscriptionCleanInstallRepair || policy == softwarelifecycle.MVPLiveEvidencePolicy && scope != softwarelifecycle.SubscriptionCleanInstallRepair
+	latest := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Tag: fixture.release.Tag, Commit: fixtureCommit}, Sequence: sequence, Support: &support}
+	refused := !late && exception && scope == softwarelifecycle.SubscriptionCleanInstallRepair || policy == softwarelifecycle.MVPLiveEvidencePolicy && scope != softwarelifecycle.SubscriptionCleanInstallRepair
 	if qualifiedReleaseSupport(body, latest) == refused {
 		t.Fatal("public support result did not match its scope")
 	}
@@ -106,6 +130,21 @@ func testCleanInstallSupport(t *testing.T, scope string, exception bool, policy 
 	}
 	if got, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseAccepted || got.Support == nil || got.Support.Scope != scope {
 		t.Fatalf("CheckLatest=%+v %v", got, outcome)
+	}
+	if late {
+		for _, bad := range []string{
+			strings.Replace(body, softwarelifecycle.LateConfirmationTime, "2026-09-24T08:00:00Z", 1),
+			strings.Replace(body, "Supplement SHA-256: "+softwarelifecycle.LateConfirmationSupplement, "Supplement SHA-256: "+strings.Repeat("c", 64), 1),
+			strings.Replace(body, "Tag: v3.1.81", "Tag: v3.1.80", 1),
+			body + "Scenario: mvp-install " + strings.Repeat("a", 64) + " " + softwarelifecycle.LateConfirmationPriorRun + "#artifacts\n",
+			strings.Replace(body, `"target_commit":"`+fixtureCommit+`"`, `"target_commit":"`+strings.Repeat("c", 40)+`"`, 1),
+		} {
+			fixture.release.Body = bad
+			if _, outcome := source.CheckLatest(t.Context()); outcome != softwarelifecycle.LatestReleaseRefused {
+				t.Fatal("altered late record accepted")
+			}
+		}
+		return
 	}
 	mutations := []string{strings.Replace(body, "Release support: ", "Unknown support: ", 1), strings.Replace(body, scope, softwarelifecycle.RecurringSubscriptionUpgrade, 1)}
 	if scope == softwarelifecycle.SubscriptionCleanInstallRepair {

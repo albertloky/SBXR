@@ -22,6 +22,11 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 		}
 		return false
 	}
+	profile, approvedException := softwarelifecycle.QualificationException(release.Identity.Tag, release.Sequence, release.Support)
+	late := approvedException && profile.ID == softwarelifecycle.LateConfirmationID && strings.Count(body, "Stable result code: "+softwarelifecycle.OwnerExceptionCode+"\n") == 1
+	if late && !softwarelifecycle.ValidLateConfirmationRecord(body, release.Identity.Commit) {
+		return false
+	}
 	scope := ""
 	if release.Support != nil {
 		scope = release.Support.Scope
@@ -67,7 +72,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 			return false
 		}
 		if mvp {
-			if hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") || hasRecordLine("Automated-only checks (not live): ") || !qualifiedMVPScenarios(body) {
+			if hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") || hasRecordLine("Automated-only checks (not live): ") || (!late && !qualifiedMVPScenarios(body)) || late && hasMVPScenario() {
 				return false
 			}
 		} else if !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
@@ -92,7 +97,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 		return false
 	}
 	if release.Support.Scope == softwarelifecycle.FirstSubscriptionCleanInstall || release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		return code == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" || !mvp && code == softwarelifecycle.OwnerExceptionCode && softwarelifecycle.OwnerExceptionTarget(release.Identity.Tag, release.Sequence, release.Support)
+		return code == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" || code == softwarelifecycle.OwnerExceptionCode && (late || !mvp && softwarelifecycle.OwnerExceptionTarget(release.Identity.Tag, release.Sequence, release.Support))
 	}
 	if code != "RELEASE-V3-SUBSCRIPTION-QUALIFICATION" {
 		return false

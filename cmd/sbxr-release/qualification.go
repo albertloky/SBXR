@@ -106,6 +106,8 @@ func runQualification(input io.Reader, output io.Writer) error {
 		decision, err = evaluateCandidateFailureVerification(facts, document)
 	case "owner-exception-result":
 		decision, err = evaluateOwnerException(document)
+	case lateConfirmationStage:
+		decision, err = evaluateLateConfirmation(document)
 	case stablePreflightStage:
 		var facts stablePreflightFacts
 		if !decodeCanonical(document, &facts) {

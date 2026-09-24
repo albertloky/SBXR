@@ -8,6 +8,7 @@ explicit human observations and does not run the historical V4 protocol.
 | Area | Entry points |
 |---|---|
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
+| One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
 | Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md) |

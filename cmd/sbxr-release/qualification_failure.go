@@ -352,7 +352,8 @@ func buildStableFailedAcceptanceRecord(manifest qualificationManifest, release q
 	var source acceptanceRecordJSON
 	wantedSecrets := "Passed"
 	if ownerExceptionManifest(manifest) {
-		wantedSecrets = softwarelifecycle.OwnerExceptionSecrets
+		profile, _ := exceptionProfile(manifest)
+		wantedSecrets = profile.Secrets
 	}
 	if softwarelifecycle.ValidateUniqueJSON(recordBytes) != nil || json.Unmarshal(recordBytes, &source) != nil || (source.Schema != "sbxr-acceptance-record-v1" && !((source.Schema == "sbxr-acceptance-record-v2" || source.Schema == "sbxr-acceptance-record-v3" && manifest.Schema == "sbxr-qualification-manifest-v3") && manifest.V3Attempt != nil)) || source.ReleaseIdentity != release.ReleaseIdentity || source.Sequence != release.Sequence || !reflect.DeepEqual(source.Assets, release.Assets) || source.SecretSafeResult != wantedSecrets || source.Stages.ModuleVerification != "Passed" || source.Stages.SeamVerification != "Passed" {
 		return "", errors.New("qualified Acceptance Record refused")

@@ -477,14 +477,15 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		role, code = "Clean-installed subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION"
 		notApplicable = []string{"incoming-source-upgrades", "two-release-update-recovery"}
 	}
+	profile, _ := exceptionProfile(manifest)
 	status, live, integrated, owner, secretSafe, karing := "Qualified", "Passed", "Passed on live Ubuntu Server 24.04 amd64 and Karing macOS", "Not required", "Passed", "Passed"
 	if ownerExceptionManifest(manifest) {
 		if len(facts.DetailedEvidence.Scenarios) != 0 {
 			return "", errors.New("Owner exception cannot claim live scenarios")
 		}
 		status, code = "Qualified by Owner exception", softwarelifecycle.OwnerExceptionCode
-		live, integrated, karing = softwarelifecycle.OwnerExceptionLive, softwarelifecycle.OwnerExceptionLive, softwarelifecycle.OwnerExceptionLive
-		owner, secretSafe = "One-release exception approved", softwarelifecycle.OwnerExceptionSecrets
+		live, integrated, karing = profile.Live, profile.Live, profile.Live
+		owner, secretSafe = "One-release exception approved", profile.Secrets
 	}
 	var body strings.Builder
 	for _, line := range []string{
@@ -499,7 +500,14 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		body.WriteString(line + "\n")
 	}
 	if ownerExceptionManifest(manifest) {
-		body.WriteString("Owner exception: " + softwarelifecycle.OwnerExceptionID + "\nLive qualification: Incomplete\nClient compatibility: static-official-evidence-passed-live-karing-pending\nWarning: Subscription and Client Identity rotation are not fully proved on a live VPS and Karing.\nPolicy: docs/adr/0017-one-release-owner-exception.md\n")
+		body.WriteString("Owner exception: " + profile.ID + "\nLive qualification: Incomplete\nClient compatibility: " + profile.Client + "\n")
+		if profile.ID == softwarelifecycle.OwnerExceptionID {
+			body.WriteString("Warning: Subscription and Client Identity rotation are not fully proved on a live VPS and Karing.\nPolicy: " + profile.Policy + "\n")
+		} else {
+			body.WriteString("Policy: " + profile.Policy + "\n")
+			review, _ := marshalCanonical(attempt.LateConfirmationReview)
+			body.WriteString("Prior live evidence: " + softwarelifecycle.LateConfirmationPriorRun + "\nLate Owner confirmation: " + softwarelifecycle.LateConfirmationTime + "\nSupplement SHA-256: " + softwarelifecycle.LateConfirmationSupplement + "\nApplicability review: " + string(review) + "\nOriginal qualification: Failed; v3.1.80 remains burned\nFresh live scenarios: Not performed\nCleanup execution time: Unknown\n")
+		}
 	}
 	if attempt.Support != nil {
 		support, _ := json.Marshal(attempt.Support.lifecycle())
@@ -569,31 +577,32 @@ type v3QualificationSource struct {
 }
 
 type v3QualificationAttempt struct {
-	AfterSnapRefresh       v3QualificationPackages `json:"after_snap_refresh"`
-	AttemptID              string                  `json:"attempt_id"`
-	AutomatedOnlyScenarios []string                `json:"automated_only_scenarios,omitempty"`
-	Baseline               *qualificationRelease   `json:"baseline,omitempty"`
-	CandidateIndex         string                  `json:"candidate_index,omitempty"`
-	EvidencePolicy         string                  `json:"evidence_policy,omitempty"`
-	KaringLatestCheckedAt  string                  `json:"karing_latest_checked_at"`
-	KaringLimitSeconds     int                     `json:"karing_limit_seconds"`
-	MacRunnerID            string                  `json:"mac_runner_id"`
-	MacOSVersion           string                  `json:"macos_version"`
-	OutsideRunnerID        string                  `json:"outside_runner_id"`
-	OwnerException         string                  `json:"owner_exception,omitempty"`
-	Packages               v3QualificationPackages `json:"packages"`
-	ProxyPackage           v3PackageIdentity       `json:"proxy_package"`
-	RequiredScenarios      []string                `json:"required_scenarios"`
-	RunAttempt             int                     `json:"run_attempt"`
-	Runner                 acceptanceVPSRunner     `json:"runner"`
-	ScenarioLimitSeconds   int                     `json:"scenario_limit_seconds"`
-	Schema                 string                  `json:"schema"`
-	Sources                []v3QualificationSource `json:"sources"`
-	StartedAt              string                  `json:"started_at"`
-	Support                *v3ReleaseSupport       `json:"support,omitempty"`
-	ValidationLimitSeconds int                     `json:"validation_limit_seconds"`
-	VPSID                  string                  `json:"vps_id"`
-	VPSIdentitySHA256      string                  `json:"vps_identity_sha256"`
+	AfterSnapRefresh       v3QualificationPackages                   `json:"after_snap_refresh"`
+	AttemptID              string                                    `json:"attempt_id"`
+	AutomatedOnlyScenarios []string                                  `json:"automated_only_scenarios,omitempty"`
+	Baseline               *qualificationRelease                     `json:"baseline,omitempty"`
+	CandidateIndex         string                                    `json:"candidate_index,omitempty"`
+	EvidencePolicy         string                                    `json:"evidence_policy,omitempty"`
+	KaringLatestCheckedAt  string                                    `json:"karing_latest_checked_at"`
+	KaringLimitSeconds     int                                       `json:"karing_limit_seconds"`
+	LateConfirmationReview *softwarelifecycle.LateConfirmationReview `json:"late_confirmation_review,omitempty"`
+	MacRunnerID            string                                    `json:"mac_runner_id"`
+	MacOSVersion           string                                    `json:"macos_version"`
+	OutsideRunnerID        string                                    `json:"outside_runner_id"`
+	OwnerException         string                                    `json:"owner_exception,omitempty"`
+	Packages               v3QualificationPackages                   `json:"packages"`
+	ProxyPackage           v3PackageIdentity                         `json:"proxy_package"`
+	RequiredScenarios      []string                                  `json:"required_scenarios"`
+	RunAttempt             int                                       `json:"run_attempt"`
+	Runner                 acceptanceVPSRunner                       `json:"runner"`
+	ScenarioLimitSeconds   int                                       `json:"scenario_limit_seconds"`
+	Schema                 string                                    `json:"schema"`
+	Sources                []v3QualificationSource                   `json:"sources"`
+	StartedAt              string                                    `json:"started_at"`
+	Support                *v3ReleaseSupport                         `json:"support,omitempty"`
+	ValidationLimitSeconds int                                       `json:"validation_limit_seconds"`
+	VPSID                  string                                    `json:"vps_id"`
+	VPSIdentitySHA256      string                                    `json:"vps_identity_sha256"`
 }
 
 func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts, workflow qualificationWorkflow) bool {
@@ -603,7 +612,15 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 // validV3AttemptDeclaredFields is shared by unsigned preparation and signing.
 // Signing separately binds the workflow identity and candidate release index.
 func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qualificationFacts) bool {
-	if attempt.OwnerException != "" && (attempt.OwnerException != softwarelifecycle.OwnerExceptionID || attempt.Support == nil || !softwarelifecycle.OwnerExceptionTarget(preflight.Candidate.BTag, preflight.Candidate.BSequence, supportPointer(attempt.Support)) || attempt.Schema != "sbxr-v3-qualification-attempt-v3") {
+	profile, exceptionOK := softwarelifecycle.QualificationException(preflight.Candidate.BTag, preflight.Candidate.BSequence, supportPointer(attempt.Support))
+	if attempt.OwnerException != "" && (!exceptionOK || attempt.OwnerException != profile.ID || attempt.Schema != "sbxr-v3-qualification-attempt-v3") {
+		return false
+	}
+	if attempt.OwnerException == softwarelifecycle.LateConfirmationID {
+		if !attempt.LateConfirmationReview.Valid(preflight.Commit) {
+			return false
+		}
+	} else if attempt.LateConfirmationReview != nil {
 		return false
 	}
 	started, ok := qualificationTime(attempt.StartedAt)
@@ -702,12 +719,16 @@ func qualifiedV3Source(release observedRelease) bool {
 		return false
 	}
 	exception := strings.Count(release.Body, "Stable result code: "+softwarelifecycle.OwnerExceptionCode+"\n") == 1
+	profile, exceptionTarget := softwarelifecycle.QualificationException(release.Tag, release.Index.Sequence, supportPointer(release.Index.Support))
 	status, live, owner, secrets := "Qualified", "Passed", "Not required", "Passed"
 	if exception {
-		if !softwarelifecycle.OwnerExceptionTarget(release.Tag, release.Index.Sequence, supportPointer(release.Index.Support)) || strings.Count(release.Body, "Owner exception: "+softwarelifecycle.OwnerExceptionID+"\n") != 1 || strings.Count(release.Body, "Live qualification: Incomplete\n") != 1 {
+		if !exceptionTarget || strings.Count(release.Body, "Owner exception: "+profile.ID+"\n") != 1 || strings.Count(release.Body, "Live qualification: Incomplete\n") != 1 {
 			return false
 		}
-		status, live, owner, secrets = "Qualified by Owner exception", softwarelifecycle.OwnerExceptionLive, "One-release exception approved", softwarelifecycle.OwnerExceptionSecrets
+		if profile.ID == softwarelifecycle.LateConfirmationID && !softwarelifecycle.ValidLateConfirmationRecord(release.Body, release.Commit) {
+			return false
+		}
+		status, live, owner, secrets = "Qualified by Owner exception", profile.Live, "One-release exception approved", profile.Secrets
 	}
 	for _, line := range []string{
 		"# SBXR Acceptance Record", "Status: " + status, "Repository: " + softwarelifecycle.Repository,
@@ -728,5 +749,5 @@ func qualifiedV3Source(release observedRelease) bool {
 	return (exception || oneMatch(release.Body, `(?m)^Stable result code: RELEASE-V3-(PACKAGED-LIVE|SUBSCRIPTION|SUBSCRIPTION-CLEAN-INSTALL)-QUALIFICATION$`)) &&
 		oneMatch(release.Body, `(?m)^Qualification role: (Clean-installed V3 release|Recurring subscription-capable V3 release|Clean-installed subscription-capable V3 release)$`) &&
 		oneMatch(release.Body, `(?m)^Workflow evidence: https://github\.com/albertloky/SBXR/actions/runs/[1-9][0-9]*$`) &&
-		(exception && strings.Count(release.Body, "Integrated Verification: "+softwarelifecycle.OwnerExceptionLive+"\n") == 1 || !exception && oneMatch(release.Body, `(?m)^Integrated Verification: Passed on live Ubuntu Server 24\.04 amd64 and (outside runner|Karing macOS)$`))
+		(exception && strings.Count(release.Body, "Integrated Verification: "+profile.Live+"\n") == 1 || !exception && oneMatch(release.Body, `(?m)^Integrated Verification: Passed on live Ubuntu Server 24\.04 amd64 and (outside runner|Karing macOS)$`))
 }

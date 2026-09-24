@@ -13,6 +13,13 @@ adds no MVP journey, and does not establish current readiness or acceptance.
 
 ## Historical material
 
+[GitHub CI review — 2026-09-24](github-ci-review-2026-09-24.md) distinguishes
+automated test results from live-qualification failures.
+[Approved late-confirmation exception](late-confirmation-exception-2026-09-24.md)
+records the bounded Owner decision, archival validator and exact v3.1.81/159
+release exception. The ordinary live-result gate
+is unchanged.
+
 [v4-operator-procedures.md](v4-operator-procedures.md) and the companion
 `evidence-*.md` files describe the historical 25-scenario V4 protocol. They
 remain useful when reading or repairing a named V4 attempt; they are not a

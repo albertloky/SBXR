@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -22,10 +23,18 @@ var mvpObservedChecks = [][]string{
 }
 
 func mvpQualificationFixture(t *testing.T, binary string) (string, []byte, map[string]any) {
+	return mvpQualificationFixtureFor(t, binary, false)
+}
+
+func mvpQualificationFixtureFor(t *testing.T, binary string, late bool) (string, []byte, map[string]any) {
 	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.1", 84, 3
+	if late {
+		facts.Candidate.BTag, facts.Candidate.BSequence = softwarelifecycle.LateConfirmationTag, softwarelifecycle.LateConfirmationSequence
+		facts.BurnedIdentities = []burnedIdentity{{Commit: softwarelifecycle.LateConfirmationBase, OriginalTag: "v3.1.80", QualificationRunURL: softwarelifecycle.LateConfirmationPriorRun, Reason: "post-sign-qualification-failure", RecordedAt: "2026-09-24T08:14:08Z", ReleaseIndexSHA256: "53001e9785381a75820e0b37e53254ad869652b7f27788477fcb915533c2780b", Sequence: 158}}
+	}
 	source := repairBaselineFixture(t)
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	facts.Candidate.Support = &v3ReleaseSupport{Contract: softwarelifecycle.SubscriptionUpdateContract, Scope: softwarelifecycle.SubscriptionCleanInstallRepair, Sources: []decisionReleaseIdentity{}}
@@ -38,6 +47,26 @@ func mvpQualificationFixture(t *testing.T, binary string) (string, []byte, map[s
 	attempt["support"], attempt["baseline"], attempt["sources"] = facts.Candidate.Support, historyBaseline(facts.SubscriptionHistory), []any{}
 	attempt["required_scenarios"] = strings.Fields("mvp-install mvp-subscription mvp-credentials mvp-renewal mvp-removal")
 	attempt["after_snap_refresh"] = attempt["packages"]
+	if late {
+		archival, err := os.ReadFile("testdata/r24-late-confirmation.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var retained lateConfirmationFacts
+		if !decodeCanonical(archival, &retained) {
+			t.Fatal("archival")
+		}
+		for _, e := range retained.Evidence {
+			if e.Name == "signed/qualification-manifest.json" {
+				old := jsonObject(t, []byte(e.Content))["v3_attempt"].(map[string]any)
+				for _, key := range strings.Fields("packages after_snap_refresh proxy_package runner macos_version mac_runner_id outside_runner_id vps_id vps_identity_sha256") {
+					attempt[key] = old[key]
+				}
+			}
+		}
+		attempt["owner_exception"] = softwarelifecycle.LateConfirmationID
+		attempt["late_confirmation_review"] = softwarelifecycle.LateConfirmationReview{BaseCommit: softwarelifecycle.LateConfirmationBase, PolicyDiffSHA256: strings.Repeat("b", 64), Reviewer: "Codex source comparison; Owner-approved exception", RuntimeTreeSHA256: softwarelifecycle.LateConfirmationRuntimeTree, SupplementSHA256: softwarelifecycle.LateConfirmationSupplement, TargetCommit: facts.Commit, TargetSequence: facts.Candidate.BSequence, TargetTag: facts.Candidate.BTag}
+	}
 	var assets []softwarelifecycle.LatestAssetProof
 	for _, raw := range draftAssets(0) {
 		a := raw.(map[string]any)

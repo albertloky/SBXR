@@ -495,7 +495,8 @@ func evaluateStableV3Finalization(facts stableV3FinalizationFacts, document []by
 	live := "Passed"
 	var manifest qualificationManifest
 	if decodeCanonical(preflightFacts.SignedManifest, &manifest) && ownerExceptionManifest(manifest) {
-		live = softwarelifecycle.OwnerExceptionLive
+		profile, _ := exceptionProfile(manifest)
+		live = profile.Live
 	}
 	return stableV3FinalizationDecision{Actions: []json.RawMessage{}, CompleteRemoval: live, FactsSHA256: documentSHA256(document), Outcome: "accepted", PriorDecisionSHA256: facts.PriorDecisionSHA256, PublicVerification: "Passed", Schema: qualificationDecisionSchema, Stage: stableV3FinalizationStage, V3PackagedLive: live}, nil
 }

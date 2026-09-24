@@ -170,6 +170,11 @@ jobs:
             jq -cS --slurpfile latest current-source-verification.json --slurpfile releases release-facts.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' candidate-preflight-facts.json | tr -d '\n' > candidate-preflight-facts.next
             mv candidate-preflight-facts.next candidate-preflight-facts.json
           fi
+          if test "$MODE" = v3 && test "$(jq -r '.owner_exception // ""' <<<"$V3_ATTEMPT")" = owner-approved-r24-late-confirmation-2026-09-24; then
+            preflight_operation='verify exact late-confirmation applicability'
+            python3 .github/scripts/late-confirmation-review.py "$GITHUB_SHA" > late-confirmation-review.json
+            jq -e --slurpfile review late-confirmation-review.json '.late_confirmation_review == $review[0]' <<<"$V3_ATTEMPT" >/dev/null
+          fi
           preflight_operation='execute candidate preflight qualification'
           go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json
           if test "$MODE" = v3; then
@@ -1008,6 +1013,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: go.mod
@@ -1020,19 +1027,26 @@ jobs:
           set -euo pipefail
           gh attestation verify qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null
           jq -cnS --slurpfile boundary qualification-boundary-facts.json --slurpfile manifest qualification-manifest.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{schema:"sbxr-release-qualification-facts-v1",stage:"owner-exception-result",qualification_boundary_facts:$boundary[0],qualification_manifest:$manifest[0],qualification_manifest_attested:true,observed_at:$observed_at}' | tr -d '\n' > acceptance-vps-result-facts.json
+          target_tag="$(jq -r '.releases[0].tag' qualification-manifest.json)"
+          if test "$(jq -r '.v3_attempt.owner_exception' qualification-manifest.json)" = owner-approved-r24-late-confirmation-2026-09-24; then
+            python3 .github/scripts/late-confirmation-review.py "$GITHUB_SHA" > late-confirmation-review.json
+            jq -e --slurpfile review late-confirmation-review.json '.v3_attempt.late_confirmation_review == $review[0]' qualification-manifest.json >/dev/null
+            jq -cS --slurpfile supplement cmd/sbxr-release/testdata/r24-late-confirmation.json '. + {late_confirmation_supplement:$supplement[0]}' acceptance-vps-result-facts.json | tr -d '\n' > acceptance-vps-result-facts.next
+            mv acceptance-vps-result-facts.next acceptance-vps-result-facts.json
+          fi
           go run ./cmd/sbxr-release qualification < acceptance-vps-result-facts.json > acceptance-vps-result-decision.json
           facts_sha256="$(sha256sum acceptance-vps-result-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum qualification-manifest.json | cut -d' ' -f1)"
-          jq -e --arg facts "$facts_sha256" --arg prior "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "owner-exception-result" and .outcome == "accepted" and .facts_sha256 == $facts and .prior_decision_sha256 == $prior and (.records | length) == 1 and .records[0].tag == "v3.1.0"' acceptance-vps-result-decision.json >/dev/null
+          jq -e --arg tag "$target_tag" --arg facts "$facts_sha256" --arg prior "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "owner-exception-result" and .outcome == "accepted" and .facts_sha256 == $facts and .prior_decision_sha256 == $prior and (.records | length) == 1 and .records[0].tag == $tag' acceptance-vps-result-decision.json >/dev/null
           mkdir -m 0700 acceptance-records rechecked
-          jq -jr '.records[0].body' acceptance-vps-result-decision.json > acceptance-records/v3.1.0.md
+          jq -jr '.records[0].body' acceptance-vps-result-decision.json > "acceptance-records/$target_tag.md"
           jq -cS '.releases[0]' qualification-manifest.json > expected-release.json
           .github/scripts/recheck-qualified-release.sh expected-release.json rechecked release.json
           jq -e '.draft == true and .prerelease == false' release.json >/dev/null
           secret_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|vless://|https://[^ /"[:space:]]+:8443/'
           if grep -aERq "$secret_pattern" acceptance-records acceptance-vps-result-facts.json acceptance-vps-result-decision.json; then exit 1; elif test $? -ne 1; then exit 1; fi
-          gh release edit v3.1.0 --draft --notes-file acceptance-records/v3.1.0.md
-          cat acceptance-records/v3.1.0.md >> "$GITHUB_STEP_SUMMARY"
+          gh release edit "$target_tag" --draft --notes-file "acceptance-records/$target_tag.md"
+          cat "acceptance-records/$target_tag.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: installer-updater-acceptance-${{ github.run_id }}

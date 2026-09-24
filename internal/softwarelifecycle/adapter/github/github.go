@@ -475,21 +475,30 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		"Codex Live Acceptance: ":   "Passed",
 		"Owner Acceptance: ":        "Not required",
 	}
+	var exceptionProfile softwarelifecycle.QualificationExceptionProfile
 	if exception {
 		var support softwarelifecycle.ReleaseSupport
 		declared, ok := uniqueRecordValue(body, "Release support: ")
 		sequenceText, seqOK := uniqueRecordValue(body, "Sequence: ")
 		sequence, seqErr := strconv.ParseUint(sequenceText, 10, 64)
-		if !ok || !seqOK || seqErr != nil || softwarelifecycle.ValidateUniqueJSON([]byte(declared)) != nil || json.Unmarshal([]byte(declared), &support) != nil || !softwarelifecycle.OwnerExceptionTarget(tag, sequence, &support) {
+		if !ok || !seqOK || seqErr != nil || softwarelifecycle.ValidateUniqueJSON([]byte(declared)) != nil || json.Unmarshal([]byte(declared), &support) != nil {
+			return "", 0, false
+		}
+		var allowed bool
+		exceptionProfile, allowed = softwarelifecycle.QualificationException(tag, sequence, &support)
+		if !allowed {
+			return "", 0, false
+		}
+		if exceptionProfile.ID == softwarelifecycle.LateConfirmationID && !softwarelifecycle.ValidLateConfirmationRecord(body, commit) {
 			return "", 0, false
 		}
 		required["Status: "] = "Qualified by Owner exception"
-		required["Integrated Verification: "] = softwarelifecycle.OwnerExceptionLive
-		required["Codex Live Acceptance: "] = softwarelifecycle.OwnerExceptionLive
+		required["Integrated Verification: "] = exceptionProfile.Live
+		required["Codex Live Acceptance: "] = exceptionProfile.Live
 		required["Owner Acceptance: "] = "One-release exception approved"
-		required["Owner exception: "] = softwarelifecycle.OwnerExceptionID
+		required["Owner exception: "] = exceptionProfile.ID
 		required["Live qualification: "] = "Incomplete"
-		required["Client compatibility: "] = "static-official-evidence-passed-live-karing-pending"
+		required["Client compatibility: "] = exceptionProfile.Client
 	}
 	for prefix, expected := range required {
 		if value, ok := uniqueRecordValue(body, prefix); !ok || value != expected {
@@ -507,7 +516,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	v3Result := v3 && resultCode == "RELEASE-V3-PACKAGED-LIVE-QUALIFICATION" && role == "Clean-installed V3 release" || recurring && role == "Recurring subscription-capable V3 release" || (cleanSubscription || exception) && role == "Clean-installed subscription-capable V3 release"
 	wantedSecrets := "Passed"
 	if exception {
-		wantedSecrets = softwarelifecycle.OwnerExceptionSecrets
+		wantedSecrets = exceptionProfile.Secrets
 	}
 	if !resultOK || !legacyResult && !v3Result || !workflowOK || !workflowEvidencePattern.MatchString(workflow) || !runnerOK || !acceptanceRunnerPattern.MatchString(runner) || !toolchainOK || !goToolchainPattern.MatchString(toolchain) || !verifierOK || verifier != Version+" "+SigningFingerprint || !secretSafeOK || secretSafe != wantedSecrets || !roleOK {
 		return "", 0, false
@@ -523,7 +532,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		if subscription {
 			wantedKaring := "Passed"
 			if exception {
-				wantedKaring = softwarelifecycle.OwnerExceptionLive
+				wantedKaring = exceptionProfile.Live
 			}
 			for prefix, wanted := range map[string]string{
 				"Karing macOS: ": wantedKaring,

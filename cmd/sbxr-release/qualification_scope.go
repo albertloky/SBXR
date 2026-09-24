@@ -159,7 +159,7 @@ func validAttemptSupport(attempt v3QualificationAttempt) bool {
 		if mvpLiveAttempt(attempt) {
 			// The smaller live scope makes no blanket claim that excluded scenarios
 			// passed as a separate automated qualification matrix.
-			return attempt.OwnerException == "" && len(attempt.Sources) == 0 && len(attempt.AutomatedOnlyScenarios) == 0
+			return (attempt.OwnerException == "" || attempt.OwnerException == softwarelifecycle.LateConfirmationID && attempt.LateConfirmationReview != nil) && len(attempt.Sources) == 0 && len(attempt.AutomatedOnlyScenarios) == 0
 		}
 		if !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
 			return false

@@ -325,6 +325,7 @@ jobs:
             facts_sha256="$(sha256sum stable-v3-finalization-facts.json | cut -d' ' -f1)"
             live_result=Passed
             if test "$(jq -r '.v3_attempt.owner_exception // ""' verified/qualification-manifest.json)" = owner-approved-v3.1.0-sequence-83; then live_result='Not performed; waived by Owner for this release'; fi
+            if test "$(jq -r '.v3_attempt.owner_exception // ""' verified/qualification-manifest.json)" = owner-approved-r24-late-confirmation-2026-09-24; then live_result='Prior v3.1.80 live evidence reused by Owner exception; no fresh live run'; fi
             jq -e --arg live "$live_result" --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-v3-finalization" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .public_verification == "Passed" and .v3_packaged_live == $live and .complete_removal == $live and (.actions | length) == 0' stable-v3-finalization-decision.json >/dev/null
             exit 0
           fi
