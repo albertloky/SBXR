@@ -17,8 +17,8 @@ cat "$work/decision.json"
 # Historical acceptance records remain readable, but this checkout no longer
 # produces new v1-v4 live attempts. Reject after strict local validation and
 # before the first GitHub request.
-if ! jq -e '.evidence_policy == "mvp-live-v1"' "$work/attempt.json" >/dev/null; then
-  printf '%s\n' 'The current checkout produces only mvp-live-v1 evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
+if ! jq -e '.evidence_policy == "mvp-live-v1" or .evidence_policy == "mvp-recurring-live-v1"' "$work/attempt.json" >/dev/null; then
+  printf '%s\n' 'The current checkout produces only mvp-live-v1 or mvp-recurring-live-v1 evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
   exit 2
 fi
 if test "$mode" = check; then exit 0; fi

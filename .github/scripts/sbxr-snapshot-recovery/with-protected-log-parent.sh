@@ -244,7 +244,92 @@ case "$mode" in
     test "$(stat -c '%u:%g:%a:%h:%F' -- "$supervisor")" = '0:0:600:1:regular file' || refuse 'unsafe supervisor file'
     no_xattrs "$supervisor" || refuse 'unsafe supervisor attributes'
     test "$(sha256sum "$supervisor" | cut -d' ' -f1)" = "$supervisor_sha256" || refuse 'supervisor identity'
-    mkfifo -m 0600 "$control" "$result"
+    completion_received=false
+    completion_status=
+    read_completion() {
+      local line
+      IFS= read -r line <&"$result_read" || return 1
+      [[ "$line" =~ ^DONE\ ([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$ ]] || return 1
+      completion_status=${line#DONE }
+      completion_received=true
+    }
+    send_control() {
+      printf '%s\n' "$1" >&"$control_write"
+    }
+    close_channels() {
+      local name descriptor
+      for name in control_anchor control_write controller_control result_anchor result_read controller_result; do
+        if test -n "${!name:-}"; then
+          descriptor=${!name}
+          exec {descriptor}>&-
+          printf -v "$name" '%s' ''
+        fi
+      done
+    }
+    cleanup() {
+      local status=$? channel expected
+      trap - EXIT
+      trap '' HUP INT TERM USR1
+      close_channels 2>/dev/null || { refuse 'channel close failed'; exit 1; }
+      # The driver owns forced termination/reaping after admission. Do not
+      # restore while an escaped/adopted product descendant may still exist.
+      if $driver_cancelled && $command_admitted; then
+        exit "$status"
+      fi
+      # A signal can run between '&' and child_pid=$!. $! still identifies
+      # our own unreaped startup child; no numeric signal is sent to it.
+      owned_pgid=${owned_pgid:-${!:-}}
+      if test -n "$owned_pgid" && ! wait_group_quiescent "$owned_pgid"; then
+        refuse 'owned command group remains live'
+        exit 1
+      fi
+      if test -n "$state_identity"; then
+        test "$(stat -c '%d:%i:%u:%g:%a:%h:%s:%F' -- "$state")" = "$state_identity" || { refuse 'changed created state'; exit 1; }
+        restore_window "$state" || status=1
+      else
+        # Only this invocation's newly created channels, before product
+        # admission, with the exact original log identity. This is not an
+        # orphan recovery operation and never adopts a pre-existing path.
+        test "$(log_identity)" = "$identity" || { refuse 'changed startup log parent'; exit 1; }
+        for channel in "$control" "$result"; do
+          expected=$control_identity
+          test "$channel" != "$result" || expected=$result_identity
+          if test -e "$channel" || test -L "$channel"; then
+            test -n "$expected" && channel_safe "$channel" &&
+              test "$(stat -c '%d:%i:%u:%g:%a:%h:%F' -- "$channel")" = "$expected" || { refuse 'unproved startup channel'; exit 1; }
+            channel_open "$channel" && { refuse 'startup channel contention'; exit 1; }
+            unlink -- "$channel" || { refuse 'startup channel removal failed'; exit 1; }
+          fi
+        done
+        sync -f "$(dirname -- "$state")" || status=1
+      fi
+      exit "$status"
+    }
+    requested_exit=
+    request_signal() {
+      local status=$1 signal=$2
+      trap '' HUP INT TERM
+      requested_exit=$status
+      if ! $startup_complete; then
+        exit "$status"
+      fi
+      send_control "$signal" || true
+    }
+    control_anchor= control_write= controller_control= result_anchor= result_read= controller_result=
+    control_identity= result_identity= state_identity= owned_pgid=
+    startup_complete=false command_admitted=false driver_cancelled=false
+    trap cleanup EXIT
+    trap 'request_signal 129 HUP' HUP
+    trap 'request_signal 130 INT' INT
+    trap 'request_signal 143 TERM' TERM
+    # Private menu/controller handshake. Before admission we clean our own
+    # startup; afterwards retain authority for explicit post-reaping restore.
+    trap 'driver_cancelled=true; exit 143' USR1
+    # Assignment is one shell command: a managed signal is deferred until
+    # creation AND inode capture finish. Never kill these foreground helpers
+    # to perform cooperative startup cleanup.
+    control_identity=$(mkfifo -m 0600 "$control" && stat -c '%d:%i:%u:%g:%a:%h:%F' -- "$control")
+    result_identity=$(mkfifo -m 0600 "$result" && stat -c '%d:%i:%u:%g:%a:%h:%F' -- "$result")
     channel_safe "$control" && channel_safe "$result" || refuse 'unsafe created control channels'
     sync -f "$(dirname -- "$state")"
     exec {control_anchor}<>"$control"
@@ -269,7 +354,7 @@ case "$mode" in
     test "$observed_parent" = "$$" && test "$observed_session" = "$child_pid" && test "$observed_group" = "$child_pid" && test "$observed_state" != Z || refuse 'owned command identity'
     boot_id=$(cat /proc/sys/kernel/random/boot_id) || refuse 'boot identity unavailable'
     [[ "$boot_id" =~ ^[0-9a-f-]{36}$ ]] || refuse 'boot identity unavailable'
-    ( set -o noclobber
+    state_identity=$( ( set -o noclobber
       printf '%s\n' \
         'sbxr-protected-log-parent-v1' \
         'path=/var/log' \
@@ -282,64 +367,20 @@ case "$mode" in
         "controller_pid=$owned_pgid" \
         "controller_starttime=$controller_starttime" \
         'mode=775' > "$state"
-    ) || refuse 'state creation'
+    ) && stat -c '%d:%i:%u:%g:%a:%h:%s:%F' -- "$state") || refuse 'state creation'
     test "$(stat -c '%u:%g:%a:%h:%F' -- "$state")" = '0:0:600:1:regular file' || refuse 'created state unsafe'
     no_xattrs "$state" || refuse 'created state attributes'
     sync -f "$state"
     sync -f "$(dirname -- "$state")"
     read_state "$state" || refuse 'created state invalid'
     test "$(log_identity)" = "$identity" || refuse 'changed log parent before chmod'
-    completion_received=false
-    completion_status=
-    read_completion() {
-      local line
-      IFS= read -r line <&"$result_read" || return 1
-      [[ "$line" =~ ^DONE\ ([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])$ ]] || return 1
-      completion_status=${line#DONE }
-      completion_received=true
-    }
-    send_control() {
-      printf '%s\n' "$1" >&"$control_write"
-    }
-    close_channels() {
-      if test -n "${control_write:-}"; then
-        exec {control_write}>&-
-        control_write=
-      fi
-      if test -n "${result_read:-}"; then
-        exec {result_read}>&-
-        result_read=
-      fi
-    }
-    cleanup() {
-      local status=$?
-      trap - EXIT HUP INT TERM
-      close_channels 2>/dev/null || true
-      if ! wait_group_quiescent "$owned_pgid"; then
-        printf '%s\n' 'protected log-parent window refused: owned command group remains live' >&2
-        exit 1
-      fi
-      if ! restore_window "$state"; then
-        status=1
-      fi
-      exit "$status"
-    }
-    requested_exit=
-    request_signal() {
-      local status=$1 signal=$2
-      trap '' HUP INT TERM
-      requested_exit=$status
-      send_control "$signal" || true
-    }
-    trap cleanup EXIT
-    trap 'request_signal 129 HUP' HUP
-    trap 'request_signal 130 INT' INT
-    trap 'request_signal 143 TERM' TERM
+    startup_complete=true
     if test -z "$requested_exit"; then
       chmod 0755 -- "$log_parent"
       test "$(log_identity)" = "$device:$inode:$uid:$gid:$links:755" || refuse 'temporary log-parent mismatch'
     fi
     if test -z "$requested_exit"; then
+      command_admitted=true
       send_control START || refuse 'controller start'
     fi
     read_completion || refuse 'controller completion'

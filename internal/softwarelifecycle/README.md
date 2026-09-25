@@ -18,6 +18,14 @@ release-source evidence.
 
 The durable MVP paths are `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`. Transaction work stays under `/var/lib/sbxr` and is removed at a verified terminal result.
 
+New update files receive their exact required mode on the newly `O_EXCL`-created
+inode before synchronization. A caller's restrictive umask must not turn a
+`0755` staged executable into unrecoverable `0700` material. Existing files and
+symlink targets are never chmodded by this writer. The released v3.1.81 binary
+predates this fix and remains unchanged; the temporary operator launcher gives
+only its product child the ordinary `022` mask. See `update_umask_test.go` and the
+[wrapper repair](../../docs/acceptance/reports/ordinary-recurring-umask-repair-2026-09-25.md).
+
 The public GitHub Adapter admits exactly four release assets and keeps
 `github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that
 boundary. Use the [code map](../../docs/agents/code-map.md) to locate lifecycle
@@ -26,6 +34,14 @@ for live qualification. [The historical Installer-Updater release procedure](../
 documents the historical Installer-Updater release-pair procedure.
 
 ## Subscription update contract (#355)
+
+[ADR-0025](../../docs/adr/0025-ordinary-recurring-live-acceptance.md) adds the
+`mvp-recurring-live-v1` qualification profile for one exact then-current stable
+source. It retains the support/index and runtime contracts below. Public records
+use explicitly named recurring-scope disclosures and five `Journey:` references
+alongside the three existing source `Scenario:` references, so v3.1.81 can read
+them without changing its released bytes. New readers validate all eight
+references. Compatibility tests do not prove an actual packaged update.
 
 The existing menu includes `Check`, `Update`, and `Recover`. `ConfirmReview`
 privately binds the displayed source/target or proved recovery direction; it adds

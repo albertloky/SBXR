@@ -61,7 +61,7 @@ class MVPEvidenceTest(unittest.TestCase):
         started = self.now - dt.timedelta(minutes=2)
         completed = self.now - dt.timedelta(minutes=1)
         stamp = lambda value: value.strftime("%Y-%m-%dT%H:%M:%SZ")
-        expected = MVP.SCENARIOS[scenario]
+        expected = MVP.required_checks(self.manifest["v3_attempt"], scenario)
         request = {
             "deadline_unix": int((self.now + dt.timedelta(minutes=20)).timestamp()),
             "not_before": stamp(started),
@@ -99,6 +99,43 @@ class MVPEvidenceTest(unittest.TestCase):
             self.assertEqual(item["sha256"], sha(canon(item["record"])))
         self.assertEqual(facts["detailed_evidence_sha256"],
                          sha(canon(facts["detailed_evidence"])))
+
+    def test_recurring_collector_checklist_and_source_recovery_fields(self):
+        identity = {"repository": "albertloky/SBXR", "tag": "v3.1.81",
+                    "commit": "c"*40, "release_index_sha256": "d"*64}
+        source = {"release_identity": identity, "ownership_schema": 2}
+        attempt = self.manifest["v3_attempt"]
+        attempt.update(evidence_policy=MVP.RECURRING_POLICY, sources=[source],
+                       support={"scope": "recurring-subscription-upgrade",
+                                "contract": "sbxr-subscription-update-v1", "sources": [identity]})
+        attempt["required_scenarios"] = MVP.scenario_order(attempt)
+        self.write("manifest.json", self.manifest)
+        collector = SCRIPT.with_name("v3-recurring-evidence.sh").read_text()
+        function = collector[collector.index("mvp_required_checks() {"):].split("\n}", 1)[0] + "\n}\n"
+        for index, (suffix, boundary, recovery) in enumerate([
+                ("precommit", "before-commitment", "rollback"),
+                ("upgrade", "observed", "none"),
+                ("postcommit", "after-commitment", "forward")]):
+            scenario = "source-v3.1.81-" + suffix
+            self.write("previous.json", [{"scenario_id": s} for s in attempt["required_scenarios"][:index]])
+            request, observation = self.scenario_files(scenario)
+            result = subprocess.run(self.command(request, observation, suffix+".json"), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            facts = json.loads((self.root / (suffix+".json")).read_text())
+            self.assertEqual(facts["qualification_boundary_facts"], {"fixture": "boundary"})
+            actual = facts["detailed_evidence"]["scenarios"][-1]
+            self.assertEqual((actual["source"], actual["boundary"], actual["recovery_direction"]), (source, boundary, recovery))
+            shell = subprocess.run(["bash", "-c", function+'manifest=$1; mvp_required_checks "$2"',
+                                    "bash", str(self.root / "manifest.json"), scenario],
+                                   cwd=SCRIPT.parents[2], capture_output=True, text=True)
+            self.assertEqual(shell.returncode, 0, shell.stderr)
+            self.assertEqual(shell.stdout.split(), json.loads(request.read_bytes())["required_checks"])
+        attempt["sources"] = []
+        self.write("manifest.json", self.manifest)
+        refused = subprocess.run([sys.executable, str(SCRIPT), "--checks", str(self.root / "manifest.json"),
+                                  "source-v3.1.81-precommit"], capture_output=True, text=True)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout, "")
 
     def test_documented_template_preserves_checks_but_cannot_be_submitted(self):
         request, _ = self.scenario_files()

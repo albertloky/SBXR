@@ -124,7 +124,7 @@ func TestHistoricalDeclarationDispatchIsRetiredBeforeGitHub(t *testing.T) {
 			cmd := exec.Command("bash", script, "dispatch", filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CALLED="+filepath.Join(dir, "called"), "TOOL_CALLED="+filepath.Join(dir, "tool-called"))
 			out, err := cmd.CombinedOutput()
-			if err == nil || !strings.Contains(string(out), "produces only mvp-live-v1 evidence") || !strings.Contains(string(out), "0859e96") {
+			if err == nil || !strings.Contains(string(out), "produces only mvp-live-v1 or mvp-recurring-live-v1 evidence") || !strings.Contains(string(out), "0859e96") {
 				t.Fatalf("historical producer was not retired clearly: %v %s", err, out)
 			}
 			if _, err := os.Stat(filepath.Join(dir, "called")); !os.IsNotExist(err) {
@@ -138,6 +138,12 @@ func TestHistoricalDeclarationDispatchIsRetiredBeforeGitHub(t *testing.T) {
 }
 
 func TestMVPDeclarationDispatchReachesWorkflow(t *testing.T) {
+	for _, policy := range []string{"mvp-live-v1", "mvp-recurring-live-v1"} {
+		t.Run(policy, func(t *testing.T) { testMVPDeclarationDispatch(t, policy) })
+	}
+}
+
+func testMVPDeclarationDispatch(t *testing.T, policy string) {
 	script, err := filepath.Abs(".github/scripts/v3-candidate-dispatch.sh")
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +153,7 @@ func TestMVPDeclarationDispatchReachesWorkflow(t *testing.T) {
 		"tool":    "#!/bin/sh\ncat >/dev/null\nprintf '{\"outcome\":\"accepted\"}'\n",
 		"gh":      "#!/bin/sh\nif [ \"$1\" = api ]; then printf source; else cat > \"$DISPATCHED\"; fi\n",
 		"facts":   `{"candidate":{"b_sequence":149,"b_tag":"v3.1.70","mode":"v3"},"commit":"source","remote_main":"source"}`,
-		"attempt": `{"evidence_policy":"mvp-live-v1"}`,
+		"attempt": `{"evidence_policy":"` + policy + `"}`,
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
@@ -160,7 +166,7 @@ func TestMVPDeclarationDispatchReachesWorkflow(t *testing.T) {
 		t.Fatalf("MVP declaration dispatch: %v\n%s", err, output)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, "dispatch"))
-	if err != nil || !strings.Contains(string(body), `mvp-live-v1`) {
+	if err != nil || !strings.Contains(string(body), policy) {
 		t.Fatalf("MVP policy did not reach workflow inputs: %v\n%s", err, body)
 	}
 }

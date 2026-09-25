@@ -12,6 +12,7 @@ import sys
 
 
 POLICY = "mvp-live-v1"
+RECURRING_POLICY = "mvp-recurring-live-v1"
 SCENARIOS = {
     "mvp-install": (
         "packaged-install reviewed-setup outside-proxy-traffic "
@@ -41,6 +42,52 @@ SCENARIOS = {
 ORDER = list(SCENARIOS)
 TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def scenario_order(attempt):
+    policy = attempt.get("evidence_policy")
+    if policy == POLICY:
+        return ORDER
+    if policy != RECURRING_POLICY:
+        refuse("manifest is outside the ordinary live policies")
+    sources = attempt.get("sources")
+    support = attempt.get("support", {})
+    if (type(sources) is not list or len(sources) != 1 or
+            type(sources[0]) is not dict or sources[0].get("ownership_schema") != 2 or
+            type(support) is not dict or support.get("scope") != "recurring-subscription-upgrade" or
+            support.get("contract") != "sbxr-subscription-update-v1" or
+            support.get("sources") != [sources[0].get("release_identity")] or
+            attempt.get("owner_exception") or attempt.get("late_confirmation_review") or
+            "automated_only_scenarios" in attempt):
+        refuse("recurring source declaration differs")
+    identity = sources[0].get("release_identity")
+    if type(identity) is not dict or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", identity.get("tag", "")):
+        refuse("recurring source identity differs")
+    return [f"source-{identity['tag']}-{suffix}"
+            for suffix in ("precommit", "upgrade", "postcommit")] + ORDER
+
+
+def required_checks(attempt, scenario_id):
+    if scenario_id not in scenario_order(attempt):
+        refuse("unlisted scenario")
+    if scenario_id in SCENARIOS:
+        return SCENARIOS[scenario_id]
+    checks = ("exact-source-and-candidate actual-source-packaged-updater "
+              "source-record-schema-proved both-releases-understand-recovery "
+              "reviewed-update-confirmation admission-exclusion creation-provenance-preserved "
+              "no-ownership-migration proxy-not-restarted both-credentials-unchanged "
+              "subscription-link-unchanged outside-proxy-traffic outside-trusted-https "
+              "ssh-access-preserved private-files-and-logs-protected "
+              "no-helper-or-intermediate-release").split()
+    if scenario_id.endswith("-precommit"):
+        return checks + ("observed-precommit-interruption actual-source-packaged-recovery "
+                         "prior-exact-restoration source-installed-record-restored "
+                         "no-transaction-residue").split()
+    if scenario_id.endswith("-postcommit"):
+        return checks + ("observed-postcommit-interruption candidate-forward-runtime-completion "
+                         "candidate-installed-record-proved serving-only-restart "
+                         "no-transaction-residue").split()
+    return checks + "candidate-installed-record-proved serving-only-restart no-transaction-residue".split()
 
 
 class Refusal(ValueError):
@@ -120,13 +167,11 @@ def assemble(options):
     if type(manifest) is not dict or type(manifest.get("v3_attempt")) is not dict:
         refuse("manifest lacks a V3 attempt")
     attempt = manifest["v3_attempt"]
-    if attempt.get("evidence_policy") != POLICY:
-        refuse("manifest is outside the MVP live policy")
     required = attempt.get("required_scenarios")
-    if required != ORDER or len(previous) >= len(required):
+    if required != scenario_order(attempt) or len(previous) >= len(required):
         refuse("manifest scenario order differs")
     scenario_id = required[len(previous)]
-    checks = SCENARIOS[scenario_id]
+    checks = required_checks(attempt, scenario_id)
     if (request.get("scenario_id") != scenario_id or
             request.get("required_checks") != checks or
             observation.get("scenario_id") != scenario_id):
@@ -169,11 +214,18 @@ def assemble(options):
         "mvp-removal": ("Running", "Not installed"),
     }
     validated = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    initial_state, final_state = states[scenario_id]
+    initial_state, final_state = states.get(scenario_id, ("Running", "Running"))
+    boundary_state, recovery, source = "observed", "none", None
+    if scenario_id.startswith("source-"):
+        source = attempt["sources"][0]
+        if scenario_id.endswith("-precommit"):
+            boundary_state, recovery = "before-commitment", "rollback"
+        elif scenario_id.endswith("-postcommit"):
+            boundary_state, recovery = "after-commitment", "forward"
     scenario = {
         "actual_result": "expected-safety-and-final-state-proved",
         "attempt_id": attempt["attempt_id"],
-        "boundary": "observed",
+        "boundary": boundary_state,
         "candidate": manifest["releases"][0],
         "completed_at": observation["completed_at"],
         "evidence": references,
@@ -186,10 +238,10 @@ def assemble(options):
         "packages_before": attempt["packages"],
         "preflight_at": observation["started_at"],
         "prior_scenario_sha256": prior_digest,
-        "recovery_direction": "none",
+        "recovery_direction": recovery,
         "scenario_id": scenario_id,
         "schema": f"sbxr-v3-scenario-evidence-{version}",
-        "source": None,
+        "source": source,
         "started_at": observation["started_at"],
         "validated_at": validated,
         "vps_id": attempt["vps_id"],
@@ -225,6 +277,14 @@ def assemble(options):
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "--checks":
+        try:
+            manifest, _ = load(sys.argv[2], "manifest", 4 * 1024 * 1024)
+            print(" ".join(required_checks(manifest["v3_attempt"], sys.argv[3])))
+            return 0
+        except (KeyError, IndexError, TypeError, OSError, Refusal) as error:
+            print(f"MVP checklist refused: {error}", file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--boundary", required=True)

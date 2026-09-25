@@ -238,7 +238,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 		completed, completionOK := qualificationTime(scenario.CompletedAt)
 		validated, validationOK := qualificationTime(scenario.ValidatedAt)
 		limit := 30 * time.Minute
-		if scenario.ScenarioID == "karing-final" || mvpLiveAttempt(*attempt) && scenario.ScenarioID == "mvp-subscription" {
+		if scenario.ScenarioID == "karing-final" || ordinaryLiveAttempt(*attempt) && scenario.ScenarioID == "mvp-subscription" {
 			limit = 2 * time.Hour
 		}
 		if !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started) > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-"+attemptVersion(attempt) || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
@@ -268,13 +268,13 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 
 func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAttempt) bool {
 	id := scenario.ScenarioID
-	if strings.HasPrefix(id, "mvp-") && !mvpLiveAttempt(attempt) {
+	if strings.HasPrefix(id, "mvp-") && !ordinaryLiveAttempt(attempt) {
 		return false
 	}
 	twoIssuance := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy
 	initial, boundary, recovery, final := "Running", "observed", "none", "Running"
-	if mvpLiveAttempt(attempt) {
-		if len(mvpLiveChecks(id)) == 0 {
+	if ordinaryLiveAttempt(attempt) {
+		if len(mvpLiveChecks(id)) == 0 && (!mvpRecurringAttempt(attempt) || len(mvpUpgradeChecks(id)) == 0) {
 			return false
 		}
 		if id == "mvp-install" {
@@ -341,6 +341,9 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 		return false
 	}
 	checks := requiredV3Checks(id)
+	if mvpRecurringAttempt(attempt) && source != nil {
+		checks = mvpUpgradeChecks(id)
+	}
 	latency := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy)
 	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy || latency) && id == "lifecycle-menu" {
 		checks = slices.DeleteFunc(checks, func(check string) bool {
@@ -513,7 +516,12 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		support, _ := json.Marshal(attempt.Support.lifecycle())
 		baseline, _ := marshalCanonical(attempt.Baseline)
 		body.WriteString("Release support: " + string(support) + "\nStable baseline: " + string(baseline) + "\n")
-		if mvpLiveAttempt(*attempt) {
+		if mvpRecurringAttempt(*attempt) {
+			// v3.1.81 understands the recurring support/source proof envelope but
+			// reserves the old MVP headers for clean-install repair. New explicit
+			// headers disclose this policy without mislabelling it as that scope.
+			body.WriteString("Recurring evidence policy: " + attempt.EvidencePolicy + "\nRecurring live acceptance coverage: " + softwarelifecycle.MVPRecurringCoverage + "\nRecurring Karing evidence: " + softwarelifecycle.MVPKaringEvidence + "\n")
+		} else if mvpLiveAttempt(*attempt) {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nLive acceptance coverage: " + softwarelifecycle.MVPLiveCoverage + "\nKaring connectivity evidence: " + softwarelifecycle.MVPKaringEvidence + "\n")
 		} else if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
@@ -538,7 +546,11 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		if err != nil {
 			return "", err
 		}
-		body.WriteString("Scenario: " + scenario.ScenarioID + " " + documentSHA256(encoded) + " " + manifest.Workflow.RunURL + "#artifacts\n")
+		prefix := "Scenario: "
+		if mvpRecurringAttempt(*attempt) && strings.HasPrefix(scenario.ScenarioID, "mvp-") {
+			prefix = "Journey: "
+		}
+		body.WriteString(prefix + scenario.ScenarioID + " " + documentSHA256(encoded) + " " + manifest.Workflow.RunURL + "#artifacts\n")
 	}
 	encoded, err := marshalCanonical(v3RecurringAcceptanceRecord{
 		AcceptedAt: facts.EvaluationTime, Assets: release.Assets, Attempt: *attempt, DetailedEvidenceSHA256: facts.DetailedEvidenceSHA256, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"},
@@ -625,7 +637,7 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 	}
 	started, ok := qualificationTime(attempt.StartedAt)
 	checked, checkedOK := qualificationTime(attempt.KaringLatestCheckedAt)
-	mvp := mvpLiveAttempt(attempt)
+	mvp := ordinaryLiveAttempt(attempt)
 	if !ok || !checkedOK || started.Before(checked) || !mvp && started.Sub(checked) > 5*time.Minute ||
 		(attempt.Schema != "sbxr-v3-qualification-attempt-v2" && attempt.Schema != "sbxr-v3-qualification-attempt-v3") || attempt.RunAttempt < 1 ||
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||

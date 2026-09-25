@@ -13,12 +13,13 @@ declarations and wire formats.
 | Publication | [qualification_publication.go](qualification_publication.go) | Stable publication and no-update evaluation. |
 | Failure | [qualification_failure.go](qualification_failure.go) | Failure and withdrawal records. |
 | Scope and recurring evidence | [qualification_scope.go](qualification_scope.go), [qualification_recurring.go](qualification_recurring.go) | Scope selection and recurring/historical live evidence validation. |
-| MVP live evidence | [qualification_mvp.go](qualification_mvp.go) | The five `mvp-live-v1` journey checks. |
+| Ordinary live evidence | [qualification_mvp.go](qualification_mvp.go) | The five `mvp-live-v1` journeys and `mvp-recurring-live-v1` packaged update/recovery checks. |
 | Declaration and exception | [qualification_declaration.go](qualification_declaration.go), [qualification_exception.go](qualification_exception.go) | Attempt declarations and the explicit Owner exception. |
 | Late human confirmation | [qualification_late_confirmation.go](qualification_late_confirmation.go) | Exact r24 archival supplement; does not grant release eligibility or emit an Acceptance Record. |
 
-The current producer is the MVP collector described in
-[docs/acceptance/mvp-live-acceptance.md](../../docs/acceptance/mvp-live-acceptance.md).
+The current producer is the ordinary collector described in
+[ordinary recurring acceptance](../../docs/acceptance/ordinary-recurring-live.md),
+with the retained [five-journey procedure](../../docs/acceptance/mvp-live-acceptance.md).
 Historical V4 producer code is retired; its records remain readable through the
 current validators and the source can be retrieved from commit `0859e96`.
 

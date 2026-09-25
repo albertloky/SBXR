@@ -96,13 +96,17 @@ class LineStream:
 
 
 class MenuSession:
-    def __init__(self, executable, sink, deadline, cancelled=None):
+    def __init__(self, executable, sink, deadline, cancelled=None, *, protected_wrapper=False):
         self.deadline = deadline
+        self.protected_wrapper = protected_wrapper
+        if protected_wrapper and not sys.platform.startswith("linux"):
+            raise ProtocolError("protected-wrapper-requires-linux")
         self.cancelled = cancelled or (lambda: False)
         if self.cancelled():
             raise InterruptedError("menu session interrupted")
         self.process = subprocess.Popen(
-            [executable], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [executable] if isinstance(executable, str) else list(executable),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, bufsize=0, start_new_session=True,
         )
         def owner_exited():
@@ -255,6 +259,26 @@ class MenuSession:
             return self.returncode
         # Do not poll/reap the leader before signaling: its unreaped PID keeps
         # the owned process-group identity from being recycled.
+        if self.protected_wrapper:
+            # Opt-in private protocol with the reviewed permission wrapper.
+            # Signal only its leader: startup helpers must finish recording
+            # the identities they create. After product admission the wrapper
+            # exits WITHOUT restoration; we still kill/reap every descendant
+            # before the caller may use explicit state-bound restore.
+            try:
+                os.kill(self.process.pid, signal.SIGUSR1)
+            except ProcessLookupError:
+                pass
+            # The wrapper itself may spend five seconds proving quiescence,
+            # followed by metadata and /proc descriptor scans. Match the
+            # existing explicit-restore budget; five seconds for the entire
+            # handshake could kill it halfway through safe channel removal.
+            # This runs only AFTER failure; the journey deadline is unchanged.
+            cleanup_deadline = time.monotonic() + 20
+            while time.monotonic() < cleanup_deadline:
+                if self.stream.owner_exited():
+                    break
+                time.sleep(0.01)
         try:
             os.killpg(self.process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -304,7 +328,8 @@ def drive(args, cancelled=None):
     if remaining <= 0:
         raise ProtocolError("deadline-before-start")
     deadline = time.monotonic() + remaining
-    session = MenuSession(args.executable, sys.stdout.buffer, deadline, cancelled)
+    session = MenuSession(args.executable, sys.stdout.buffer, deadline, cancelled,
+                          protected_wrapper=args.protected_wrapper)
     try:
         session.choose(args.label)
         if args.mode == "details":
@@ -360,6 +385,7 @@ def parser():
     result.add_argument("--confirmation", choices=("none", "yes", "remove"), default="none")
     result.add_argument("--executable", default=os.environ.get("SBXR_EXECUTABLE", "/usr/local/bin/sbxr"))
     result.add_argument("--timeout", type=int, default=900)
+    result.add_argument("--protected-wrapper", action="store_true")
     return result
 
 

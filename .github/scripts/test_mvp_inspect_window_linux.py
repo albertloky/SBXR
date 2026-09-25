@@ -330,7 +330,7 @@ LogLevel ERROR
         # return before re-observation and the complete purge window is bounded.
         assert observer.log_observation() == {k: expected[k] for k in ('log_parent', 'log_children')}
         run(['python3', str(ROOT / 'v3-menu-session.py'), 'action', 'Check',
-             'SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT', '--executable', str(ROOT / 'mvp-protected-menu.sh')])
+             'SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT', '--executable', str(ROOT / 'mvp-protected-menu.sh'), '--protected-wrapper'])
         check()
         run(['apt-mark', 'unhold', 'sing-box'])
         run(['dpkg', '--remove', 'sing-box'])

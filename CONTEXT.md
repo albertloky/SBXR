@@ -98,7 +98,12 @@ GitHub's canonical immutable Latest release whose four assets, Release Identity,
 The single stable-publication gate that binds unchanged release bytes to the automated and live evidence required by the declared scope. Qualification scopes are versioned, so historical records retain their own interpretation. A clean-install scope does not prove an incoming-upgrade route.
 
 ### MVP Live Acceptance
-The current `mvp-live-v1` clean-install Release Qualification scope: five normal product journeys for installation, subscription/Karing, credential rotation, supported certificate renewal, and restart/removal. It requires real packaged-host, outside-traffic, trusted-HTTPS, and Karing evidence, while leaving forced interruption, contention, and historical V4 evidence protocol work to their applicable regression or historical scopes.
+The `mvp-live-v1` clean-install Release Qualification scope: five normal product journeys for installation, subscription/Karing, credential rotation, supported certificate renewal, and restart/removal. It requires real packaged-host, outside-traffic, trusted-HTTPS, and Karing evidence, while leaving forced interruption, contention, and historical V4 evidence protocol work to their applicable regression or historical scopes.
+
+`mvp-recurring-live-v1` retains these five journeys and adds normal packaged
+update, precommit rollback and postcommit forward recovery from one exact
+then-current Qualified Stable Release. It does not inherit the retired full
+recurring matrix or reuse an earlier live pass. See ADR-0025.
 
 ### V3 Packaged Live Qualification
 The Release Qualification stage that proves the declared V3 journey through the exact packaged executable on a real disposable VPS and a genuinely outside network. Karing evidence remains a distinct client observation. Historical V4 scenarios retain their original meaning.

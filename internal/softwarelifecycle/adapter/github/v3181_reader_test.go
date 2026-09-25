@@ -1,3 +1,6 @@
+// Frozen v3.1.81 reader; only function names are mechanically prefixed.
+// Original SHA-256: b361efd9dcf9824a3ad7933c62177514e791bbf8564fed017e1245d4400df181
+// Source: ed759a0ccaef5d1ffd14be5a41a0e915a6268ff7
 package github
 
 import (
@@ -10,10 +13,7 @@ import (
 
 // Release support is authenticated by the release-index digest. Qualification
 // must repeat that exact declaration, binding its source scenarios to evidence.
-func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestRelease) bool {
-	if !qualifiedRecurringMVPRecord(body, release) {
-		return false
-	}
+func v3181QualifiedReleaseSupport(body string, release softwarelifecycle.LatestRelease) bool {
 	hasRecordLine := func(prefix string) bool {
 		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
 	}
@@ -75,7 +75,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 			return false
 		}
 		if mvp {
-			if hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") || hasRecordLine("Automated-only checks (not live): ") || (!late && !qualifiedMVPScenarios(body)) || late && hasMVPScenario() {
+			if hasRecordLine("Automated-only scenarios (not live): ") || hasRecordLine("Automated-only result: ") || hasRecordLine("Automated-only checks (not live): ") || (!late && !v3181QualifiedMVPScenarios(body)) || late && hasMVPScenario() {
 				return false
 			}
 		} else if !automatedOnlyOK || automatedOnly != softwarelifecycle.RepairAutomatedOnlyScenarios || !automatedResultOK || automatedResult != "Passed in native amd64/arm64 workflow" {
@@ -117,51 +117,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	return true
 }
 
-// These explicitly named extensions are readable by the v3.1.81 recurring
-// reader, which still requires all three exact source Scenario references.
-// New readers additionally bind the ordinary journey scope and disclosures.
-func qualifiedRecurringMVPRecord(body string, release softwarelifecycle.LatestRelease) bool {
-	policy, ok := uniqueRecordValue(body, "Recurring evidence policy: ")
-	has := func(prefix string) bool {
-		return strings.HasPrefix(body, prefix) || strings.Contains(body, "\n"+prefix)
-	}
-	if !has("Recurring evidence policy: ") {
-		return !has("Recurring live acceptance coverage: ") && !has("Recurring Karing evidence: ") && !has("Journey: ")
-	}
-	if !ok || policy != softwarelifecycle.MVPRecurringEvidencePolicy || release.Support == nil || release.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || len(release.Support.Sources) != 1 {
-		return false
-	}
-	coverage, coverageOK := uniqueRecordValue(body, "Recurring live acceptance coverage: ")
-	karing, karingOK := uniqueRecordValue(body, "Recurring Karing evidence: ")
-	if !coverageOK || coverage != softwarelifecycle.MVPRecurringCoverage || !karingOK || karing != softwarelifecycle.MVPKaringEvidence {
-		return false
-	}
-	if !qualifiedScenarioReferences(body, "Journey: ", strings.Fields(softwarelifecycle.MVPLiveScenarios)) {
-		return false
-	}
-	var scenarios []string
-	for _, suffix := range []string{"precommit", "upgrade", "postcommit"} {
-		scenarios = append(scenarios, "source-"+release.Support.Sources[0].Tag+"-"+suffix)
-	}
-	return qualifiedScenarioReferences(body, "Scenario: ", scenarios)
-}
-
-func qualifiedScenarioReferences(body, prefix string, ids []string) bool {
-	seen := map[string]bool{}
-	for _, line := range strings.Split(body, "\n") {
-		if !strings.HasPrefix(line, prefix) {
-			continue
-		}
-		fields := strings.Fields(strings.TrimPrefix(line, prefix))
-		if len(fields) != 3 || !slices.Contains(ids, fields[0]) || seen[fields[0]] || !hashPattern.MatchString(fields[1]) || !strings.HasSuffix(fields[2], "#artifacts") || !workflowEvidencePattern.MatchString(strings.TrimSuffix(fields[2], "#artifacts")) {
-			return false
-		}
-		seen[fields[0]] = true
-	}
-	return len(seen) == len(ids)
-}
-
-func qualifiedMVPScenarios(body string) bool {
+func v3181QualifiedMVPScenarios(body string) bool {
 	expected := map[string]bool{}
 	for _, id := range strings.Fields(softwarelifecycle.MVPLiveScenarios) {
 		expected[id] = true

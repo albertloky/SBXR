@@ -27,7 +27,7 @@ import (
 const (
 	protectedLogParentProbeEnvironment = "SBXR_PROTECTED_LOG_PARENT_PROBE"
 	protectedLogParentLocksEnvironment = "SBXR_PROTECTED_LOG_PARENT_LOCKS"
-	qualifiedLogParentWrapperSHA256    = "4358cb1ec189bd33518a081702355405e9110892cf2be7e8235671005e2959eb"
+	qualifiedLogParentWrapperSHA256    = "56fab3f89dbed0dbb668f296a33ac8b512e8676edb5962a796a45bbc649123de"
 	qualifiedLogParentSupervisorSHA256 = "9861f9a16af051c9dcb7d21324ddb97a60690f3cf3fca7987f6c642d972a56cc"
 )
 

@@ -20,7 +20,7 @@ func TestV3RealSSHBoundaries(t *testing.T) {
 		}
 	}
 	for _, fixture := range []struct{ name, script, marker string }{
-		{"boundaries", "test_ssh_boundary.py", "SSH_BOUNDARY_CASES_PASSED count=21"},
+		{"boundaries", "test_ssh_boundary.py", "SSH_BOUNDARY_CASES_PASSED count=25"},
 		{"locked-account", "test_ssh_boundary_account.py", "Ran 2 tests"},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {

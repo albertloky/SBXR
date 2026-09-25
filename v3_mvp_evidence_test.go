@@ -8,6 +8,9 @@ import (
 )
 
 func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
+	if output, err := exec.Command("python3", ".github/scripts/test_mvp_observe.py").CombinedOutput(); err != nil {
+		t.Fatalf("MVP observation recorder regression: %v\n%s", err, output)
+	}
 	if output, err := exec.Command("python3", ".github/scripts/test_mvp_evidence.py").CombinedOutput(); err != nil {
 		t.Fatalf("MVP evidence assembler regression: %v\n%s", err, output)
 	}

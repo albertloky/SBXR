@@ -12,6 +12,41 @@ func mvpLiveAttempt(attempt v3QualificationAttempt) bool {
 	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.MVPLiveEvidencePolicy
 }
 
+func mvpRecurringAttempt(attempt v3QualificationAttempt) bool {
+	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade && attempt.EvidencePolicy == softwarelifecycle.MVPRecurringEvidencePolicy
+}
+
+func ordinaryLiveAttempt(attempt v3QualificationAttempt) bool {
+	return mvpLiveAttempt(attempt) || mvpRecurringAttempt(attempt)
+}
+
+func mvpRecurringScenarios(sources []v3QualificationSource) []string {
+	var ids []string
+	for _, source := range sources {
+		// Rollback leaves the exact source available for the normal update.
+		for _, suffix := range []string{"precommit", "upgrade", "postcommit"} {
+			ids = append(ids, "source-"+source.ReleaseIdentity.Tag+"-"+suffix)
+		}
+	}
+	return append(ids, strings.Fields(softwarelifecycle.MVPLiveScenarios)...)
+}
+
+func mvpUpgradeChecks(id string) []string {
+	if !strings.HasPrefix(id, "source-") {
+		return nil
+	}
+	checks := strings.Fields("exact-source-and-candidate actual-source-packaged-updater source-record-schema-proved both-releases-understand-recovery reviewed-update-confirmation admission-exclusion creation-provenance-preserved no-ownership-migration proxy-not-restarted both-credentials-unchanged subscription-link-unchanged outside-proxy-traffic outside-trusted-https ssh-access-preserved private-files-and-logs-protected no-helper-or-intermediate-release")
+	switch {
+	case strings.HasSuffix(id, "-precommit"):
+		return append(checks, strings.Fields("observed-precommit-interruption actual-source-packaged-recovery prior-exact-restoration source-installed-record-restored no-transaction-residue")...)
+	case strings.HasSuffix(id, "-postcommit"):
+		return append(checks, strings.Fields("observed-postcommit-interruption candidate-forward-runtime-completion candidate-installed-record-proved serving-only-restart no-transaction-residue")...)
+	case strings.HasSuffix(id, "-upgrade"):
+		return append(checks, strings.Fields("candidate-installed-record-proved serving-only-restart no-transaction-residue")...)
+	}
+	return nil
+}
+
 func mvpLiveChecks(id string) []string {
 	checks := map[string]string{
 		"mvp-install":      "packaged-install reviewed-setup outside-proxy-traffic menu-status-and-lifecycle ssh-access-preserved",

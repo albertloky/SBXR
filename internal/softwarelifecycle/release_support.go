@@ -20,6 +20,8 @@ const (
 	RepairKaringLatencyEvidencePolicy = "repair-issuance-bounded-v3"
 	RepairTwoIssuanceEvidencePolicy   = "repair-issuance-bounded-v4"
 	MVPLiveEvidencePolicy             = "mvp-live-v1"
+	MVPRecurringEvidencePolicy        = "mvp-recurring-live-v1"
+	MVPRecurringCoverage              = "Five normal product journeys plus packaged source update, precommit rollback and postcommit forward recovery; other interruption, contention, drift, forced outage and scheduled-refresh variants not observed live"
 	MVPLiveScenarios                  = "mvp-install mvp-subscription mvp-credentials mvp-renewal mvp-removal"
 	MVPLiveCoverage                   = "Five normal product journeys; interruption, contention, drift, forced outage and scheduled-refresh variants not observed live"
 	MVPKaringEvidence                 = "Real subscription import, one node, fresh per-node latency and manual refresh; selected connection preserved; no Karing browsing or automatic-refresh timing claim"

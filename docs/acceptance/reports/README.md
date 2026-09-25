@@ -9,6 +9,10 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [Ordinary recurring acceptance — implementation and local validation, 2026-09-25](ordinary-recurring-implementation-2026-09-25.md)
+  — eight-scenario tooling and source-reader compatibility; no fresh live or
+  packaged upgrade pass.
+
 ### v3.1.81
 
 - [v3.1.81 / 159 — approved r24 exception qualification](v3.1.81-exception-qualification-2026-09-24.md)
@@ -77,6 +81,10 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Repairs, readiness and investigations
 
+- [Ordinary recurring startup-cancellation cleanup repair — 2026-09-25](ordinary-recurring-cleanup-repair-2026-09-25.md)
+
+- [Ordinary recurring mask repair; rehearsal stopped on startup cleanup — 2026-09-25](ordinary-recurring-umask-repair-2026-09-25.md)
+- [Ordinary recurring Linux rehearsal: stopped on wrapper/update incompatibility — 2026-09-25](ordinary-recurring-rehearsal-stop-2026-09-25.md)
 - [#357: Subscription qualification preflight](357-qualification-preflight.md)
 - [Unsigned candidate asset download repair — 2026-09-16](asset-download-repair-2026-09-16.md)
 - [Download repair landing and MVP preparation — 2026-09-16](asset-download-repair-landing-2026-09-16.md)

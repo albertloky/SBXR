@@ -1,8 +1,9 @@
 # Release and qualification scripts
 
 This directory contains the current release-support tooling. The current live
-producer is the `mvp-live-v1` collector described in
-[MVP live acceptance](../../docs/acceptance/mvp-live-acceptance.md); it records
+producer supports `mvp-live-v1` and `mvp-recurring-live-v1`, described in
+[ordinary recurring acceptance](../../docs/acceptance/ordinary-recurring-live.md)
+and [MVP live acceptance](../../docs/acceptance/mvp-live-acceptance.md); it records
 explicit human observations and does not run the historical V4 protocol.
 
 | Area | Entry points |
@@ -10,8 +11,10 @@ explicit human observations and does not run the historical V4 protocol.
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
+| Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
-| Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md) |
+| Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
+| Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [startup cancellation regression](test_mvp_startup_cleanup.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md); use the driver's `--protected-wrapper` opt-in |
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh` |
 | Authenticated release asset reads | `download-release-asset.py` |
@@ -35,7 +38,7 @@ refusal stops continuation without changing the synthetic installation.
 The fixture supplies a read-only, synthetic password-disabled root shadow
 record inside its private mount namespace, so key-only SSH does not inherit a
 cloud image's locked-root/PAM policy. It never unlocks the host account.
-`test_ssh_boundary_account.py` runs the same 21 real-SSH cases beneath a
+`test_ssh_boundary_account.py` runs the same 25 real-SSH cases beneath a
 deliberately locked caller account and exercises post-readiness failure cleanup;
 both paths preserve the caller and host shadow records. The root Go integration
 test includes both scripts. These Linux/root namespace tests are local regression
@@ -47,10 +50,38 @@ script staged in `/root/recovery/log-parent-qualification`, invoke it exactly as
 `bash /root/recovery/log-parent-qualification/with-protected-log-parent-test.sh`.
 
 `test_mvp_protected_menu.py` separately tests the real menu driver through the
-temporary launcher and unchanged wrapper. It also requires a marked disposable
+temporary launcher and reviewed wrapper. It also requires a marked disposable
 root Linux VM and refuses existing product/staging/Certbot-log fixture paths.
 Use the operator plan for its scope and the adjacent Go Linux test for real
 systemd/TLS behavior. Neither test contacts a public CA or qualifies a release.
+
+The repaired launcher sets `umask 022` only in the child that execs the unchanged
+product; the pinned wrapper and supervisor retain private `077` state files.
+`test_mvp_released_umask.py` exercises a diagnostic test binary built from the
+frozen v3.1.81 source through that actual launcher. Copy
+`testdata/released-umask-main_test.go` into its disposable
+`internal/softwarelifecycle` package to select the four existing source tests;
+stage the unchanged `subscription-absent-schema2.json` fixture at its repository
+path. This is source-level Update/Recover evidence, not original packaged-binary
+execution. The test requires the marked disposable VM and restores its paths.
+
+`mvp-update-interrupt.py` reuses the real menu session, with an argv form only
+for the fixed wrapper/tracer process chain. The ordinary executable-string
+callers retain their behavior. It stops the real source at a successful durable
+checkpoint syscall and leaves public recovery and outside checks to the operator.
+Its separately staged controller imports the existing protected menu driver
+without writing bytecode into the four-file directory. Use the
+[current operator procedure](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption).
+`test_mvp_update_interrupt.py FIXTURE` requires the marked root VM; build its
+synthetic native Go fixture from `testdata/update-interrupt-fixture`. It tests
+18 success/refusal/cancellation cases with real Linux tracing and cleanup,
+not a packaged upgrade or CA operation. `v3_update_interrupt_test.go` provides
+portable syntax checks and an opt-in `SBXR_UPDATE_CONTROL_VM=1` root VM wrapper.
+The extended amd64 rehearsal currently fails early-deadline wrapper cleanup;
+this controller is **not cleared for live dispatch**. Preserve that failure and
+follow the [repair report](../../docs/acceptance/reports/ordinary-recurring-umask-repair-2026-09-25.md)
+before another run. Do not treat the ARM64 fixture pass as resolving it.
+The new recorder handoff adds four actual streamed-SSH cases to the earlier 21.
 
 The read-only `mvp-inspect-window.py` replaces run-local package/window probes.
 Use its [documented SSH call and receipt inputs](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22).

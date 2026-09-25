@@ -130,6 +130,9 @@ func attemptVersion(attempt *v3QualificationAttempt) string {
 }
 
 func attemptScenarios(attempt v3QualificationAttempt) []string {
+	if mvpRecurringAttempt(attempt) {
+		return mvpRecurringScenarios(attempt.Sources)
+	}
 	if mvpLiveAttempt(attempt) {
 		return strings.Fields(softwarelifecycle.MVPLiveScenarios)
 	}
@@ -162,6 +165,12 @@ func validAttemptSupport(attempt v3QualificationAttempt) bool {
 			return (attempt.OwnerException == "" || attempt.OwnerException == softwarelifecycle.LateConfirmationID && attempt.LateConfirmationReview != nil) && len(attempt.Sources) == 0 && len(attempt.AutomatedOnlyScenarios) == 0
 		}
 		if !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) || !slices.Equal(attempt.AutomatedOnlyScenarios, strings.Fields(softwarelifecycle.RepairAutomatedOnlyScenarios)) {
+			return false
+		}
+	} else if mvpRecurringAttempt(attempt) {
+		// One then-current stable source per ordinary run. No multi-source claim,
+		// exception reuse or blanket claim about the retired automated matrix.
+		if len(attempt.Sources) != 1 || attempt.Sources[0].OwnershipSchema != 2 || attempt.OwnerException != "" || attempt.LateConfirmationReview != nil || attempt.AutomatedOnlyScenarios != nil {
 			return false
 		}
 	} else if attempt.EvidencePolicy != "" || attempt.AutomatedOnlyScenarios != nil {

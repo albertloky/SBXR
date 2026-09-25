@@ -4,6 +4,10 @@ status: accepted
 
 # Use five product journeys for current MVP live acceptance
 
+[ADR-0025](0025-ordinary-recurring-live-acceptance.md) separately extends these
+ordinary journeys with three packaged source update/recovery checks under
+`mvp-recurring-live-v1`. This policy's original clean-install meaning remains.
+
 On 2026-09-12 the Owner selected the five-journey scope from the module/test
 review. `mvp-live-v1` is the current evidence policy within the existing
 `subscription-clean-install-repair` scope for the subscription-capable MVP.

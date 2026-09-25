@@ -824,9 +824,12 @@ func writeUpdateFile(root *os.Root, name string, body []byte, mode os.FileMode) 
 		return err
 	}
 	written, writeErr := file.Write(body)
+	// This is our newly O_EXCL-created inode. Enforce the contract rather than
+	// inherit a caller's restrictive umask; never chmod pre-existing material.
+	modeErr := file.Chmod(mode)
 	syncErr := file.Sync()
 	closeErr := file.Close()
-	if writeErr != nil || written != len(body) || syncErr != nil || closeErr != nil {
+	if writeErr != nil || written != len(body) || modeErr != nil || syncErr != nil || closeErr != nil {
 		_ = root.Remove(name)
 		return errors.New("durable update write failed")
 	}

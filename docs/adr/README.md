@@ -5,7 +5,8 @@ refinements apply only within their stated scope; this index does not adopt,
 revoke or rewrite a decision. [CONTEXT.md](../../CONTEXT.md) is the shared glossary.
 
 For current product work, begin with ADR-0016 and its selected resolutions.
-For current live qualification, begin with ADR-0023. ADR-0024 is only the bounded
+For current recurring live qualification, begin with ADR-0025; ADR-0023 defines
+the retained five ordinary journeys. ADR-0024 is only the bounded
 v3.1.81 / 159 exception; ADR-0017 applies only to v3.1.0 / 83. Neither is a
 general publication waiver. See the [acceptance guide](../acceptance/README.md).
 
@@ -15,6 +16,7 @@ general publication waiver. See the [acceptance guide](../acceptance/README.md).
 - [0018 — Permit a clean-install subscription repair release](0018-clean-install-subscription-repair.md)
 - [0023 — Use five product journeys for current MVP live acceptance](0023-mvp-live-acceptance.md)
 - [0024 — Validate the approved r24 late-human-confirmation supplement](0024-r24-late-confirmation-supplement.md)
+- [0025 — Ordinary recurring live acceptance and an exact packaged upgrade route](0025-ordinary-recurring-live-acceptance.md)
 - [0017 — One-release Owner exception for v3.1.0](0017-one-release-owner-exception.md)
 
 ## Foundations, read with the V3 refinements

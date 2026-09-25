@@ -1,6 +1,7 @@
 # MVP live acceptance
 
-This is the current practical procedure for a candidate declaring
+For future recurring releases use [ordinary recurring acceptance](ordinary-recurring-live.md)
+and ADR-0025. This document retains the practical procedure for a candidate declaring
 `mvp-live-v1`. It is a clean-install scope. It does not prove an incoming
 upgrade, a natural Certbot timer firing, or naturally due client auto-refresh.
 The five journey identifiers are listed in [ADR-0023](../adr/0023-mvp-live-acceptance.md):

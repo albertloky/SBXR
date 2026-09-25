@@ -63,10 +63,12 @@ class LockedAccountTests(unittest.TestCase):
             scripts = root / "checkout/.github/scripts"
             scripts.mkdir(parents=True)
             for filename in ("test_ssh_boundary.py", "v3-packaged-live.sh",
-                             "v3-menu-session.py", "v3-recurring-evidence.sh"):
+                             "v3-menu-session.py", "v3-recurring-evidence.sh", "mvp-observe.py"):
                 shutil.copyfile(SOURCE / filename, scripts / filename)
             docs = root / "checkout/docs/acceptance"
             docs.mkdir(parents=True)
+            shutil.copyfile(SOURCE.parents[1] / "docs/acceptance/ordinary-recurring-live.md",
+                            docs / "ordinary-recurring-live.md")
             target = docs / "mvp-live-acceptance.md"
             if fail_after_ready:
                 target.write_text("Deliberately missing the handoff example.\n")
@@ -98,7 +100,7 @@ class LockedAccountTests(unittest.TestCase):
                 self.assertEqual(stderr, b"SSH_BOUNDARY_REFUSED case=candidate-handoff-example\n")
             else:
                 self.assertEqual(process.returncode, 0, stderr)
-                self.assertEqual(stdout, b"SSH_BOUNDARY_CASES_PASSED count=21\n")
+                self.assertEqual(stdout, b"SSH_BOUNDARY_CASES_PASSED count=25\n")
                 self.assertEqual(stderr, b"")
 
     def test_locked_caller_success(self):

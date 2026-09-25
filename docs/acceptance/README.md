@@ -11,8 +11,14 @@ Refresh remote state before acting; this index is not a readiness receipt.
 
 ## Current procedure
 
-[MVP live acceptance](mvp-live-acceptance.md) is the current clean-install
-procedure for `mvp-live-v1`. It covers the five normal journeys and the explicit
+[Ordinary recurring live acceptance](ordinary-recurring-live.md) is the approved
+`mvp-recurring-live-v1` procedure: five normal journeys plus three actual packaged
+source upgrade/recovery checks. The first route is v3.1.81 to the next release.
+Read [ADR-0025](../adr/0025-ordinary-recurring-live-acceptance.md) and the procedure's
+pre-dispatch gates; approval of scope is not a live pass or host authorization.
+
+[MVP live acceptance](mvp-live-acceptance.md) retains the clean-install
+procedure for `mvp-live-v1`. It defines the five normal journeys and the explicit
 operator observation handoff. Use it with [ADR-0023](../adr/0023-mvp-live-acceptance.md).
 
 [Temporary MVP log-parent windows](mvp-protected-log-parent-2026-09-19.md)

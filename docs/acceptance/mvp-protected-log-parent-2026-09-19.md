@@ -13,7 +13,7 @@ plan is complete and must not be replayed on the removed installation.
 
 ## Chosen boundary
 
-Use the unchanged qualified permission wrapper for **one complete packaged
+Use the currently reviewed permission wrapper for **one complete packaged
 menu process at a time**, including initial review, confirmation, synchronous
 mutation, local verification and output. Restore the original mode after each
 process. Keep outside HTTPS/proxy checks and Karing observations between these
@@ -26,16 +26,28 @@ installed executable. Stage it with the qualified wrapper and supervisor in
 The exact process chain is:
 
 ```text
-v3-menu-session.py --executable /root/sbxr-mvp-log-parent/mvp-protected-menu.sh
+v3-menu-session.py --executable /root/sbxr-mvp-log-parent/mvp-protected-menu.sh --protected-wrapper
   -> launcher execs qualified wrapper
     -> private supervisor process group
-      -> /usr/local/bin/sbxr and its synchronous Certbot descendants
+      -> child shell sets umask 022 and execs /usr/local/bin/sbxr
+        -> synchronous product descendants
 ```
 
 The menu driver starts its executable in a new session. Therefore putting the
 wrapper around the Python driver would not establish this boundary. Use its
-existing `--executable` argument to select the launcher instead. No driver,
-wrapper or supervisor change is required.
+existing `--executable` argument and `--protected-wrapper` opt-in to select
+the launcher instead. The supervisor is unchanged; the wrapper includes the
+separately approved startup cleanup repair. The September 25 launcher repair sets `022`
+only inside their product child: the unchanged v3.1.81 updater needs that mask
+to create `0755` executable files. Wrapper state/control files retain `077`,
+and explicitly requested `0600` product files remain private. No existing file
+mode is changed by setting the child mask. See the
+[repair and rehearsal report](reports/ordinary-recurring-umask-repair-2026-09-25.md).
+That expanded rehearsal exposed a separate startup-cancellation cleanup gap.
+The [bounded cleanup repair](reports/ordinary-recurring-cleanup-repair-2026-09-25.md)
+records its isolated validation and updated invocation. Native CI and the
+current recurring procedure's fresh host, target, CA and attendance gates still
+apply; historical qualification alone does not establish live readiness.
 
 Installation and the entire **Start setup** session run through the ordinary
 packaged path at 0775, using the unchanged menu driver with
@@ -210,11 +222,13 @@ these reviewed source files, with no credentials in the staged scripts:
 | `v3-menu-session.py` | `.github/scripts/v3-menu-session.py` | 0600 |
 
 Require root:root, regular one-link files without symlinks/xattrs. Compare their
-on-host SHA-256 values against the exact reviewed source manifest. The wrapper
-and supervisor remain:
+on-host SHA-256 values against the exact reviewed source manifest. The current
+wrapper includes the September 25 startup-cancellation repair; the supervisor
+is unchanged. These bytes supersede the earlier wrapper for current MVP work,
+not the historical v3.1.75 maintenance receipt:
 
 ```text
-4358cb1ec189bd33518a081702355405e9110892cf2be7e8235671005e2959eb  with-protected-log-parent.sh
+56fab3f89dbed0dbb668f296a33ac8b512e8676edb5962a796a45bbc649123de  with-protected-log-parent.sh
 9861f9a16af051c9dcb7d21324ddb97a60690f3cf3fca7987f6c642d972a56cc  protected_command_supervisor.py
 ```
 
@@ -232,7 +246,7 @@ python3 /root/sbxr-mvp-log-parent/v3-menu-session.py \
   action 'Replace subscription certificate' \
   PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED \
   --confirmation yes \
-  --executable /root/sbxr-mvp-log-parent/mvp-protected-menu.sh
+  --executable /root/sbxr-mvp-log-parent/mvp-protected-menu.sh --protected-wrapper
 ```
 
 This is an execution example, not a capacity probe or instruction to run it
@@ -259,10 +273,23 @@ There is no automatic retry of certificate enablement/replacement or a failed
 candidate. The existing collector records failure and burn; cleanup cannot
 change that result.
 
-On a driver timeout, protocol error or cancellation, its current cleanup uses
-SIGKILL on the launcher group and reaps adopted descendants. This can kill the
-wrapper before restoration. A retained valid state with `/var/log` at 0755 is
-the qualified recovery condition, not a successful completed window.
+Use `--protected-wrapper` for every menu-driver invocation of this launcher.
+The controlled-update caller selects the same behavior with its existing
+`--protected-log-parent` option. Direct product execution and historical
+interruption helpers retain their original immediate termination behavior;
+they must not be substituted for this protected-window invocation.
+
+On a driver timeout, protocol error or cancellation, the opted-in driver sends
+USR1 only to its unreaped wrapper leader and gives startup cleanup at most twenty
+seconds before the existing SIGKILL/group/adopted-descendant cleanup. This is
+safety cleanup after failure, not additional journey or observation time.
+Before product admission, the wrapper can remove only its own newly created,
+identity-checked channels and restore its valid state. After admission might
+have happened, it retains state without automatic permission restoration: the
+driver must first finish terminating/reaping every descendant. A retained valid
+state with the exact original directory identity and mode 0755 or 0775 is a
+recovery condition, not a successful window. No operational orphan-channel
+deletion route is added. Forced death or an unproved cleanup remains a stop.
 
 First preserve the driver result, state and private process observations.
 Require the driver to have finished descendant cleanup, the recorded controller
@@ -307,6 +334,11 @@ and their now-empty directory. If state, FIFOs, live processes or unrecognized
 files remain, retain the directory and report the blocker.
 
 ## Local validation and limits
+
+The following paragraphs record the original September 19/21 qualification.
+For the September 25 startup repair and revised wrapper, use its
+[separate report](reports/ordinary-recurring-cleanup-repair-2026-09-25.md);
+do not transfer an earlier pinned-byte claim to the new revision.
 
 The focused [Linux/systemd test](../../internal/proxyinstallation/protected_log_parent_linux_test.go)
 uses the production host trust checks, kernel locks, systemd serving role and

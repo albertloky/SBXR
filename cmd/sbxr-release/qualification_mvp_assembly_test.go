@@ -11,11 +11,23 @@ import (
 )
 
 func TestMVPPythonAssemblerProducesFiveValidatorAcceptedPrefixes(t *testing.T) {
+	testMVPAssembler(t, false)
+}
+
+func TestMVPRecurringPythonAssemblerProducesEightValidatorAcceptedPrefixes(t *testing.T) {
+	testMVPAssembler(t, true)
+}
+
+func testMVPAssembler(t *testing.T, recurring bool) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
-	boundary, manifest, _ := mvpQualificationFixture(t, binary)
+	fixture := mvpQualificationFixture
+	if recurring {
+		fixture = mvpRecurringQualificationFixture
+	}
+	boundary, manifest, _ := fixture(t, binary)
 	directory := t.TempDir()
 	write := func(name string, value []byte) string {
 		t.Helper()
@@ -40,13 +52,14 @@ func TestMVPPythonAssemblerProducesFiveValidatorAcceptedPrefixes(t *testing.T) {
 		if id == "mvp-subscription" {
 			limit = 7200
 		}
+		expectedChecks := ordinaryFixtureChecks(id)
 		request := map[string]any{
 			"deadline_unix": now.Add(time.Duration(limit) * time.Second).Unix(), "not_before": stamp,
 			"qualification_manifest_sha256": sha256String(string(manifest)),
-			"required_checks":               mvpObservedChecks[index], "scenario_id": id, "scenario_limit_seconds": limit,
+			"required_checks":               expectedChecks, "scenario_id": id, "scenario_limit_seconds": limit,
 		}
-		checks := make([]any, 0, len(mvpObservedChecks[index]))
-		for _, check := range mvpObservedChecks[index] {
+		checks := make([]any, 0, len(expectedChecks))
+		for _, check := range expectedChecks {
 			checks = append(checks, map[string]any{"check": check, "observed_at": stamp, "result": "observed"})
 		}
 		observation := map[string]any{"checks": checks, "completed_at": stamp, "scenario_id": id, "started_at": stamp}
@@ -55,7 +68,24 @@ func TestMVPPythonAssemblerProducesFiveValidatorAcceptedPrefixes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		observationPath := write(fmt.Sprintf("observation-%d.json", index), append(pretty, '\n'))
+		observationPath := filepath.Join(directory, fmt.Sprintf("observation-%d.json", index))
+		if recurring {
+			draft := filepath.Join(directory, fmt.Sprintf("draft-%d.json", index))
+			record := func(action string, extra ...string) {
+				t.Helper()
+				args := append([]string{"../../.github/scripts/mvp-observe.py", action, "--request", requestPath, "--draft", draft}, extra...)
+				if output, err := exec.Command("python3", args...).CombinedOutput(); err != nil {
+					t.Fatalf("recorder %s: %v %s", action, err, output)
+				}
+			}
+			record("start")
+			for _, check := range expectedChecks {
+				record("observe", "--check", check)
+			}
+			record("finish", "--output", observationPath)
+		} else {
+			write(fmt.Sprintf("observation-%d.json", index), append(pretty, '\n'))
+		}
 		factsPath := filepath.Join(directory, fmt.Sprintf("facts-%d.json", index))
 		assembler := exec.Command("python3", "../../.github/scripts/v3-mvp-evidence.py",
 			"--manifest", manifestPath, "--boundary", boundaryPath, "--request", requestPath,

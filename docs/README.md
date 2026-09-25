@@ -20,6 +20,11 @@ Its [bounded Owner exception](adr/0024-r24-late-confirmation-supplement.md)
 reuses prior live evidence; it is not a fresh live pass or a general waiver.
 Refresh remote release state before a future release operation.
 
+For the next ordinary release, use [recurring live acceptance](acceptance/ordinary-recurring-live.md):
+five normal journeys plus the exact source's packaged update and both recovery
+directions. The approved initial route is v3.1.81 to the next candidate; the
+procedure does not assert that it has already passed live.
+
 ## Repository layout
 
 ```text

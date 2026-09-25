@@ -84,6 +84,12 @@ menu = 'SBXR V3\n1. Check\n0. Exit'
 print(menu, flush=True)
 assert sys.stdin.readline().strip() == '1'
 if mode == 'normal':
+    # Exercise the inherited mask rather than inspect a shell's declaration.
+    # The old launcher leaves executable files 0700 under the wrapper's 077.
+    for name, requested, expected in [('public-executable', 0o755, 0o755), ('private-record', 0o600, 0o600)]:
+        fd = os.open(case / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, requested)
+        os.close(fd)
+        assert stat.S_IMODE((case / name).stat().st_mode) == expected
     subprocess.run(['/bin/sh', '-c', 'test "$(stat -c %a /var/log)" = 755'], check=True)
     print('Code: SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT', flush=True)
     print(menu, flush=True)
@@ -163,12 +169,19 @@ def run():
             env = dict(os.environ, MVP_WINDOW_FIXTURE=str(case), MVP_WINDOW_MODE=mode)
             env.pop('SBXR_QUALIFICATION_REQUEST', None)
             env.pop('SBXR_EXECUTABLE', None)
-            args = [launcher] if mode == 'exit37' else [sys.executable, driver, 'action', 'Check', 'SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT', '--executable', launcher, '--timeout', '3' if mode == 'deadline' else '15']
+            # Exercise the real full wrapper, not just product execution. On
+            # amd64/TCG the unchanged wrapper alone measured 14.96 seconds;
+            # a 15-second success budget (or 3-second descendant deadline)
+            # can expire during startup/restoration instead of this case's
+            # intended boundary. Match the controller fixture's 30-second
+            # budget and still require all three descendants before failure.
+            # Actual short startup/request caps are covered separately.
+            args = [launcher] if mode == 'exit37' else [sys.executable, driver, 'action', 'Check', 'SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT', '--executable', launcher, '--protected-wrapper', '--timeout', '30']
             active = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                       start_new_session=True)
             if mode == 'cancel':
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + 25
                 while not (case / 'ready').exists():
                     if active.poll() is not None or time.monotonic() >= deadline:
                         raise AssertionError('active-menu readiness failed')
@@ -177,7 +190,7 @@ def run():
                 command(['bash', wrapper, 'restore', str(STATE)], status=1)
                 assert identity(LOG)[5] == 0o755
                 active.send_signal(signal.SIGTERM)
-            output, error = active.communicate(timeout=20)
+            output, error = active.communicate(timeout=60)
             expected = 0 if mode == 'normal' else 37 if mode == 'exit37' else 1
             assert active.returncode == expected, (mode, active.returncode, output, error)
             journal = [json.loads(path.read_text()) for path in case.glob('*.json')]

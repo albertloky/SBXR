@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Collect the current five-journey MVP live evidence through packaged product paths.
+# Collect ordinary live observations, including declared packaged upgrade checks.
 set -euo pipefail
 umask 077
 export PYTHONDONTWRITEBYTECODE=1
@@ -11,6 +11,7 @@ mvp_required_checks() {
     mvp-credentials) printf '%s' 'old-established-session-terminated old-proxy-credential-refused replacement-proxy-traffic same-link-refreshed-identity old-link-refused replacement-link-usable proxy-identity-unchanged-by-link-rotation fresh-karing-replacement-latency' ;;
     mvp-renewal) printf '%s' 'official-renewal-route certificate-replaced accepted-activation outside-trusted-tls proxy-traffic-preserved' ;;
     mvp-removal) printf '%s' 'restart-preserves-access reviewed-complete-removal owned-resources-absent outside-access-refused unrelated-resources-preserved test-client-and-secret-cleanup ssh-access-preserved' ;;
+    source-*) python3 .github/scripts/v3-mvp-evidence.py --checks "$manifest" "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -54,8 +55,8 @@ manifest=handoff/qualification-manifest.json
 boundary=handoff/qualification-boundary-facts.json
 tool=handoff/sbxr-release
 jq -e '(.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and (.source_state == "v3-recurring" or .source_state == "v3-subscription-clean")' "$manifest" >/dev/null
-if ! jq -e '.v3_attempt.evidence_policy == "mvp-live-v1"' "$manifest" >/dev/null; then
-  printf '%s\n' 'The current checkout produces only mvp-live-v1 evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
+if ! jq -e '.v3_attempt.evidence_policy == "mvp-live-v1" or .v3_attempt.evidence_policy == "mvp-recurring-live-v1"' "$manifest" >/dev/null; then
+  printf '%s\n' 'The current checkout produces only mvp-live-v1 or mvp-recurring-live-v1 evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
   exit 2
 fi
 chmod 0600 "$manifest" "$boundary"
@@ -64,7 +65,7 @@ directory="$(mktemp -d)"
 mkdir -m 0700 handoff/v3-scenarios
 printf '[]' > "$directory/previous.json"
 remote=(ssh -i "$2" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$3" -o ConnectTimeout=15 "root@$1")
-scenario=mvp-install
+scenario="$(jq -r '.v3_attempt.required_scenarios[0]' "$manifest")"
 operation=operation-1
 reason=unexpected-failure
 mvp_observation_remote=

@@ -18,7 +18,7 @@ import tempfile
 import time
 
 
-CASE_TOTAL = 21
+CASE_TOTAL = 25
 CONFIG = '{"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2080}],"outbounds":[{"type":"vless","uuid":"11111111-1111-4111-8111-111111111111"}]}'
 
 
@@ -101,6 +101,60 @@ def remote(base, command, *, data=None, ok=True, timeout=20):
 
 def clean_results(base):
     remote(base, "rm -f /root/sbxr-qualification-evidence/result.tmp /root/sbxr-qualification-evidence/result.json")
+
+
+def recorder_handoff(base, source):
+    """Replay the current documented streamed recorder call, not a mock SSH."""
+    examples = re.findall(r"<!-- mvp-incremental-observer-ssh -->\n```sh\n(.*?)\n```",
+                          (source / 'ordinary-recurring-live.md').read_text(), re.DOTALL)
+    if len(examples) != 1:
+        raise Refused('recorder-handoff-example')
+    repository = source / 'recorder-checkout'
+    scripts = repository / '.github/scripts'
+    scripts.mkdir(parents=True)
+    write(scripts / 'mvp-observe.py', (source / 'mvp-observe.py').read_bytes())
+    prefix = ('set -euo pipefail\nssh_options=(' + shlex.join(base[1:-1]) + ')\n'
+              'acceptance_host=' + shlex.quote(base[-1]) + '\n')
+    definition = examples[0].split('mvp_observe start\n')[0]
+    request = Path('/root/sbxr-qualification-evidence/request.json')
+    draft = Path('/root/mvp-observation-draft.json')
+    output = Path('/root/sbxr-qualification-evidence/observation.json')
+    now = int(time.time())
+    value = dict(scenario_id='source-v3.1.81-precommit',
+                 not_before=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),
+                 deadline_unix=now+30, scenario_limit_seconds=1800,
+                 qualification_manifest_sha256='a'*64,
+                 required_checks=['checkpoint-fixture', 'cleanup-fixture'])
+    write(request, json.dumps(value))
+
+    def observe(command, ok=True):
+        return run(['bash', '-c', prefix + definition + command], cwd=repository, ok=ok)
+
+    # Four boundary cases: complete flow, incomplete refusal, changed-request
+    # refusal, and no re-publication after the collector consumes its output.
+    run(['bash', '-c', prefix + examples[0]], cwd=repository)
+    observe('mvp_observe observe --check checkpoint-fixture')
+    observe('mvp_observe finish --output ' + str(output), ok=False)
+    if output.exists():
+        raise Refused('recorder-incomplete-published')
+    original = request.read_bytes()
+    write(request, original + b'\n')
+    observe('mvp_observe status', ok=False)
+    write(request, original)
+    observe('mvp_observe observe --check cleanup-fixture')
+    observe('mvp_observe finish --output ' + str(output))
+    result = json.loads(output.read_bytes())
+    if (result['scenario_id'] != value['scenario_id'] or
+            [item['check'] for item in result['checks']] != value['required_checks'] or
+            any(item['result'] != 'observed' for item in result['checks']) or
+            output.stat().st_mode & 0o777 != 0o600):
+        raise Refused('recorder-publication-shape')
+    output.unlink()
+    observe('mvp_observe finish --output ' + str(output), ok=False)
+    if output.exists():
+        raise Refused('recorder-republished')
+    draft.unlink()
+    request.unlink()
 
 
 def candidate_handoff(base, source):
@@ -274,6 +328,7 @@ LogLevel ERROR
 
         source = root / "source"
         candidate_handoff(base, source)
+        recorder_handoff(base, source)
         module_bytes = (source / "v3-packaged-live.sh").read_bytes()
         staged = work / "v3-packaged-live.sh"
         driver = work / "v3-menu-session.py"
@@ -459,10 +514,12 @@ def outer():
         copied = root / "source"
         copied.mkdir(mode=0o700)
         for filename in ("v3-packaged-live.sh", "v3-menu-session.py",
-                         "v3-recurring-evidence.sh"):
+                         "v3-recurring-evidence.sh", "mvp-observe.py"):
             shutil.copyfile(source_dir / filename, copied / filename)
         shutil.copyfile(source_dir.parents[1] / "docs/acceptance/mvp-live-acceptance.md",
                         copied / "mvp-live-acceptance.md")
+        shutil.copyfile(source_dir.parents[1] / "docs/acceptance/ordinary-recurring-live.md",
+                        copied / "ordinary-recurring-live.md")
         command = ["unshare", "--mount", "--pid", "--fork", "--mount-proc",
                    "--kill-child=KILL", sys.executable, str(script), "--inside", name]
         parent_pid = os.getpid()
