@@ -23,7 +23,7 @@ point and updates the current procedure without weakening its replacement check.
   ownership schema, new transaction, qualification gate, evidence format, or
   acceptance checklist was introduced.
 - The terminal and staged menu driver both recognize the new action and exact
-  confirmation prompt. The current [MVP procedure](mvp-live-acceptance.md#certificate-replacement-procedure)
+  confirmation prompt. The current [MVP procedure](../mvp-live-acceptance.md#certificate-replacement-procedure)
   uses it instead of treating a successful ordinary renewal invocation as proof
   of replacement.
 
@@ -86,7 +86,7 @@ unchanged. `/root/sbxr-357-certbot-preflight` remained. Karing was not operated
 or changed during this repair phase.
 
 Run evidence and handoff are retained locally in
-[`.scratch/acceptance/cert/`](../../.scratch/acceptance/cert/).
+[`.scratch/acceptance/cert/`](../../../.scratch/acceptance/cert/).
 Disposable test binaries, archives, and temporary fixtures were removed.
 Unrelated scratch, research, and previous acceptance reports were preserved.
 

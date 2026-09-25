@@ -46,10 +46,10 @@ removed capability; it does not change whether a historical record is valid.
 
 ## Navigation and file organization
 
-Start with [the code map](../agents/code-map.md). Documentation has a
-[single entry index](../README.md), with separate indexes for
-[current and historical acceptance](../acceptance/README.md) and
-[research](README.md).
+Start with [the code map](../../agents/code-map.md). Documentation has a
+[single entry index](../../README.md), with separate indexes for
+[current and historical acceptance](../../acceptance/README.md) and
+[research](../README.md).
 
 - Proxy Installation's ownership decoding and details rendering live in
   `ownership.go` and `details.go`; the coupled review/execute state machine stays
@@ -57,13 +57,13 @@ Start with [the code map](../agents/code-map.md). Documentation has a
   were checked for AST equivalence.
 - The 2,742-line release qualification file is split into dispatch, candidate,
   boundary, legacy live, publication, and failure files. All 156 declarations
-  were preserved exactly. The [release command map](../../cmd/sbxr-release/README.md)
+  were preserved exactly. The [release command map](../../../cmd/sbxr-release/README.md)
   describes the stages.
 - Root release tests are grouped by CI, candidate, stable, collector, packaged
   driver, and transport responsibility. They stay in the root package because
   they exercise repository-relative paths.
 - Current script tests live beside their scripts under `.github/scripts/`, with a
-  [tooling map](../../.github/scripts/README.md). Historical source links point
+  [tooling map](../../../.github/scripts/README.md). Historical source links point
   to the retained Git revision instead of deleted local files.
 - `.gitignore` excludes local run history, Python caches and macOS metadata.
   The 4.3 GB `.scratch/` directory is preserved but no longer appears in normal

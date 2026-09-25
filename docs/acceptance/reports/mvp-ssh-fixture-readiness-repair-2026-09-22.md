@@ -30,7 +30,7 @@ VPS contact, CA request, real proxy installation or Karing action occurred.
 
 ## Reproduction and causal evidence
 
-Artifacts are under [`.scratch/acceptance/s22/`](../../.scratch/acceptance/s22/).
+Artifacts are under [`.scratch/acceptance/s22/`](../../../.scratch/acceptance/s22/).
 A fresh disposable Ubuntu 24.04 ARM64 VM used the retained, checksum-verified,
 read-only public cloud image, hardware acceleration (HVF), two CPUs, 2 GiB RAM,
 restricted egress and pinned-key loopback SSH. Guest Python was 3.12.3 and
@@ -58,14 +58,14 @@ environment; its removed VM account state was not reconstructed or assumed.
 
 ## Focused change and regression boundary
 
-- [`test_ssh_boundary.py`](../../.github/scripts/test_ssh_boundary.py): seven
+- [`test_ssh_boundary.py`](../../../.github/scripts/test_ssh_boundary.py): seven
   lines create a mode-0600 synthetic `root:*:20000:0:99999:7:::` record and bind
   it read-only onto `/etc/shadow` after mount propagation is made private. The
   existing namespace lifetime and temporary-directory cleanup remove it.
   Root's home/key isolation, strict pinned host-key checking, `UsePAM no`,
   disabled password/keyboard-interactive authentication and deadlines stay
   unchanged. No installed-product or operator-helper source changes.
-- [`test_ssh_boundary_account.py`](../../.github/scripts/test_ssh_boundary_account.py):
+- [`test_ssh_boundary_account.py`](../../../.github/scripts/test_ssh_boundary_account.py):
   runs the real fixture beneath a deliberately locked caller account. The
   success case requires exactly `SSH_BOUNDARY_CASES_PASSED count=21`. The
   failure case omits the copied documentation example and requires exactly
@@ -74,7 +74,7 @@ environment; its removed VM account state was not reconstructed or assumed.
   compare the real host shadow contents and device/inode/mode/owner/group/link
   count/modification time without printing password records. Cleanup checks
   remain registered even if an assertion fails.
-- [`v3_ssh_boundary_test.go`](../../v3_ssh_boundary_test.go): includes both
+- [`v3_ssh_boundary_test.go`](../../../v3_ssh_boundary_test.go): includes both
   fixtures as Linux/root subtests, rejects skipped Python cases and retains
   the existing two-minute subprocess budget for each invocation. No existing
   readiness, driver or namespace timeout was lengthened.

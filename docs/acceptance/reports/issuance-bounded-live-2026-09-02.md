@@ -27,7 +27,7 @@ No Karing app replacement, profile change, or connection change occurred.
 
 ## Approved lifecycle evidence correction
 
-Albert approved [ADR-0020](../adr/0020-clean-install-lifecycle-evidence.md) on
+Albert approved [ADR-0020](../../adr/0020-clean-install-lifecycle-evidence.md) on
 2026-09-02: only `lifecycle-menu/explicit-confirmation` and
 `lifecycle-menu/clean-install-target-refused` move to mandatory native automated
 evidence under new signed policy `repair-issuance-bounded-v2`. The 25 live

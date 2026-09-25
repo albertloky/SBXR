@@ -26,8 +26,8 @@ observer's assumed `ii`. Renewal-idle inspection was accidentally inside that
 same conditional. A later operator cleanup assessment also compared the
 Ownership Record's package string directly with the declaration object.
 
-The [source-owned observer](../../.github/scripts/mvp-inspect-window.py) and its
-[documented streamed SSH caller](mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22)
+The [source-owned observer](../../../.github/scripts/mvp-inspect-window.py) and its
+[documented streamed SSH caller](../mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22)
 replace those handwritten checks:
 
 - Always query installed package state, independently of the temporary DEB.
@@ -49,7 +49,7 @@ logging health and live outside/Karing observations remain separate.
 ## Validation
 
 Artifacts are retained locally under
-[`.scratch/acceptance/o22/`](../../.scratch/acceptance/o22/).
+[`.scratch/acceptance/o22/`](../../../.scratch/acceptance/o22/).
 
 | Check | Result and boundary |
 |---|---|

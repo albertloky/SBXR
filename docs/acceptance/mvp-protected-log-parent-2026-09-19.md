@@ -349,7 +349,7 @@ as root. It refuses existing product, launcher-directory and shared-log fixture
 paths and cleans its own files even on assertion failure.
 
 The driver's three-second deadline fixture counts launcher/wrapper startup in
-its budget. The [September 22 timing investigation](mvp-driver-deadline-investigation-2026-09-22.md)
+its budget. The [September 22 timing investigation](reports/mvp-driver-deadline-investigation-2026-09-22.md)
 reproduced expiration before fixture startup in a slow software-emulated guest,
 then verified the full unchanged suite on an ARM64/HVF guest. Use an adequately
 fast disposable Linux environment for this active-process cleanup test; retain
@@ -395,12 +395,12 @@ absence and restored original log identity. Never run this fixture on the VPS.
 Retained wrapper state is not blindly deleted if restoration fails. The ordinary
 Go wrapper is opt-in via `SBXR_MVP_OBSERVER_DEB`; portable contracts always run.
 
-The [September 22 observer repair report](mvp-operator-observer-repair-2026-09-22.md)
+The [September 22 observer repair report](reports/mvp-operator-observer-repair-2026-09-22.md)
 retains the successful focused lifecycle rehearsal and original emulated-driver
-failure. The [deadline investigation](mvp-driver-deadline-investigation-2026-09-22.md)
+failure. The [deadline investigation](reports/mvp-driver-deadline-investigation-2026-09-22.md)
 explains that timing failure and verifies the unchanged driver suite, while
 recording a separate incomplete SSH-fixture replay. The subsequent
-[SSH readiness repair](mvp-ssh-fixture-readiness-repair-2026-09-22.md) closes that
+[SSH readiness repair](reports/mvp-ssh-fixture-readiness-repair-2026-09-22.md) closes that
 replay gap: the fixture now isolates its account record rather than inheriting
 the host root lock, and all 21 real-SSH cases plus locked-account success/failure
 regressions pass locally. Host accounts and the four staged operator files stay

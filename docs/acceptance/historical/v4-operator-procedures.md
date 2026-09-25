@@ -1,7 +1,7 @@
 # V4 operator procedures
 
 This retains the historical `repair-issuance-bounded-v4` scope. Current MVP
-attempts use the [five-journey procedure](mvp-live-acceptance.md); these 25
+attempts use the [five-journey procedure](../mvp-live-acceptance.md); these 25
 scenarios do not apply to `mvp-live-v1`.
 
 The V4 producer was retired from the working tree. This procedure preserves the

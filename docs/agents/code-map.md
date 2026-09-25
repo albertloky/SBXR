@@ -21,7 +21,7 @@ Software Lifecycle for `Check`/`Update`/`Recover`.
 | Ownership Record decoding, compatibility, or resource admission | [ownership.go](../../internal/proxyinstallation/ownership.go) | `proxyinstallation_test.go`, `software_update_test.go`, and adjacent feature tests |
 | Proxy status details | [details.go](../../internal/proxyinstallation/details.go) | Module tests plus terminal rendering tests |
 | Reviewed certificate replacement and fault repair | [repair.go](../../internal/proxyinstallation/repair.go), [host renewal](../../internal/proxyinstallation/adapter/host/renewal.go) | `repair_test.go`, `renewal_process_test.go`; [replacement procedure](../acceptance/mvp-live-acceptance.md#certificate-replacement-procedure) |
-| Certificate snapshot publication, mismatch recovery, and ordinary-start coordination | [activation.go](../../internal/proxyinstallation/activation.go), [certificate_state.go](../../internal/proxyinstallation/adapter/host/certificate_state.go), [runtime_start.go](../../internal/proxyinstallation/adapter/host/runtime_start.go) | Adjacent certificate-state/runtime tests; [isolated Linux checks and recovery plan](../acceptance/certificate-start-coordination-repair-2026-09-19.md) |
+| Certificate snapshot publication, mismatch recovery, and ordinary-start coordination | [activation.go](../../internal/proxyinstallation/activation.go), [certificate_state.go](../../internal/proxyinstallation/adapter/host/certificate_state.go), [runtime_start.go](../../internal/proxyinstallation/adapter/host/runtime_start.go) | Adjacent certificate-state/runtime tests; [isolated Linux checks and recovery plan](../acceptance/reports/certificate-start-coordination-repair-2026-09-19.md) |
 | One-time v3.1.75 snapshot maintenance handoff | [standalone helper](../../.github/scripts/sbxr-snapshot-recovery/main.go), [executable driver](../../.github/scripts/sbxr-snapshot-recovery/rehearse.py), [protected log-parent wrapper](../../.github/scripts/sbxr-snapshot-recovery/with-protected-log-parent.sh), [command supervisor](../../.github/scripts/sbxr-snapshot-recovery/protected_command_supervisor.py), [snapshot_recovery.go](../../internal/proxyinstallation/snapshot_recovery.go) | Tagged Linux executable rehearsal in `snapshot_recovery_linux_test.go`; adjacent [wrapper VM qualification](../../.github/scripts/sbxr-snapshot-recovery/with-protected-log-parent-test.sh) and [runbook comparison regression](../../.github/scripts/sbxr-snapshot-recovery/test_runbook.py); [exact VPS runbook](../acceptance/v3.1.75-snapshot-recovery-runbook.md) |
 | Volatile whole-host lock creation after reboot | [lock_provision.go](../../internal/proxyinstallation/lock_provision.go), [host lock provisioning](../../internal/proxyinstallation/adapter/host/lock_provision.go), [mutation lock primitive](../../internal/softwarelifecycle/mutation_lock.go) | Adjacent `lock_provision_test.go` and `mutation_lock_test.go`, plus private-role dispatch in `cmd/sbxr/run_test.go`; `go test ./internal/proxyinstallation/... ./internal/softwarelifecycle ./cmd/sbxr` |
 | Ubuntu filesystem, packages, systemd, locks, or processes | [host/host.go](../../internal/proxyinstallation/adapter/host/host.go), [mutation.go](../../internal/proxyinstallation/adapter/host/mutation.go) | Named host feature files and adjacent tests; `go test ./internal/proxyinstallation/adapter/host` |
@@ -57,8 +57,8 @@ deadline failure, inspect the driver and operator wrapper.
 | Temporary MVP log-parent prerequisite | [mvp-protected-menu.sh](../../.github/scripts/mvp-protected-menu.sh), [operator plan](../acceptance/mvp-protected-log-parent-2026-09-19.md) | Adjacent `test_mvp_protected_menu.py` and [isolated systemd/TLS test](../../internal/proxyinstallation/protected_log_parent_linux_test.go); reuses the qualified wrapper unchanged |
 | Retired V4 producer source | [V4 tree at commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator) | Historical readers/validators remain in `cmd/sbxr-release`; do not restore or run the producer for MVP work |
 | Current MVP live procedure | [MVP acceptance](../acceptance/mvp-live-acceptance.md), [ADR-0023](../adr/0023-mvp-live-acceptance.md) | Five normal journeys: install, subscription, credentials, renewal, and removal |
-| Find a historical V4 scenario or its controls | [Retired Operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md) | [V4 scenario procedures](../acceptance/v4-operator-procedures.md) |
-| Historical V4 evidence timing or assembly | [Retired assembly source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/assemble-evidence.py), [retired timing source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/evidence-timing.py) | [Assembly guide](../acceptance/evidence-assembly.md) |
+| Find a historical V4 scenario or its controls | [Retired Operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md) | [V4 scenario procedures](../acceptance/historical/v4-operator-procedures.md) |
+| Historical V4 evidence timing or assembly | [Retired assembly source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/assemble-evidence.py), [retired timing source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/evidence-timing.py) | [Assembly guide](../acceptance/historical/evidence-assembly.md) |
 
 The retired operator producer grouped numbered entry scripts with
 `identity-*`, `link-*`, `managed-*`/`recorder-*`, and `test_*`/`rehearse-*`.
@@ -117,13 +117,13 @@ Local fixtures and tests do not establish live qualification or Karing acceptanc
 - [ADR-0023](../adr/0023-mvp-live-acceptance.md) and [MVP live acceptance](../acceptance/mvp-live-acceptance.md): the current five-journey clean-install scope.
 - [acceptance README](../acceptance/README.md): current procedure and historical acceptance routing.
 - [research README](../research/README.md): investigation notes and their authority limits.
-- [docs/adr](../adr): decisions, including scope-specific historical contracts.
-- [docs/acceptance](../acceptance): current procedures alongside historical
-  procedures and dated reports. A report describes its named run, not current
-  host state.
-- [acceptance/RELEASE.md](../../acceptance/RELEASE.md): historical Installer-Updater
+- [ADR index](../adr/README.md): decisions grouped by applicable scope and era.
+- [Acceptance reports](../acceptance/reports/README.md): dated results, separate
+  from current procedures. A report describes its named run, not current host state.
+- [Historical acceptance](../acceptance/historical/README.md): retired procedures.
+- [Installer-Updater release procedure](../acceptance/historical/installer-updater-release.md): historical Installer-Updater
   release-pair procedure, not the current MVP procedure.
-- `docs/superpowers/`: historical design and implementation plans.
+- [Historical plans](../history/README.md): retained design and implementation plans.
 
 Local scratch and research files may contain unfinished user work. Inspect their
 Git status before reorganizing them; use tracked source and current procedures
@@ -131,5 +131,5 @@ to determine implemented behavior.
 
 Follow [the test-file and artifact locations guide](files-and-artifacts.md).
 Tests live beside their code, run artifacts under `.scratch/acceptance/`, and
-readable reports under `docs/acceptance/`. `.scratch/` is excluded from Git and
+readable reports under `docs/acceptance/reports/`. `.scratch/` is excluded from Git and
 normal source searches.

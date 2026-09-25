@@ -22,7 +22,7 @@ The public GitHub Adapter admits exactly four release assets and keeps
 `github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that
 boundary. Use the [code map](../../docs/agents/code-map.md) to locate lifecycle
 entry points and tests, and the [current operator procedure](../../docs/acceptance/mvp-live-acceptance.md)
-for live qualification. [acceptance/RELEASE.md](../../acceptance/RELEASE.md)
+for live qualification. [The historical Installer-Updater release procedure](../../docs/acceptance/historical/installer-updater-release.md)
 documents the historical Installer-Updater release-pair procedure.
 
 ## Subscription update contract (#355)

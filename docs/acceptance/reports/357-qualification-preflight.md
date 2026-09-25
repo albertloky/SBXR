@@ -46,10 +46,10 @@ The next execution plan must reconcile this issuer budget with the complete requ
 
 At `8af07d56ef606acb5d98928f8bb929af74b235ec`:
 
-- The workflow requires `sbxr-qualification-manifest-v3`, but [`newQualificationGateway`](../../cmd/sbxr-release/gateway.go) rejects every schema other than `sbxr-qualification-manifest-v1`.
-- The version-3 branches in [candidate.yml](../../.github/workflows/candidate.yml) exit before TLS/gateway preparation and invoke only the evidence collector. The collector supplies no packaged draft-download route.
-- The unchanged [installer](../../cmd/sbxr-release/bootstrap.go) downloads its pinned index/archive through `https://github.com/albertloky/SBXR/releases/download/<tag>/<asset>`. Authenticated workflow asset downloads do not install those bytes through the Owner's installer. No successful version-3 draft installation is established.
-- If the existing gateway is extended to supply lifecycle discovery, the production GitHub Adapter's [`qualificationLatest`](../../internal/softwarelifecycle/adapter/github/github.go) also currently requires a version-1, two-release manifest. Changing the gateway alone cannot establish that route.
+- The workflow requires `sbxr-qualification-manifest-v3`, but [`newQualificationGateway`](../../../cmd/sbxr-release/gateway.go) rejects every schema other than `sbxr-qualification-manifest-v1`.
+- The version-3 branches in [candidate.yml](../../../.github/workflows/candidate.yml) exit before TLS/gateway preparation and invoke only the evidence collector. The collector supplies no packaged draft-download route.
+- The unchanged [installer](../../../cmd/sbxr-release/bootstrap.go) downloads its pinned index/archive through `https://github.com/albertloky/SBXR/releases/download/<tag>/<asset>`. Authenticated workflow asset downloads do not install those bytes through the Owner's installer. No successful version-3 draft installation is established.
+- If the existing gateway is extended to supply lifecycle discovery, the production GitHub Adapter's [`qualificationLatest`](../../../internal/softwarelifecycle/adapter/github/github.go) also currently requires a version-1, two-release manifest. Changing the gateway alone cannot establish that route.
 - The historical gateway binds `127.0.0.1:8443`; reusing that setup unchanged would occupy the subscription port. This is a static conflict, not an observed live subscription failure.
 
 A local comparison exercised the compiled repository `sbxr-release gateway` command with one synthetic four-asset set, a local test TLS certificate, and two manifests differing only in `schema`. Version 1 served the bound installer over local HTTPS; version 3 exited with `sbxr qualification gateway refused`. The probe was not a signed attempt, did not install anything, and does not count as packaged acceptance. Existing `TestQualificationGateway*` checks passed; they cover the historical version-1 route.
@@ -79,7 +79,7 @@ Observed on 2026-09-01 UTC from checkout `26488284602825c7ffbb409d5bb4f6b3d41767
 
 ## Authority and immediate blocker
 
-Both native prerequisites, #355 and #356, are CLOSED; #357 reports zero open blockers. The first subscription release uses the explicit clean-install scope in [#342's approved decision](https://github.com/albertloky/SBXR/issues/342#issuecomment-5494248873), [ADR-0016](../adr/0016-v3-proxy-product-and-modules.md#approved-scope-change-first-subscription-release-uses-clean-installation), and the [qualification procedure](v3-packaged-live.md).
+Both native prerequisites, #355 and #356, are CLOSED; #357 reports zero open blockers. The first subscription release uses the explicit clean-install scope in [#342's approved decision](https://github.com/albertloky/SBXR/issues/342#issuecomment-5494248873), [ADR-0016](../../adr/0016-v3-proxy-product-and-modules.md#approved-scope-change-first-subscription-release-uses-clean-installation), and the [qualification procedure](../v3-packaged-live.md).
 
 The available SSH target `RackNerd` has an active existing proxy installation. Read-only SSH inspection found:
 

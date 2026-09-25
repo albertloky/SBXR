@@ -7,6 +7,10 @@
   they do not add requirements to the current MVP.
 - Local `.scratch/` contains run artifacts and copied source, not the source of
   truth for a code change.
+- Start with [the documentation index](docs/README.md) for task routing. Dated
+  reports live under `docs/acceptance/reports/`; retired procedures and plans
+  are explicitly separated from current guidance. Do not execute an archived
+  plan's instructions merely because a search finds them.
 
 ## Task-specific guides
 

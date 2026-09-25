@@ -81,5 +81,5 @@ examples above distinguish hosted logs from retained local incident reports.
 Successful CI is not proof of complete real-host or Karing coverage. No workflow
 was rerun, no candidate dispatched and no certificate requested for this audit.
 
-[Local run metadata, job summaries and private logs](../../.scratch/acceptance/ci-review-20260924/).
-[Approved exception and remaining implementation](late-confirmation-exception-2026-09-24.md).
+[Local run metadata, job summaries and private logs](../../../.scratch/acceptance/ci-review-20260924/).
+[Approved exception and remaining implementation](../late-confirmation-exception-2026-09-24.md).

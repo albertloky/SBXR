@@ -62,7 +62,7 @@ serving snapshot matches accepted authority and publication is durable. A proved
 older snapshot for the same link can be synchronized through reviewed Finish
 subscription change when the accepted certificate is still published and loaded.
 Inspection does not write it. See the [repair validation and existing-host
-recovery plan](../../docs/acceptance/certificate-start-coordination-repair-2026-09-19.md).
+recovery plan](../../docs/acceptance/reports/certificate-start-coordination-repair-2026-09-19.md).
 
 Ordinary proxy starts pass through the owned startup integration. Client
 Identity rotation closes every supported start route during cutover, restores

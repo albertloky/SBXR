@@ -15,7 +15,7 @@ The failed operator command expected
 workflow does not stage that helper. It installed SBXR successfully, then the
 missing-helper command returned 127 before setup began.
 
-The [current procedure](mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
+The [current procedure](../mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
 now gives one explicit command: stream the reviewed checkout's complete
 `v3-packaged-live.sh` over authenticated SSH, source it using `/dev/stdin` in a
 fresh Bash process, and invoke only its existing read-only `exact_candidate`
@@ -37,13 +37,13 @@ as current source.
 
 Tests live beside the existing boundaries:
 
-- [Candidate handoff tests](../../release_candidate_handoff_test.go) now run
+- [Candidate handoff tests](../../../release_candidate_handoff_test.go) now run
   the existing fresh-shell identity cases through streamed source as well.
   They retain mismatched manifest/request, tag, sequence, repository, commit,
   index, architecture and executable cases, missing input, and symlink refusal.
   A documentation regression requires the executable SSH example and checks its
   syntax. It failed against the original procedure before the example was added.
-- [Real SSH boundary tests](../../.github/scripts/test_ssh_boundary.py) extract
+- [Real SSH boundary tests](../../../.github/scripts/test_ssh_boundary.py) extract
   and execute the **actual documented command**, using real OpenSSH, Bash, jq,
   files and SHA-256 checks. New namespace-isolated fixtures use the helper's
   unmodified default paths and source bytes. The old `/run` helper is absent.
@@ -85,7 +85,7 @@ absent outside the test, its temporary directory empty, and no fixture process
 or listener left running. The VM was then powered off; exact process exit and
 loopback-forward absence were verified. Its disks, seed and temporary SSH keys
 were removed. Checksums, source receipts, test inputs and logs remain in the
-[private local run directory](../../.scratch/acceptance/h21/), including
+[private local run directory](../../../.scratch/acceptance/h21/), including
 `linux-ssh-rehearsal.log`, `linux-old-handoff-red.log`, `linux-focused-go.log`,
 `go-test.log`, `go-vet.log`, `guest-final-audit.json` and `cleanup.json`.
 

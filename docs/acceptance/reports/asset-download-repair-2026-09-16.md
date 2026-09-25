@@ -65,7 +65,7 @@ interrupted GET. No new release gate or persistent baseline was added.
 ## Verification and evidence
 
 Artifacts are retained in
-[the repair run directory](../../.scratch/acceptance/asset-download-repair-20260916/).
+[the repair run directory](../../../.scratch/acceptance/asset-download-repair-20260916/).
 
 | Check | Result / evidence |
 |---|---|

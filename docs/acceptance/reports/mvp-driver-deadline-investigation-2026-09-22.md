@@ -25,11 +25,11 @@ performed. The prior uncommitted observer repair is preserved.
 ## Source and feedback loop
 
 The retained symptom was `AssertionError: ('deadline', [])` in
-[the driver/wrapper fixture](../../.github/scripts/test_mvp_protected_menu.py).
+[the driver/wrapper fixture](../../../.github/scripts/test_mvp_protected_menu.py).
 The old log did not preserve the driver's refusal phase at that assertion.
 
 Source inspection establishes that `drive` in
-[`v3-menu-session.py`](../../.github/scripts/v3-menu-session.py) computes its
+[`v3-menu-session.py`](../../../.github/scripts/v3-menu-session.py) computes its
 absolute monotonic deadline **before** creating `MenuSession`, which launches
 the protected-menu executable. The timeout includes wrapper startup, menu work
 and completion; it is not a fresh three-second timer started when the fixture
@@ -37,7 +37,7 @@ becomes ready. The fixture's deadline case expects all three process records,
 an acquired kernel lock and the protected window before timeout cleanup.
 
 Artifacts are retained under
-[`.scratch/acceptance/d22/`](../../.scratch/acceptance/d22/). A clearly marked,
+[`.scratch/acceptance/d22/`](../../../.scratch/acceptance/d22/). A clearly marked,
 run-local timing probe loaded the unchanged fixture source and observed parent
 subprocess elapsed time, atomic journal-file timestamps, driver output/refusal,
 log mode and retained window files. It changed no subject-process code or

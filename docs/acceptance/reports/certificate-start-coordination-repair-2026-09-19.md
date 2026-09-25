@@ -4,12 +4,12 @@ Implemented on `main`, based on `cf2e89aae5cfa56ae316505d24f16d50b8a25069`.
 The initial local-only phase below is repair validation, not release acceptance.
 During that phase the VPS was not contacted or changed, no CA certificate was
 requested, and no candidate or release workflow was dispatched. The later
-Owner-authorized continuation is recorded in the next section. The current [MVP procedure](mvp-live-acceptance.md)
+Owner-authorized continuation is recorded in the next section. The current [MVP procedure](../mvp-live-acceptance.md)
 and its five journeys are unchanged. Existing untracked reports were preserved.
 The follow-up handoff work is recorded below and in
-[the exact VPS runbook](v3.1.75-snapshot-recovery-runbook.md).
+[the exact VPS runbook](../v3.1.75-snapshot-recovery-runbook.md).
 
-[Run artifacts](../../.scratch/acceptance/c19/) contain the before/after logs,
+[Run artifacts](../../../.scratch/acceptance/c19/) contain the before/after logs,
 source overlays used to reproduce the original defects, VM observations, and
 the final diff and file identities. Synthetic certificates were generated
 locally for tests; they were not issued by a public CA.
@@ -19,7 +19,7 @@ locally for tests; they were not issued by a public CA.
 The Owner subsequently authorized continued repairs, subagent coordination,
 VPS acceptance and cleanup, commits and push. The Owner chose to finish
 preparation and wait for fresh CA capacity rather than use another host.
-[Continuation artifacts](../../.scratch/acceptance/r20/) retain diagnostics,
+[Continuation artifacts](../../../.scratch/acceptance/r20/) retain diagnostics,
 read-only VPS observations and Linux/systemd results. No new candidate has been
 dispatched and no CA issuance has been performed in this continuation.
 
@@ -37,7 +37,7 @@ The active-serving driver retains its original ten-minute work allowance plus
 exactly 210 seconds for three 60-second refills and one 30-second refill. The
 earlier ten-minute driver reached its context deadline during the final planned
 refill, after all helper cases had passed but before the menu checks; that
-[incomplete run](../../.scratch/acceptance/r20/active-budget-failure.log) is
+[incomplete run](../../../.scratch/acceptance/r20/active-budget-failure.log) is
 retained as a failure. Helper and individual subprocess deadlines are unchanged.
 
 A further startup ordering bug was reproduced with real systemd: an ordinary
@@ -68,7 +68,7 @@ Existing protected-parent checks correctly refuse it. The earlier host-specific
 The exact maintenance window uses a protected restoration record, a bounded
 private command group and temporary 0755 permissions, then restores the same
 directory to 0775. The final wrapper and supervisor passed the complete
-[root Linux qualification](../../.scratch/acceptance/r20/log-parent-wrapper/final/qualification.log),
+[root Linux qualification](../../../.scratch/acceptance/r20/log-parent-wrapper/final/qualification.log),
 including stdin, nonzero status, timeout, delayed descendants, leak escalation,
 SIGKILL/live-group refusal, explicit recovery, channel contention, partial
 cleanup, unsafe state, changed boot/PID identity and three cancellation-before-
@@ -98,7 +98,7 @@ not change the product or the MVP procedure.
 The final helper SHA256
 `f1d8beeb915c7c5fd7525f7641d15749cc2ee5ba5e94504c90d85060ceb237e4`
 passed the complete
-[post-reboot executable handoff](../../.scratch/acceptance/r20/post-reboot-final.log)
+[post-reboot executable handoff](../../../.scratch/acceptance/r20/post-reboot-final.log)
 in 444.56 seconds. The exact original executable first refused removal for the
 mismatch. The actual helper then passed changed-input/unsafe-file refusal,
 all six real lock-contention cases, interruption after runtime-lock creation,
@@ -111,7 +111,7 @@ without changes, then confirmed Complete removal and the Not installed result.
 The exact wrapper restored the log directory and removed its recovery state.
 
 The same final helper passed the complete
-[active-serving executable handoff](../../.scratch/acceptance/r20/active-final.log)
+[active-serving executable handoff](../../../.scratch/acceptance/r20/active-final.log)
 in 648.16 seconds. It exercised the original accepted-generation-2 / snapshot-
 generation-1 state with loaded TLS, all changed-input, unsafe-file and real-lock
 refusals, interruptions around publication, idempotent completion, preservation
@@ -134,7 +134,7 @@ holding the lock. Ordinary proxy, serving and recorder roles remain existing
 only. Optional canonical ownership authority preserves legacy record bytes and
 removal; setup, update capability admission, cleanup and packaged footprint
 checks cover the new unit and enablement link. Focused checks and independent
-caller review passed. The [exact systemd/reboot rehearsal](../../.scratch/acceptance/r20/boot-provisioning/vm-results/vm-validation-summary.txt)
+caller review passed. The [exact systemd/reboot rehearsal](../../../.scratch/acceptance/r20/boot-provisioning/vm-results/vm-validation-summary.txt)
 also passed: ordinary roles refused a missing lock, the new unit created only
 the canonical safe lock, repeated starts preserved it, real contention and an
 unsafe 0640 inode refused, and an actual reboot produced a new boot identity
@@ -212,7 +212,7 @@ DNS listeners; every other preservation comparison had passed. This was an
 overly strict runbook assertion. The corrected comparison permits only that
 PID-1 descriptor renumbering on preserved port-22 rows after an identical SSH
 service fingerprint. The adjacent
-[runbook regression](../../.github/scripts/sbxr-snapshot-recovery/test_runbook.py)
+[runbook regression](../../../.github/scripts/sbxr-snapshot-recovery/test_runbook.py)
 executes the real documented Python program: the original predicate fails the
 captured case, the corrected predicate passes, and changed processes, endpoints,
 queues, SSH descriptors, non-SSH descriptors, unit fingerprints, and extra or
@@ -227,12 +227,12 @@ passed. All helper/wrapper state, transferred inputs and the protected backup
 were deleted only after the final checks and retention of 35 secret-safe
 observations. No private-key backup was copied to this run's local evidence.
 
-[Final read-only checks](../../.scratch/acceptance/r20/vps-execution/final-readonly.log)
+[Final read-only checks](../../../.scratch/acceptance/r20/vps-execution/final-readonly.log)
 passed at `2026-09-19T08:08:10Z`: the installation and handoff directory are
 absent, owned units are unloaded/inactive with zero PIDs, 443/8443 have no
 listeners, SSH/rsyslog/the shared timer are active, and the original log-parent
 identity and 0775 mode are restored. The safe empty shared runtime lock remains
-by design. [Execution evidence](../../.scratch/acceptance/r20/vps-execution/)
+by design. [Execution evidence](../../../.scratch/acceptance/r20/vps-execution/)
 retains both initial refusals and their reviewed corrections. These observations
 are historical after capture. This validates maintenance and original-menu
 cleanup; it does not qualify a new candidate or complete the MVP journeys.
@@ -241,7 +241,7 @@ The disposable Linux VM was shut down normally after its fixture cleanup.
 Its exact QEMU PID exited and loopback SSH port closed; its disk, seed,
 credentials, copied binaries and test executables were removed. Useful logs,
 manifests, diagnostic source and the local future-reference helper/plan remain
-under the private [run directory](../../.scratch/acceptance/r20/).
+under the private [run directory](../../../.scratch/acceptance/r20/).
 
 ## Initial certificate and ordinary-start changes
 
@@ -361,7 +361,7 @@ synthetic installed records are never deployment artifacts.
 ## One-time executable recovery handoff — local follow-up
 
 The standalone maintenance helper is implemented under
-[`.github/scripts/sbxr-snapshot-recovery`](../../.github/scripts/sbxr-snapshot-recovery/main.go).
+[`.github/scripts/sbxr-snapshot-recovery`](../../../.github/scripts/sbxr-snapshot-recovery/main.go).
 It is build-tag isolated from the installed product and pins the retained verified
 v3.1.75 amd64 executable. A canonical protected plan binds the Installed Record,
 complete Ownership Record, exact source snapshot and exact target hash. The
@@ -381,7 +381,7 @@ and proves quiescence. Both archive generations stay
 pinned even on a retry after publication. Unknown state and contention refuse;
 partial staging is preserved for inspection rather than deleted or adopted.
 
-[Follow-up run artifacts](../../.scratch/acceptance/c19h/) retain the executable
+[Follow-up run artifacts](../../../.scratch/acceptance/c19h/) retain the executable
 identities, exact helper commands, VM results, original menu transcripts,
 reviewed diff and test results. The historical VPS plan and expected snapshots
 remain private local handoff files; the runbook publishes only their hashes.
@@ -421,11 +421,11 @@ weakened, and the failure was not replaced with a passing retry. Isolating it
 required another investigation; work stopped under the Owner's explicit stop
 condition. The helper, draft runbook and existing repairs were left uncommitted.
 
-Evidence: [final failed run](../../.scratch/acceptance/c19h/rehearsal-final.log),
-[first preliminary pass](../../.scratch/acceptance/c19h/rehearsal-sixth.log),
-[second preliminary pass](../../.scratch/acceptance/c19h/rehearsal-seventh.log),
-[exact build and execution identities](../../.scratch/acceptance/c19h/execution-identities.json),
-and [final systemd journal](../../.scratch/acceptance/c19h/vm-results/systemd-final.log).
+Evidence: [final failed run](../../../.scratch/acceptance/c19h/rehearsal-final.log),
+[first preliminary pass](../../../.scratch/acceptance/c19h/rehearsal-sixth.log),
+[second preliminary pass](../../../.scratch/acceptance/c19h/rehearsal-seventh.log),
+[exact build and execution identities](../../../.scratch/acceptance/c19h/execution-identities.json),
+and [final systemd journal](../../../.scratch/acceptance/c19h/vm-results/systemd-final.log).
 The preliminary menu transcripts are explicitly named `preliminary-*` in the
 private VM results directory; they must not be attributed to the final run.
 
@@ -470,13 +470,13 @@ already-corrected harness problems.
 Fixture cleanup passed after the final failure. A separate read-only audit
 confirmed all fixture paths absent, no sing-box user/group, no test address or
 listeners, no owned firewall/NAT rules, restored `/etc/hosts` and `/var/log` mode,
-and active SSH. See [cleanup observations](../../.scratch/acceptance/c19h/linux-cleanup-final.json).
+and active SSH. See [cleanup observations](../../../.scratch/acceptance/c19h/linux-cleanup-final.json).
 The VM was shut down and its process and loopback SSH port were proved absent.
 Its disk, temporary fixtures, test executable, duplicate input assets and
 ephemeral keys were removed. Useful logs and the blocked private handoff remain;
-see the [local run notes](../../.scratch/acceptance/c19h/README.md).
+see the [local run notes](../../../.scratch/acceptance/c19h/README.md).
 
-The [future VPS runbook](v3.1.75-snapshot-recovery-runbook.md) contains fresh
+The [future VPS runbook](../v3.1.75-snapshot-recovery-runbook.md) contains fresh
 read-only preflight checks, pinned identities, protected backups, exact invocation,
 interruption recovery, postchecks, original-menu Complete removal and final
 preservation/cleanup checks. Its operational objective is removal without first

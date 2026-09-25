@@ -94,16 +94,22 @@ does not establish incoming-upgrade behavior, natural timer firing, or naturally
 due client auto-refresh.
 
 The former [V4 operator producer](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator),
-its [25-scenario procedure](docs/acceptance/v4-operator-procedures.md), and its
+its [25-scenario procedure](docs/acceptance/historical/v4-operator-procedures.md), and its
 evidence guides are historical for their named attempts. The producer is retired
 from the working tree; historical Go readers and validators remain so existing
 records retain their meaning. Dated reports in [docs/acceptance](docs/acceptance)
-describe individual attempts. The [Installer-Updater release-pair procedure](acceptance/RELEASE.md)
+describe individual attempts. The [Installer-Updater release-pair procedure](docs/acceptance/historical/installer-updater-release.md)
 is also historical.
 
 `v3.1.0` / Release Sequence `83` has an
 [Owner-approved exception](docs/adr/0017-one-release-owner-exception.md) with
 incomplete live VPS and Karing qualification. It applies only to that release.
+
+`v3.1.81` / Release Sequence `159` was
+[published stable on 2026-09-25](docs/acceptance/reports/v3.1.81-stable-publication-2026-09-25.md).
+Its [separate bounded exception](docs/adr/0024-r24-late-confirmation-supplement.md)
+reuses prior v3.1.80 live evidence and late Owner confirmation; no fresh live run
+was performed. The failed v3.1.80 qualification remains burned.
 
 ## Historical full-product releases
 
