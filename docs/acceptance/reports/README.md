@@ -9,6 +9,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [Installer repair and fresh readiness — 2026-09-26](installer-repair-readiness-2026-09-26.md)
+  — repair passed native amd64/arm64 verification; fresh dispatch stopped before
+  candidate creation because the reconstructed four-operation CA budget is short.
 - [Scheduling investigation and shared menu deadlines — 2026-09-26](scheduling-and-menu-deadlines-2026-09-26.md)
 - [Recovery-window and menu-review repairs — 2026-09-26](ordinary-recurring-recovery-window-repair-2026-09-26.md)
   — separately approved observer and driver repairs; both isolated recovery
@@ -17,6 +20,12 @@ a fresh clone. Start new work with the [current guide](../README.md).
 - [Ordinary recurring acceptance — implementation and local validation, 2026-09-25](ordinary-recurring-implementation-2026-09-25.md)
   — eight-scenario tooling and source-reader compatibility; no fresh live or
   packaged upgrade pass.
+
+### v3.1.83
+
+- [v3.1.83 / 161 — recurring live attempt, clean installer refusal](v3.1.83-recurring-live-installer-refusal-2026-09-26.md)
+  — three packaged upgrade/recovery scenarios accepted; clean installation
+  failed. Cleanup verified, candidate burned, stable v3.1.81 unchanged.
 
 ### v3.1.81
 
