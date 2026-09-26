@@ -57,6 +57,8 @@ func main() {
 	mode := os.Getenv("SBXR_INTERRUPT_MODE")
 	fmt.Println(menu)
 	scan.Scan()
+	// Match the real terminal's review-before-confirmation order.
+	fmt.Println("Code: SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE")
 	if mode == "wrong-prompt" {
 		fmt.Println("Start proxy setup? [y/N]")
 	} else {

@@ -15,6 +15,13 @@ That clears the named startup blocker, not the native CI, fresh source/target,
 host/package/CA and attended-session prerequisites below. No live pass or
 operational orphan-channel deletion route is added.
 
+The [September 26 recovery-window and menu-review repairs](reports/ordinary-recurring-recovery-window-repair-2026-09-26.md)
+add exact checkpoint observations and separately approved Update/Recover
+confirmation handling. Both isolated terminal/controller/observer/Recover
+directions and failure cleanups pass. This clears those named local blockers,
+not the native CI, fresh release/host/CA checks, attended-session availability
+or new attempt authorization below. It is not packaged upgrade or live proof.
+
 ## Prepare before dispatch, not during a failing attempt
 
 1. Refresh public release state and verify the source's immutable metadata,
@@ -169,6 +176,14 @@ give only the product child `umask 022` while preserving private wrapper files.
 Require exit 0, the matching interruption receipt, dead product processes, and
 the wrapper's original-mode restoration before subsequent outside observations
 or public Recover. The controller does not authorize or execute recovery itself.
+Before that separate Recover window, use the source-owned observer's
+[`recovery-precommit` / `recovery-postcommit` phase](mvp-protected-log-parent-2026-09-19.md#controlled-update-recovery-windows)
+with the same independently reviewed five-field expectation and the verified
+manifest digest. Do not mislabel the interrupted transaction as `running`:
+Prepared deliberately retains the exact two-link prior executable. Only the
+proved bound relationship is admitted; other files keep their one-link rules.
+After successful public Recover, use the normal `running` observation, including
+transaction-residue absence, before continuing the journey.
 On failure preserve the transcript/checkpoint and assess legal cleanup; use the
 existing explicit wrapper restoration only after its quiescence checks pass.
 

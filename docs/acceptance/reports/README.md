@@ -9,6 +9,10 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [Recovery-window and menu-review repairs — 2026-09-26](ordinary-recurring-recovery-window-repair-2026-09-26.md)
+  — separately approved observer and driver repairs; both isolated recovery
+  directions and failure-cleanup checks pass. No packaged upgrade or live pass.
+
 - [Ordinary recurring acceptance — implementation and local validation, 2026-09-25](ordinary-recurring-implementation-2026-09-25.md)
   — eight-scenario tooling and source-reader compatibility; no fresh live or
   packaged upgrade pass.

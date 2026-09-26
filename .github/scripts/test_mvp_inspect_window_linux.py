@@ -49,7 +49,7 @@ def write(path, body, mode=0o600):
     path.chmod(mode)
 
 
-def main(deb):
+def main(deb, recovery_binaries=()):
     if sys.flags.optimize:
         raise RuntimeError('fixture-requires-enabled-assertions')
     marker = Path('/run/sbxr-isolated-test-host')
@@ -72,12 +72,15 @@ def main(deb):
     initial_packages = run(['dpkg-query', '-W', '-f=${Package}\t${Status}\n']).stdout
     with tempfile.TemporaryDirectory(prefix='observer-linux-') as temp, contextlib.ExitStack() as cleanup:
         work = Path(temp)
+        def retained_window():
+            return any(os.path.lexists(ROOT / name) for name in
+                       ('window.state', 'window.state.control', 'window.state.result'))
         def directory(path):
             path.mkdir(mode=0o700)
-            cleanup.callback(path.rmdir)
+            cleanup.callback(lambda: None if retained_window() else path.rmdir())
         def file(path, body, mode=0o600):
             write(path, body, mode)
-            cleanup.callback(lambda: path.unlink(missing_ok=True))
+            cleanup.callback(lambda: None if retained_window() else path.unlink(missing_ok=True))
         for path in (ROOT, OWNED, Path('/etc/letsencrypt'), Path('/var/lib/letsencrypt'), Path('/var/log/letsencrypt')):
             directory(path)
         for parent in (Path('/var/lib/snapd'), Path('/var/lib/snapd/snaps'), Path('/var/lib/snapd/cache')):
@@ -213,6 +216,10 @@ LogLevel ERROR
         # retained wrapper state untouched if restoration itself refuses.
         package_attempted = False
         def purge():
+            # A failed inner recovery fixture must not lose the very wrapper,
+            # log child or product material needed to assess retained state.
+            if retained_window():
+                return
             if package_attempted:
                 run(['apt-mark', 'unhold', 'sing-box'])
                 run(['dpkg', '--purge', 'sing-box'])
@@ -326,6 +333,11 @@ LogLevel ERROR
         finally:
             drift.rmdir()
         check(reason='Expecting value', extra_options=['-o', 'StdinNull=yes'])
+        if recovery_binaries:
+            from test_mvp_window_recovery_linux import rehearse
+            recovery_work = work / 'recovery'
+            recovery_work.mkdir(mode=0o700)
+            rehearse(recovery_work, *recovery_binaries, expected, options)
         # No window is opened on any failed observer call; successful windows
         # return before re-observation and the complete purge window is bounded.
         assert observer.log_observation() == {k: expected[k] for k in ('log_parent', 'log_children')}
@@ -362,5 +374,5 @@ if __name__ == '__main__':
         raise KeyboardInterrupt
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, interrupted)
-    assert len(sys.argv) == 2, 'supply the verified pinned amd64 DEB'
-    main(Path(sys.argv[1]).resolve())
+    assert len(sys.argv) in (2, 4), 'supply verified pinned amd64 DEB and optional source/candidate diagnostic binaries'
+    main(Path(sys.argv[1]).resolve(), tuple(Path(p).resolve() for p in sys.argv[2:]))

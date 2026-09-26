@@ -27,6 +27,14 @@ treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
 
+The shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
+`STATUS-RECOVERY-REQUIRED` lifecycle review code exactly once before its exact
+confirmation prompt. The ordinary action path and interruption controller use
+the same rule. Missing, unexpected or duplicate review codes never authorize
+confirmation; final action results and original deadlines remain separate.
+`test_v3_menu_session.py` exercises success/refusal/deadline cases with actual
+subprocess input, alongside the combined terminal/lifecycle rehearsal below.
+
 For the current MVP's installed-candidate check, use the
 [documented SSH handoff](../../docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh).
 It streams this module and calls only `exact_candidate`; the current transport
@@ -77,10 +85,11 @@ synthetic native Go fixture from `testdata/update-interrupt-fixture`. It tests
 18 success/refusal/cancellation cases with real Linux tracing and cleanup,
 not a packaged upgrade or CA operation. `v3_update_interrupt_test.go` provides
 portable syntax checks and an opt-in `SBXR_UPDATE_CONTROL_VM=1` root VM wrapper.
-The extended amd64 rehearsal currently fails early-deadline wrapper cleanup;
-this controller is **not cleared for live dispatch**. Preserve that failure and
-follow the [repair report](../../docs/acceptance/reports/ordinary-recurring-umask-repair-2026-09-25.md)
-before another run. Do not treat the ARM64 fixture pass as resolving it.
+The early-deadline wrapper cleanup failure is retained in the
+[mask-repair report](../../docs/acceptance/reports/ordinary-recurring-umask-repair-2026-09-25.md);
+the separately approved [startup repair](../../docs/acceptance/reports/ordinary-recurring-cleanup-repair-2026-09-25.md)
+records its isolated resolution. Neither is live qualification or blanket
+dispatch permission; use the current procedure and fresh prerequisite gates.
 The new recorder handoff adds four actual streamed-SSH cases to the earlier 21.
 
 The read-only `mvp-inspect-window.py` replaces run-local package/window probes.
@@ -89,7 +98,15 @@ It queries the installed held package independently of the deliberately removed
 DEB and compares the Ownership Record string, not the declaration object.
 Snap images may have snapd cache hard links; root ownership, regular-file type,
 non-writable group/other permissions, no xattrs, and exact receipts are still
-required. Other protected files keep the one-link rule.
+required. Other protected files keep the one-link rule, except the exact
+source/prior executable relationship admitted by `recovery-precommit`:
+independently bound bytes, root:root `0755`, the same inode and exactly two links.
+`recovery-postcommit` requires distinct one-link active/prior executables.
+Both phases require the original active request and verified manifest digest,
+exact schema-2 transaction/ownership and all ordinary package/window checks.
+They are only for Recover after successful controlled interruption; ordinary
+`running` refuses any transaction residue. See the
+[recovery SSH handoff](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md#controlled-update-recovery-windows).
 `test_mvp_inspect_window.py` covers portable contracts and, when run as root on
 Linux, real snap/cache hard links and metadata/content refusals;
 `test_mvp_inspect_window_linux.py VERIFIED_DEB` exercises the exact documented
@@ -100,6 +117,21 @@ root amd64 Linux VM with absent fixture resources. SBXR records/menu and snap
 CLI/images are synthetic, with real snap/cache hard links; no CA or product
 acceptance is claimed. Keep egress
 restricted. The opt-in root Go wrapper uses `SBXR_MVP_OBSERVER_DEB`.
+
+`test_mvp_recovery_window.py` adds exact bound-file, hard-link relationship,
+request/deadline, schema and race refusals; filesystem cases require root Linux.
+With optional `SOURCE_FIXTURE CANDIDATE_FIXTURE` arguments, the Linux observer
+suite also runs `test_mvp_window_recovery_linux.py` inside that same isolated
+dpkg/SSH environment. Build both diagnostic executables from
+`testdata/window-recovery-fixture`; for the unchanged-source comparison, copy
+only that fixture into a disposable archive of v3.1.81 and build it there.
+The real terminal and lifecycle Update/Recover execute through SSH, the
+controller and protected windows. Release, proxy admission/runtime and snap
+seams are synthetic; no trusted target is fabricated for a live attempt.
+The root Go wrapper builds the current fixture and accepts an optional
+`SBXR_MVP_RECOVERY_SOURCE` frozen diagnostic binary. The fixture is **not** the
+unchanged packaged source binary and cannot establish release/network trust,
+real subscription runtime, outside traffic or live qualification.
 
 `python3 .github/scripts/sbxr-snapshot-recovery/test_runbook.py` executes the
 runbook's actual listener-comparison program against preservation and refusal

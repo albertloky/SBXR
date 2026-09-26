@@ -329,7 +329,7 @@ def main():
                                    protected_wrapper=args.protected_log_parent)
         try:
             session.choose('Update')
-            session.expect_prompt(menu.PROMPTS['Update'])
+            session.expect_prompt(menu.PROMPTS['Update'], review_code=menu.REVIEW_CODES['Update'])
             session.write('y\n')
             while True:
                 line = session.stream.line(session.deadline)

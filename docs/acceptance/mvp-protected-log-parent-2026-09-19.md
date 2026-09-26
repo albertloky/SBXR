@@ -162,9 +162,10 @@ Snap images may have multiple hard links because snapd uses a content cache.
 The observer still requires regular root:root files, no group/other write bits
 or extended attributes, and the exact reviewed version, revision, size and
 SHA-256. It does not require a cache entry or a fixed link count and does not
-modify either link. Operator files, installed records, executables and lock
-files retain their one-link requirement; this exception changes no product
-trust check.
+modify either link. Operator files, installed records and lock files retain
+their one-link requirement. Executables also retain it outside the exact
+two-link Prepared relationship proved by the separate recovery phase below;
+the snap exception changes no product trust check.
 
 Use `phase=not-installed` before installation; `not-set-up` after successful
 installation/streamed candidate verification but before Start setup; `running`
@@ -172,9 +173,10 @@ after successful setup and before/after each subsequent menu process; and
 `removed` after successful Complete removal, before deleting operator files.
 The first, second and last phases require package absence; only `not-set-up`
 expects the SBXR executable and Installed Record to remain. A transition or
-incomplete state is **not** Running; stop and review it instead of relabelling
-it to make this check pass. Reviewed failure cleanup still needs the separate
-legal-action assessment described below.
+incomplete state is **not** Running. The two exact controlled update checkpoints
+use the separate recovery phases below; other incomplete states still stop for
+review rather than being relabelled. Reviewed failure cleanup still needs the
+separate legal-action assessment described below.
 
 Set `window_seconds=900`, or the smaller reviewed driver/collector bound, and
 set `observation_file` to a fresh local run artifact. Use the same authenticated
@@ -207,6 +209,55 @@ This supplements, rather than replaces, installed-candidate verification,
 product menu Review, full protected-footprint absence after removal, logging
 health, CA budget and outside/Karing observations. It is a point-in-time check,
 not a lock against subsequent unrelated host activity or an acceptance pass.
+
+### Controlled update recovery windows
+
+After a successful current `mvp-update-interrupt.py` receipt, dead traced product
+processes, original log-mode restoration and absent wrapper state/channels, use
+`recovery-precommit` or `recovery-postcommit` **before the public Recover menu**.
+Do not use `running` for this state. After Recover succeeds, return to `running`,
+which requires no update transaction material and keeps the one-link rule.
+
+Keep the same independently reviewed five-field interruption expectation from
+[ordinary recurring acceptance](ordinary-recurring-live.md#controlled-update-interruption)
+as `recovery_expectation_file`. Add `qualification_manifest_sha256` to the normal
+window expectation from the already verified signed manifest. Never derive
+expected source/candidate digests from transaction staging. The recovery observer
+requires the current private collector request to match that manifest, source
+tag and named interruption scenario, with an active original 30-minute deadline.
+Choose `window_seconds` no greater than 900 and smaller than the remaining
+request time, allowing time for the observation itself. Recover's driver must
+also retain the original request cap; this check never extends it.
+
+The observer checks the exact schema-2 checkpoint, unchanged schema-2 Ownership
+Record, all independently bound executable/Installed Record bytes, exact private
+metadata, request binding and absence of unexpected staging. At `Prepared` only,
+the active and prior executable must be **the same device/inode with exactly two
+links**, both root:root `0755`; staged candidate material remains one-link. At
+`Committed`, the active candidate and prior executable must be distinct one-link
+files and the consumed candidate slots absent. No arbitrary hard-link allowance,
+partial recovery shape, source modification or inferred successful interruption
+is admitted. All existing package, snap, log-identity, timer, idle-writer and
+unheld-lock checks still run; a live menu or interruption controller refuses.
+
+<!-- mvp-recovery-window-observer-ssh -->
+```sh
+case "$phase" in recovery-precommit|recovery-postcommit) ;; *) exit 1 ;; esac
+case "$window_seconds" in ''|*[!0-9]*) exit 1 ;; esac
+expectation_b64=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1], "rb").read()).decode())' "$expectation_file")
+recovery_b64=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1], "rb").read()).decode())' "$recovery_expectation_file")
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  "${ssh_options[@]}" "$acceptance_host" \
+  "python3 - '$phase' '$expectation_b64' --window-seconds '$window_seconds' --recovery-expectation-base64 '$recovery_b64'" \
+  < .github/scripts/mvp-inspect-window.py > "$observation_file"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["phase"] == sys.argv[2] and d["operator_files_verified"] and d["locks_unheld"] and d["writers_idle"] and d["recovery"]["bound_material_verified"] and d["recovery"]["checkpoint"] == {"recovery-precommit":"Prepared","recovery-postcommit":"Committed"}[sys.argv[2]]' "$observation_file" "$phase"
+```
+
+Require exit 0, review the receipt and then invoke only the installed source's
+precommit Recover or installed candidate's postcommit Recover through the
+existing launcher with `--protected-wrapper`. This read-only prerequisite does
+not authorize repair after an unexpected failure, replace product Review/Recover
+admission or establish outside access. Any refusal stops the attempt.
 
 ## Staging and invocation
 

@@ -29,6 +29,12 @@ PROMPTS = {
     "Update": "Update SBXR? [y/N]",
     "Recover": "Recover SBXR? [y/N]",
 }
+# Lifecycle review results precede these confirmation prompts. They are not
+# final action results and must occur exactly once before sending approval.
+REVIEW_CODES = {
+    "Update": "SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE",
+    "Recover": "SOFTWARE-LIFECYCLE-STATUS-RECOVERY-REQUIRED",
+}
 REMOVAL_PROMPT = "Type REMOVE SBXR to confirm Complete removal. Any other input cancels."
 DETAILS_PROMPT = "Press Enter to return to the menu."
 DISCLOSURE_PROMPT = (
@@ -147,17 +153,24 @@ class MenuSession:
                 self.write(selection + "\n")
                 return
 
-    def expect_prompt(self, expected):
+    def expect_prompt(self, expected, *, review_code=None):
+        reviewed = False
         while True:
+            if time.monotonic() >= self.deadline:
+                raise ProtocolError("output-deadline")
             line = self.stream.line(self.deadline)
             if line is None:
                 raise ProtocolError("exit-before-prompt")
             if line == expected:
+                if review_code is not None and not reviewed:
+                    raise ProtocolError("review-missing")
                 return
             if line.endswith("? [y/N]") or line.startswith("Type REMOVE SBXR to confirm"):
                 raise ProtocolError("prompt-mismatch")
             if line.startswith("Code: "):
-                raise ProtocolError("action-refused")
+                if review_code is None or reviewed or line != "Code: " + review_code:
+                    raise ProtocolError("action-refused")
+                reviewed = True
 
     def wait_code(self, expected, *, terminal=False):
         found = False
@@ -351,7 +364,7 @@ def drive(args, cancelled=None):
                 prompt = PROMPTS.get(args.label)
                 if prompt is None:
                     raise ProtocolError("confirmation-unsupported")
-                session.expect_prompt(prompt)
+                session.expect_prompt(prompt, review_code=REVIEW_CODES.get(args.label))
                 session.write("y\n")
                 if LINK_RESULTS.get(args.label) == args.expected:
                     session.wait_continuation(LINK_PROMPT)

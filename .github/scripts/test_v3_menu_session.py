@@ -31,6 +31,8 @@ if spec["kind"] in ("hang","leader-exit"):
     while not (root/"descendant.pid").exists() and time.monotonic()<deadline: time.sleep(.01)
     if spec["kind"] == "leader-exit": os._exit(0)
     while True: time.sleep(10)
+for code in spec.get("review_codes", []): print("Code: "+code,flush=True)
+if spec.get("prompt_delay"): time.sleep(spec["prompt_delay"])
 if spec.get("prompt"):
     print(spec["prompt"],flush=True); answer=sys.stdin.readline().rstrip("\n"); event({"answer":answer})
 kind=spec["kind"]
@@ -50,12 +52,12 @@ print("1. View details\n0. Exit",flush=True); event({"exit":sys.stdin.readline()
 '''
 
 class MenuSessionDriverTest(unittest.TestCase):
-    def invoke(self,spec,*arguments):
+    def invoke(self,spec,*arguments,timeout=5):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); executable=root/"sbxr"
             executable.write_text(FIXTURE); executable.chmod(0o700)
             env=dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec))
-            result=subprocess.run([sys.executable,str(DRIVER),*arguments,"--executable",str(executable),"--timeout","5"],
+            result=subprocess.run([sys.executable,str(DRIVER),*arguments,"--executable",str(executable),"--timeout",str(timeout)],
                                   env=env,text=True,capture_output=True,timeout=10)
             events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()] if (root/"events.jsonl").exists() else []
             return result,events
@@ -117,6 +119,54 @@ class MenuSessionDriverTest(unittest.TestCase):
                 result,events=self.invoke(spec,"action",label,code)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(events,[{"selected":"7"},{"exit":"0"}])
+
+    def lifecycle_spec(self, label):
+        return {"label":label, "prompt":label+" SBXR? [y/N]", "kind":"action",
+                "review_codes":["SOFTWARE-LIFECYCLE-" + ("CHECK-UPDATE-AVAILABLE" if label == "Update" else "STATUS-RECOVERY-REQUIRED")],
+                "expected":"SOFTWARE-LIFECYCLE-" + ("UPDATE-INSTALLED" if label == "Update" else "RECOVER-PRIOR-RESTORED")}
+
+    def test_lifecycle_confirmation_consumes_exact_review_before_prompt(self):
+        for label in ("Update", "Recover"):
+            with self.subTest(label=label):
+                spec=self.lifecycle_spec(label)
+                result,events=self.invoke(spec,"action",label,spec["expected"],"--confirmation","yes")
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(events,[{"selected":"7"},{"answer":"y"},{"exit":"0"}])
+
+    def test_lifecycle_missing_wrong_duplicate_or_refused_review_never_confirms(self):
+        for label in ("Update", "Recover"):
+            good=self.lifecycle_spec(label)["review_codes"][0]
+            for codes,phase in (([],"review-missing"), ([good,good],"action-refused"),
+                                (["SOFTWARE-LIFECYCLE-CHECK-FAILED"],"action-refused"),
+                                ([good,"SOFTWARE-LIFECYCLE-UPDATE-RELEASE-REFUSED"],"action-refused"),
+                                ([good+" "],"action-refused"),
+                                (self.lifecycle_spec("Recover" if label == "Update" else "Update")["review_codes"],"action-refused")):
+                with self.subTest(label=label,codes=codes):
+                    spec=self.lifecycle_spec(label); spec["review_codes"]=codes
+                    result,events=self.invoke(spec,"action",label,spec["expected"],"--confirmation","yes")
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertIn("phase="+phase,result.stderr)
+                    self.assertEqual(events,[{"selected":"7"}])
+
+    def test_lifecycle_wrong_prompt_or_expired_deadline_never_confirms(self):
+        for label in ("Update", "Recover"):
+            for failure in ("prompt", "deadline"):
+                with self.subTest(label=label,failure=failure):
+                    spec=self.lifecycle_spec(label)
+                    if failure == "prompt": spec["prompt"]="Start proxy setup? [y/N]"
+                    else: spec["prompt_delay"]=3
+                    result,events=self.invoke(spec,"action",label,spec["expected"],"--confirmation","yes",timeout=1)
+                    self.assertNotEqual(result.returncode,0)
+                    self.assertIn("phase="+("prompt-mismatch" if failure == "prompt" else "output-deadline"),result.stderr)
+                    self.assertEqual(events,[{"selected":"7"}])
+
+    def test_review_code_is_not_allowed_for_unrelated_confirmation(self):
+        spec={"label":"Start setup", "prompt":"Start proxy setup? [y/N]", "kind":"action",
+              "review_codes":["SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE"], "expected":"PROXY-INSTALLATION-SETUP-COMPLETE"}
+        result,events=self.invoke(spec,"action",spec["label"],spec["expected"],"--confirmation","yes")
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("phase=action-refused",result.stderr)
+        self.assertEqual(events,[{"selected":"7"}])
 
     def test_enable_subscription_consumes_exact_link_pause(self):
         spec={"label":"Enable subscription","prompt":"Enable subscription? [y/N]","kind":"link","expected":"PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"}
