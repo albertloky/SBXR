@@ -41,24 +41,6 @@ func TestGeneratedInstallerRefusesNonRootBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestGeneratedInstallerAcceptsCleanInstallRepairIndex(t *testing.T) {
-	fixture := newInstallerFixture(t)
-	path := filepath.Join(fixture.root, "fixtures/release-index.json")
-	index, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := strings.Replace(string(index), `"schema":1`, `"schema":2`, 1)
-	body = strings.TrimSuffix(strings.TrimSpace(body), "}") + `,"support":{"scope":"subscription-clean-install-repair","sources":[],"contract":"sbxr-subscription-update-v1"}}` + "\n"
-	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
-		t.Fatal(err)
-	}
-	output, err := exec.Command("bash", fixture.script).CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "SOFTWARE-LIFECYCLE-INSTALL-INSTALLED") {
-		t.Fatalf("repair install = %v, %q", err, output)
-	}
-}
-
 func TestGeneratedInstallerSupportsOnlyFixedUbuntuHosts(t *testing.T) {
 	t.Run("standard os-release link", func(t *testing.T) {
 		fixture := newInstallerFixture(t)
@@ -146,6 +128,11 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 		}
 		t.Run(fmt.Sprint(variant), func(t *testing.T) {
 			fixture := newInstallerFixture(t)
+			if variant == 8 {
+				// A newer installer must also restore an exact recurring release
+				// committed to finish removal, not just a schema-1 release.
+				buildInstallerSupportIndex(t, fixture, softwarelifecycle.RecurringSubscriptionUpgrade, 1)
+			}
 			if body, err := exec.Command("bash", fixture.script).CombinedOutput(); err != nil {
 				t.Fatalf("initial install = %v, %q", err, body)
 			}
@@ -1030,6 +1017,11 @@ func writeInstallerTools(t *testing.T, root string) {
 
 func assertInstalledFixture(t *testing.T, root string, wantExecutable []byte) {
 	t.Helper()
+	assertInstalledFixtureForArchitecture(t, root, wantExecutable, "amd64")
+}
+
+func assertInstalledFixtureForArchitecture(t *testing.T, root string, wantExecutable []byte, architecture string) {
+	t.Helper()
 	executable := filepath.Join(root, "usr/local/bin/sbxr")
 	got, err := os.ReadFile(executable)
 	if err != nil || string(got) != string(wantExecutable) {
@@ -1052,7 +1044,18 @@ func assertInstalledFixture(t *testing.T, root string, wantExecutable []byte) {
 	}
 	defer record.Close()
 	var document map[string]any
-	if err := json.NewDecoder(io.LimitReader(record, 4097)).Decode(&document); err != nil || document["tag"] != "v2.0.0" || document["sequence"] != float64(17) || document["architecture"] != "amd64" {
+	index, err := os.ReadFile(filepath.Join(root, "fixtures/release-index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexDigest, executableDigest := sha256.Sum256(index), sha256.Sum256(wantExecutable)
+	wantRecord := map[string]any{
+		"schema": float64(1), "repository": softwarelifecycle.Repository,
+		"tag": "v2.0.0", "commit": strings.Repeat("a", 40), "sequence": float64(17),
+		"architecture": architecture, "release_index_sha256": hex.EncodeToString(indexDigest[:]),
+		"executable_sha256": hex.EncodeToString(executableDigest[:]),
+	}
+	if err := json.NewDecoder(io.LimitReader(record, 4097)).Decode(&document); err != nil || !reflect.DeepEqual(document, wantRecord) {
 		t.Fatalf("installed record = %#v, %v", document, err)
 	}
 	if info, err := record.Stat(); err != nil || info.Mode().Perm() != 0o600 || info.Size() > 4096 {

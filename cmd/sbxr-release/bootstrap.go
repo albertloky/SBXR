@@ -408,8 +408,20 @@ download_or_finish 'release-index.json' "$index" 1048576
 [ -f "$index" ] && [ ! -L "$index" ] || release_refused
 [ "$("$ROOT/usr/bin/wc" -c <"$index")" -le 1048576 ] 2>/dev/null || release_refused
 index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
-subscription_index_pattern='^\{"schema":2,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\],"support":\{"scope":"(first-subscription-clean-install|subscription-clean-install-repair)","sources":\[\],"contract":"sbxr-subscription-update-v1"\}\}$'
+# Match the canonical ReleaseIdentity encoding and ReleaseSupport.valid contract:
+# clean-install scopes have no sources; recurring support has 1..32 unique sources.
+subscription_source_pattern='\{"Repository":"{{.Repository}}","Tag":"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)","Commit":"[0-9a-f]{40}","IndexSHA256":"[0-9a-f]{64}"\}'
+subscription_support_pattern='\{"scope":("(first-subscription-clean-install|subscription-clean-install-repair)","sources":\[\]|"recurring-subscription-upgrade","sources":\['"$subscription_source_pattern"'(,'"$subscription_source_pattern"'){0,31}\]),"contract":"sbxr-subscription-update-v1"\}'
+subscription_index_pattern='^\{"schema":2,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\],"support":'"$subscription_support_pattern"'\}$'
 single_line "$index" && { "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || "$ROOT/usr/bin/grep" -Eqx "$subscription_index_pattern" "$index"; } || release_refused
+if "$ROOT/usr/bin/grep" -Fq '"scope":"recurring-subscription-upgrade"' "$index"; then
+  sources=$("$ROOT/usr/bin/grep" -Eo "$subscription_source_pattern" "$index") || release_refused
+  seen_sources='|'
+  while IFS= read -r source; do
+    case "$seen_sources" in *"|$source|"*) release_refused ;; esac
+    seen_sources="$seen_sources$source|"
+  done <<<"$sources"
+fi
 index_sequence=$("$ROOT/usr/bin/sed" -n 's/.*"sequence":\([0-9]*\).*/\1/p' "$index")
 if [ "$RESTORING_REMOVAL" -eq 1 ]; then SEQUENCE=$index_sequence; else [ "$index_sequence" = "$SEQUENCE" ] || release_refused; fi
 archive_name="sbxr-linux-$ARCH.tar.gz"
