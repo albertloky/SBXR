@@ -34,6 +34,10 @@ the same rule. Missing, unexpected or duplicate review codes never authorize
 confirmation; final action results and original deadlines remain separate.
 `test_v3_menu_session.py` exercises success/refusal/deadline cases with actual
 subprocess input, alongside the combined terminal/lifecycle rehearsal below.
+The shared session checks the original deadline before launch and every input,
+and when consuming output, including buffered lines and transcript writes.
+Failure cleanup retains its separate bounded quiescence budget; it does not
+extend the journey or permit late confirmation.
 
 For the current MVP's installed-candidate check, use the
 [documented SSH handoff](../../docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh).
@@ -62,6 +66,9 @@ temporary launcher and reviewed wrapper. It also requires a marked disposable
 root Linux VM and refuses existing product/staging/Certbot-log fixture paths.
 Use the operator plan for its scope and the adjacent Go Linux test for real
 systemd/TLS behavior. Neither test contacts a public CA or qualifies a release.
+Run fixed-path root-Linux fixtures sequentially within one disposable VM.
+Concurrent menu-driver tests correctly trip the observer's active-writer
+refusal; use separate disposable VMs if parallel execution is needed.
 
 The repaired launcher sets `umask 022` only in the child that execs the unchanged
 product; the pinned wrapper and supervisor retain private `077` state files.

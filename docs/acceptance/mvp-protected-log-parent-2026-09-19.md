@@ -210,6 +210,16 @@ product menu Review, full protected-footprint absence after removal, logging
 health, CA budget and outside/Karing observations. It is a point-in-time check,
 not a lock against subsequent unrelated host activity or an acceptance pass.
 
+`snap refresh --time` may temporarily report `next: n/a` after daemon startup
+or an automatic update check. That means the next time is unknown, not that
+refresh is disabled. During preparation, inspect daemon/change state and allow
+a bounded read-only recheck before diagnosing a persistent schedule fault.
+The observer must still refuse until a concrete next time leaves the required
+margin. Do not change refresh settings, force a refresh/restart, or spend an
+active journey waiting for it to settle. See the
+[September 26 scheduling investigation](reports/scheduling-and-menu-deadlines-2026-09-26.md)
+for the observed transient and its limits.
+
 ### Controlled update recovery windows
 
 After a successful current `mvp-update-interrupt.py` receipt, dead traced product

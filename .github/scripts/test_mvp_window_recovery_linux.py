@@ -161,6 +161,29 @@ def rehearse(work, source_binary, candidate_binary, expected, ssh_options):
             observe('running')
             shutil.copyfile(CONTROL / (boundary + '.transcript'), case / 'interruption.transcript')
             print('PASS actual-lifecycle-terminal-controller-observer-public-Recover-' + boundary, flush=True)
+            if boundary == 'precommit':
+                # Follow rollback with the ordinary, uninterrupted Update,
+                # just as the recurring route does. Exercise the same driver
+                # with the real source terminal, not only an interruption.
+                now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+                write(request_path, json.dumps(dict(request, scenario_id='source-v99.0.1-upgrade',
+                    not_before=now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                    deadline_unix=int(now.timestamp()) + 1800)).encode())
+                code = 'SOFTWARE-LIFECYCLE-UPDATE-INSTALLED'
+                result = run(remote + [shlex.join(env + ['python3', str(WINDOW / 'v3-menu-session.py'),
+                    'action', 'Update', code, '--confirmation', 'yes', '--executable',
+                    str(WINDOW / 'mvp-protected-menu.sh'), '--protected-wrapper', '--timeout', '90'])])
+                write(case / 'normal-update.stdout', result.stdout)
+                write(case / 'normal-update.stderr', result.stderr)
+                assert ('Code: ' + code).encode() in result.stdout
+                assert PRODUCT.read_bytes() == (case / 'candidate').read_bytes()
+                assert (STATE / 'installed.json').read_bytes() == (case / 'candidate.json').read_bytes()
+                assert (STATE / 'proxy-ownership.json').read_bytes() == owner_bytes
+                assert (case / 'runtime-completed').exists()
+                assert not any(os.path.lexists(p) for p in transaction)
+                assert PRODUCT.stat().st_nlink == 1 and PRODUCT.stat().st_mode & 0o777 == 0o755
+                observe('running')
+                print('PASS actual-lifecycle-terminal-ordinary-Update-after-rollback', flush=True)
     finally:
         # Preserve original observations even if cleanup itself refuses.
         if current_case:

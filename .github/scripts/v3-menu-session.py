@@ -67,6 +67,9 @@ class LineStream:
     def line(self, deadline):
         if self.cancelled():
             raise InterruptedError("menu session interrupted")
+        # Buffered lines belong to the same deadline as fresh pipe reads.
+        if time.monotonic() >= deadline:
+            raise ProtocolError("output-deadline")
         while b"\n" not in self.buffer:
             if self.cancelled():
                 raise InterruptedError("menu session interrupted")
@@ -91,6 +94,12 @@ class LineStream:
         rendered = raw + b"\n"
         self.sink.write(rendered)
         self.sink.flush()
+        # A slow transcript write must not turn a late prompt/result into
+        # permission to continue. Keep the captured bytes for diagnosis.
+        if self.cancelled():
+            raise InterruptedError("menu session interrupted")
+        if time.monotonic() >= deadline:
+            raise ProtocolError("output-deadline")
         try:
             line = raw.rstrip(b"\r").decode("utf-8")
         except UnicodeDecodeError as error:
@@ -110,6 +119,8 @@ class MenuSession:
         self.cancelled = cancelled or (lambda: False)
         if self.cancelled():
             raise InterruptedError("menu session interrupted")
+        if time.monotonic() >= deadline:
+            raise ProtocolError("deadline-before-start")
         self.process = subprocess.Popen(
             [executable] if isinstance(executable, str) else list(executable),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -130,6 +141,10 @@ class MenuSession:
     def write(self, value):
         if self.cancelled():
             raise InterruptedError("menu session interrupted")
+        # Covers selection, approval and continuation for every caller,
+        # including expiry after a valid prompt but before its reply.
+        if time.monotonic() >= self.deadline:
+            raise ProtocolError("input-deadline")
         try:
             self.process.stdin.write(value.encode("utf-8"))
             self.process.stdin.flush()
@@ -156,8 +171,6 @@ class MenuSession:
     def expect_prompt(self, expected, *, review_code=None):
         reviewed = False
         while True:
-            if time.monotonic() >= self.deadline:
-                raise ProtocolError("output-deadline")
             line = self.stream.line(self.deadline)
             if line is None:
                 raise ProtocolError("exit-before-prompt")

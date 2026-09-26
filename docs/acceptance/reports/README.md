@@ -9,6 +9,7 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [Scheduling investigation and shared menu deadlines — 2026-09-26](scheduling-and-menu-deadlines-2026-09-26.md)
 - [Recovery-window and menu-review repairs — 2026-09-26](ordinary-recurring-recovery-window-repair-2026-09-26.md)
   — separately approved observer and driver repairs; both isolated recovery
   directions and failure-cleanup checks pass. No packaged upgrade or live pass.

@@ -1,15 +1,23 @@
 """Focused subprocess tests for the shared same-process menu driver."""
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
+sys.dont_write_bytecode = True
 DRIVER = Path(__file__).resolve().parent / "v3-menu-session.py"
+spec = importlib.util.spec_from_file_location("menu_driver", DRIVER)
+menu = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(menu)
 FIXTURE = r'''#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
@@ -50,6 +58,77 @@ elif kind == "terminal":
 print("SBXR V3\nProxy status: Running\nCode: "+spec.get("actual",spec.get("expected","PROXY-INSTALLATION-STATUS-RUNNING")))
 print("1. View details\n0. Exit",flush=True); event({"exit":sys.stdin.readline().strip()})
 '''
+
+class MenuSessionDeadlineTest(unittest.TestCase):
+    def test_expired_session_never_starts_product(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = Path(temporary) / "started"
+            child = "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()"
+            session = None
+            try:
+                with self.assertRaisesRegex(menu.ProtocolError, "deadline-before-start"):
+                    session = menu.MenuSession([sys.executable, "-c", child, str(receipt)],
+                                               io.BytesIO(), time.monotonic() - 1)
+                self.assertFalse(receipt.exists())
+            finally:
+                if session is not None:
+                    session.stop()
+                    session.process.stdin.close()
+                    session.process.stdout.close()
+
+    def test_buffered_lines_do_not_bypass_expiry(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0) as writer:
+            writer.write(b"first\nCode: SUCCESS\n")
+            stream = menu.LineStream(reader, io.BytesIO())
+            self.assertEqual(stream.line(time.monotonic() + 5), "first")
+            self.assertEqual(stream.buffer, b"Code: SUCCESS\n")
+            with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
+                stream.line(time.monotonic() - 1)
+            self.assertIsNone(stream.last_code)
+
+    def test_transcript_flush_cannot_make_a_late_prompt_usable(self):
+        # A real pipe/read/flush; only the monotonic clock advances at the
+        # transcript boundary, without a timing-sensitive sleep.
+        clock = [0.0]
+        class Sink(io.BytesIO):
+            def flush(self):
+                clock[0] = 11.0
+                super().flush()
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0) as writer:
+            writer.write(b"Update SBXR? [y/N]\n")
+            stream = menu.LineStream(reader, Sink())
+            with patch.object(menu.time, "monotonic", side_effect=lambda: clock[0]):
+                with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
+                    stream.line(10.0)
+
+    def test_expiry_between_review_and_input_never_sends_confirmation(self):
+        for label, answer in (("Update", "y\n"), ("Recover", "y\n"),
+                              ("Complete removal", "REMOVE SBXR\n")):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                receipt = Path(temporary) / "input"
+                prompt = menu.REMOVAL_PROMPT if label == "Complete removal" else menu.PROMPTS[label]
+                # Use an actual child and stdin pipe, not a mocked write.
+                child = ("import pathlib,sys; print(sys.argv[1],flush=True); "
+                         "pathlib.Path(sys.argv[2]).write_text(sys.stdin.read()); print('done',flush=True)")
+                session = menu.MenuSession([sys.executable, "-c", child, prompt, str(receipt)],
+                                           io.BytesIO(), time.monotonic() + 5)
+                try:
+                    session.expect_prompt(prompt)
+                    session.deadline = time.monotonic() - 1
+                    try:
+                        with self.assertRaisesRegex(menu.ProtocolError, "input-deadline"):
+                            session.write(answer)
+                    finally:
+                        session.process.stdin.close()
+                        self.assertTrue(select.select([session.process.stdout], [], [], 5)[0])
+                        self.assertEqual(session.process.stdout.readline(), b"done\n")
+                    self.assertEqual(receipt.read_text(), "")
+                finally:
+                    session.stop()
+                    session.process.stdout.close()
+
 
 class MenuSessionDriverTest(unittest.TestCase):
     def invoke(self,spec,*arguments,timeout=5):
