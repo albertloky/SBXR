@@ -21,6 +21,12 @@ a fresh clone. Start new work with the [current guide](../README.md).
   — eight-scenario tooling and source-reader compatibility; no fresh live or
   packaged upgrade pass.
 
+### v3.1.84
+
+- [v3.1.84 / 162 — operator log collision and local launch repair](v3.1.84-operator-log-collision-2026-09-30.md)
+  — failed before first evidence submission; disjoint outer logs reproduced and
+  regression-tested locally. No fresh live qualification.
+
 ### v3.1.83
 
 - [v3.1.83 / 161 — recurring live attempt, clean installer refusal](v3.1.83-recurring-live-installer-refusal-2026-09-26.md)

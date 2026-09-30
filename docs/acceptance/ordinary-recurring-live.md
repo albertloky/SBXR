@@ -79,6 +79,12 @@ or new attempt authorization below. It is not packaged upgrade or live proof.
    Do not dispatch if the plan does not fit. Do not lengthen deadlines to save
    a failed attempt.
 
+Before dispatch, rehearse local operator commands with the
+[disjoint outer-log launcher](../../.github/scripts/README.md) and a fresh
+artifact directory. Inner capture names must be unused before their command
+starts. The September 29 outer/inner stderr collision stopped submission;
+its unsealed checks cannot qualify a later attempt.
+
 Use the existing `v3-candidate-dispatch.sh check|dispatch` path only after these
 prerequisites and the concrete live authorization are satisfied. Do not restore
 the retired V4 producer or invoke its old readiness checklist.

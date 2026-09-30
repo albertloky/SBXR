@@ -11,6 +11,7 @@ explicit human observations and does not run the historical V4 protocol.
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
+| Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
 | Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
@@ -26,6 +27,29 @@ unit, its staged publication path, and its enablement symlink. Absence checks
 treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
+
+For local operator helpers that use `LABEL.private`, `LABEL.stderr` and
+`LABEL.receipt.json` for their inner captures, launch the outer command through
+`mvp-operator-run.py` with the same label. The September 29 attempt failed when
+an outer shell redirection created the inner helper's `s1-finish.stderr` first.
+Use an existing fresh directory under `.scratch/acceptance/`; for example,
+after the actual journey and its checks have been observed:
+
+```sh
+python3 .github/scripts/mvp-operator-run.py \
+  --run-directory "$run" --label s1-finish -- \
+  python3 "$run/finish-journey.py" s1 source-v3.1.81-precommit source-v3.1.81-upgrade
+```
+
+The outer logs are `s1-finish.operator.stdout` and `s1-finish.operator.stderr`,
+created exclusively with mode `0600`. Existing outer logs or inner captures,
+including broken symlinks, refuse before execution. The command inherits stdin
+and the working directory, replaces the launcher process, and retains its own
+exit and cancellation behavior. Inspect any newly reserved log after a failed
+reservation; it is retained. Do not redirect outer logs onto inner capture
+paths. This local wrapper does not perform observations, submit evidence, retry
+an attempt, or authorize live work. Its nested-subprocess regression runs in the
+ordinary Go suite. The run-local helper in this example remains attempt-specific.
 
 The shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
 `STATUS-RECOVERY-REQUIRED` lifecycle review code exactly once before its exact
