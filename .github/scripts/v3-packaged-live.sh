@@ -163,7 +163,6 @@ def cleanup():
         pass
     until = time.monotonic() + 5
     code = process.wait(timeout=max(0.01, until - time.monotonic()))
-    children = Path('/proc/self/task') / str(os.getpid()) / 'children'
     while True:
         try:
             pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -174,11 +173,7 @@ def cleanup():
         # A reparented child cannot have its PID reused until we reap it.
         # Killing each adopted child causes its remaining descendants to be
         # adopted here in turn, including children in another session.
-        for child in children.read_text().split():
-            try:
-                os.kill(int(child), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        driver.kill_adopted_children()
         if time.monotonic() >= until:
             raise TimeoutError('descendant cleanup incomplete')
         time.sleep(0.01)

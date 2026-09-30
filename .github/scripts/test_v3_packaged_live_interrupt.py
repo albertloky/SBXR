@@ -151,6 +151,9 @@ if sys.argv[0] == "-":
         return content
     os.read = interrupting_read
 ''')
+        self.children_hook = self.root / "children-hook"
+        self.children_hook.mkdir()
+        (self.children_hook / "sitecustomize.py").write_text((HERE / "testdata" / "proc-children-hook.py").read_text())
         self.spawned_pids = set()
         self.addCleanup(self.cleanup_fixture_processes)
 
@@ -192,7 +195,8 @@ if sys.argv[0] == "-":
 
     def run_interrupt(self, mode, timeout=2, *, request_deadline=None,
                       number="case", delay="0.3", signal_controller=False,
-                      spawn_signal_hook=False, read_signal_hook=False):
+                      spawn_signal_hook=False, read_signal_hook=False,
+                      children_mode=None, unrelated_pid=None):
         for name in ("started", "child.pid", "grandchild.pid", "held.lock",
                      "hook-child.pid", "scan.capture"):
             try:
@@ -218,6 +222,11 @@ if sys.argv[0] == "-":
                 self.root / "hook-child.pid")
         if read_signal_hook:
             environment["PYTHONPATH"] = str(self.read_hook)
+        if children_mode is not None:
+            environment.update(PYTHONPATH=str(self.children_hook),
+                               SBXR_TEST_CHILDREN_MODE=children_mode,
+                               SBXR_TEST_CHILDREN_OBSERVED=str(self.root / "children-read"),
+                               SBXR_TEST_UNRELATED_PID=str(unrelated_pid))
 
         # The slash-named function keeps this harness compatible with the old
         # implementation for a fast red run. The fixed function instead uses
@@ -245,18 +254,26 @@ interrupt_at 'Start setup' y target-event {shlex.quote(number)} {timeout}
             )
             if signal_controller:
                 signal_deadline = time.monotonic() + 3
-                children_path = (Path(f"/proc/{process.pid}/task") /
-                                 str(process.pid) / "children")
                 controller = None
                 while time.monotonic() < signal_deadline:
-                    if (self.root / "started").exists() and children_path.exists():
-                        children = children_path.read_text().split()
-                        if len(children) == 1:
-                            controller = int(children[0])
-                            break
+                    if (self.root / "started").exists():
+                        try:
+                            fixture_pid = int((self.root / "started").read_text())
+                            fixture_stat = Path(f"/proc/{fixture_pid}/stat").read_text().rsplit(") ", 1)[1].split()
+                            candidate = int(fixture_stat[1])
+                            controller_stat = Path(f"/proc/{candidate}/stat").read_text().rsplit(") ", 1)[1].split()
+                            if int(controller_stat[1]) == process.pid:
+                                controller = candidate
+                                break
+                        except (FileNotFoundError, ProcessLookupError):
+                            pass
                     time.sleep(0.01)
                 self.assertIsNotNone(controller, "controller process did not start")
-                os.kill(controller, signal.SIGTERM)
+                descriptor = os.pidfd_open(controller, 0)
+                try:
+                    signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                finally:
+                    os.close(descriptor)
             returncode = process.wait(timeout=timeout + 5)
         result = subprocess.CompletedProcess(process.args, returncode)
         result.stdout = stdout_path.read_text()
@@ -434,6 +451,28 @@ interrupt_at 'Start setup' y target-event {shlex.quote(number)} {timeout}
         self.assert_fixture_tree_dead()
         self.assert_lock_released()
         self.assert_work_files_removed("unrelated")
+
+    def test_escaped_child_without_proc_children_preserves_unrelated_sibling(self):
+        self.assert_escaped_child_enumeration("missing")
+
+    def test_kernel_child_list_verifies_ownership_and_preserves_unrelated_sibling(self):
+        self.assert_escaped_child_enumeration("listed")
+
+    def assert_escaped_child_enumeration(self, mode):
+        unrelated = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        def cleanup_unrelated():
+            unrelated.kill()
+            unrelated.wait(timeout=3)
+        self.addCleanup(cleanup_unrelated)
+        result, _ = self.run_interrupt("escaped-event", timeout=2, number=mode,
+                                       children_mode=mode, unrelated_pid=unrelated.pid)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("reason=boundary-observed descendants_reaped=true", result.stdout)
+        self.assert_fixture_tree_dead()
+        self.assert_lock_released()
+        self.assert_work_files_removed(mode)
+        self.assertIsNone(unrelated.poll())
+        self.assertIn(mode, (self.root / "children-read").read_text().splitlines())
 
 
 if __name__ == "__main__":

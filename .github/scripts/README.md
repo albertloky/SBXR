@@ -63,6 +63,15 @@ and when consuming output, including buffered lines and transcript writes.
 Failure cleanup retains its separate bounded quiescence budget; it does not
 extend the journey or permit late confirmation.
 
+The menu driver and packaged interruption controller share descendant cleanup.
+They prefer Linux's optional task `children` list and fall back to parent IDs in
+`/proc/PID/stat` when that interface is absent. Each signal uses a process handle
+and a kernel child-ownership check, so stale IDs and unrelated siblings cannot
+authorize a kill. The existing kill/reap proofs and cleanup deadlines remain.
+The adjacent subprocess regressions cover the absent interface and an emulated
+kernel child list, including an unowned list entry; signals, escaped processes,
+locks and reaping remain real. No extra runtime file is needed in staged bundles.
+
 For the current MVP's installed-candidate check, use the
 [documented SSH handoff](../../docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh).
 It streams this module and calls only `exact_candidate`; the current transport

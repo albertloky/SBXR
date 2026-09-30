@@ -54,6 +54,47 @@ class ProtocolError(Exception):
         self.code = code
 
 
+def kill_adopted_children():
+    """Signal only this dedicated controller's children, binding PID identity."""
+    own = os.getpid()
+    try:
+        with open(f"/proc/self/task/{own}/children", encoding="ascii") as stream:
+            children = [int(child) for child in stream.read().split()]
+    except FileNotFoundError:
+        # CONFIG_CHECKPOINT_RESTORE controls the optional task/children file.
+        # Parent IDs remain available on kernels without that interface.
+        children = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdecimal():
+                continue
+            try:
+                with open(f"/proc/{entry}/stat", encoding="ascii") as stream:
+                    tail = stream.read().rsplit(") ", 1)[1].split()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            if int(tail[1]) == own:
+                children.append(int(entry))
+    for child in children:
+        try:
+            descriptor = os.pidfd_open(child, 0)
+        except ProcessLookupError:
+            continue
+        try:
+            # Verify ownership through the bound identity, even if a listed
+            # PID exited or was reused. WNOWAIT leaves our children unreaped.
+            try:
+                os.waitid(os.P_PIDFD, descriptor,
+                          os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except ChildProcessError:
+                continue
+            try:
+                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        finally:
+            os.close(descriptor)
+
+
 class LineStream:
     def __init__(self, stream, sink, cancelled=None, owner_exited=None):
         self.stream = stream
@@ -317,7 +358,6 @@ class MenuSession:
             self.cleaned = True
             self.returncode = code
             return code
-        children = f"/proc/self/task/{os.getpid()}/children"
         deadline = time.monotonic() + 5
         while True:
             try:
@@ -328,15 +368,7 @@ class MenuSession:
                 return code
             if pid:
                 continue
-            try:
-                adopted = open(children, encoding="ascii").read().split()
-            except FileNotFoundError:
-                adopted = []
-            for child in adopted:
-                try:
-                    os.kill(int(child), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            kill_adopted_children()
             if time.monotonic() >= deadline:
                 raise ProtocolError("descendant-cleanup")
             time.sleep(0.01)

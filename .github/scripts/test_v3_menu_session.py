@@ -1,4 +1,5 @@
 """Focused subprocess tests for the shared same-process menu driver."""
+import ctypes
 import importlib.util
 import io
 import json
@@ -287,12 +288,35 @@ class MenuSessionDriverTest(unittest.TestCase):
     def test_early_leader_exit_still_kills_owned_descendant(self):
         self.assert_owned_descendant_cleaned("leader-exit",signal_driver=False,escape=False)
 
-    def assert_owned_descendant_cleaned(self,kind,*,signal_driver,escape):
+    @unittest.skipUnless(sys.platform.startswith("linux"),"subreaper cleanup requires Linux")
+    def test_cancellation_without_proc_children_preserves_unrelated_sibling(self):
+        self.assert_owned_descendant_cleaned("hang", signal_driver=True, escape=True,
+                                            children_mode="missing")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),"subreaper cleanup requires Linux")
+    def test_kernel_child_list_verifies_ownership_and_preserves_unrelated_sibling(self):
+        self.assert_owned_descendant_cleaned("hang", signal_driver=True, escape=True,
+                                            children_mode="listed")
+
+    def assert_owned_descendant_cleaned(self,kind,*,signal_driver,escape,children_mode=None):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); executable=root/"sbxr"
             executable.write_text(FIXTURE); executable.chmod(0o700)
             spec={"label":"Start setup","kind":kind,"escape":escape}
             env=dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec))
+            libc = ctypes.CDLL(None, use_errno=True)
+            previous = ctypes.c_int()
+            self.assertEqual(libc.prctl(37, ctypes.byref(previous), 0, 0, 0), 0)
+            self.assertEqual(libc.prctl(36, 1, 0, 0, 0), 0)
+            unrelated = subprocess.Popen(["sleep", "30"], start_new_session=True)
+            if children_mode is not None:
+                hook = root / "hook"
+                hook.mkdir()
+                (hook / "sitecustomize.py").write_text((DRIVER.parent / "testdata" / "proc-children-hook.py").read_text())
+                env.update(PYTHONPATH=str(hook), SBXR_TEST_CHILDREN_MODE=children_mode,
+                           SBXR_TEST_CHILDREN_OBSERVED=str(root / "children-read"),
+                           SBXR_TEST_UNRELATED_PID=str(unrelated.pid))
+            descendant = None
             process=subprocess.Popen([sys.executable,str(DRIVER),"action","Start setup",
                                       "PROXY-INSTALLATION-SETUP-COMPLETE","--confirmation","yes",
                                       "--executable",str(executable),"--timeout","5"],
@@ -304,11 +328,33 @@ class MenuSessionDriverTest(unittest.TestCase):
                 descendant=int((root/"descendant.pid").read_text())
                 if signal_driver: process.terminate()
                 stderr=process.communicate(timeout=8)[1]
+                self.assertNotEqual(process.returncode,0); self.assertIn("SBXR_MENU_SESSION_REFUSED",stderr)
+                with self.assertRaises(ProcessLookupError): os.kill(descendant,0)
+                self.assertIsNone(unrelated.poll())
+                if children_mode is not None:
+                    self.assertIn(children_mode, (root / "children-read").read_text().splitlines())
             finally:
                 if process.poll() is None:
                     process.terminate()
                     process.communicate(timeout=8)
-            self.assertNotEqual(process.returncode,0); self.assertIn("SBXR_MENU_SESSION_REFUSED",stderr)
-            with self.assertRaises(ProcessLookupError): os.kill(descendant,0)
+                # Keep the original assertion before cleanup, and also reap
+                # escaped fixture children after a red run or interruption.
+                if descendant is not None:
+                    try:
+                        descriptor = os.pidfd_open(descendant, 0)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        try:
+                            os.waitid(os.P_PIDFD, descriptor, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                            signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                            os.waitpid(descendant, 0)
+                        except (ProcessLookupError, ChildProcessError):
+                            pass
+                        finally:
+                            os.close(descriptor)
+                unrelated.kill()
+                unrelated.wait(timeout=3)
+                libc.prctl(36, previous.value, 0, 0, 0)
 
 if __name__ == "__main__": unittest.main()
