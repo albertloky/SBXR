@@ -74,6 +74,9 @@ def run(fixture):
         cases = [
             ('precommit', 'normal', False), ('postcommit', 'normal', False),
             ('precommit', 'normal', True), ('postcommit', 'normal', True),
+            ('precommit', 'startup-thread-exit', True),
+            ('postcommit', 'startup-thread-exit', True),
+            ('precommit', 'startup-exit', True),
             ('precommit', 'wrong-record', True), ('precommit', 'unlocked', True),
             ('precommit', 'no-directory-sync', True), ('postcommit', 'no-directory-sync', True),
             ('precommit', 'refusal', True), ('precommit', 'wrong-prompt', True),
@@ -137,9 +140,17 @@ def run(fixture):
                     assert active.poll() is None, 'accepted visibility without directory fsync'
                 active.send_signal(signal.SIGTERM)
             output, error = active.communicate(timeout=40)
-            assert active.returncode == (0 if mode == 'normal' else 1), (number, output, error, (case / 'transcript').read_bytes())
+            succeeds = mode in ('normal', 'startup-thread-exit')
+            assert active.returncode == (0 if succeeds else 1), (number, output, error, (case / 'transcript').read_bytes())
             active = None
             ids = [int(p.stem) for p in case.glob('*.child')]
+            startup = list(case.glob('*.startup'))
+            threads = list(case.glob('*.startup-thread'))
+            if mode in ('startup-thread-exit', 'startup-exit'):
+                assert len(startup) == 5 and len(threads) == 40, (number, startup, threads)
+            else:
+                assert not startup and not threads
+            ids.extend(int(p.stem) for p in startup + threads)
             if (case / 'product.pid').exists():
                 ids.append(int((case / 'product.pid').read_text()))
             assert all(process(pid) is None for pid in ids), (number, ids)
@@ -151,7 +162,7 @@ def run(fixture):
                 assert (case / 'transcript').read_bytes() == b'preserved earlier transcript\n'
             assert not (case / 'runtime-completed').exists(), number
             assert (STATE / 'proxy-ownership.json').read_bytes() == ownership
-            if mode == 'normal':
+            if succeeds:
                 assert output.startswith(b'SBXR_UPDATE_INTERRUPTED ')
                 receipt = json.loads(output.decode().split(' ', 1)[1])
                 assert receipt['boundary'] == boundary and receipt['syscall_result'] == 0
@@ -163,6 +174,10 @@ def run(fixture):
                 assert identity(Path('/var/log')) == protected
             else:
                 assert b'SBXR_UPDATE_INTERRUPTED ' not in output
+                if mode == 'startup-exit':
+                    assert not (STATE / 'update.json').exists()
+                    assert PRODUCT.read_bytes() == original
+                    assert (STATE / 'installed.json').read_bytes() == prior_record
                 # A refused window remains evidence; only explicit restoration
                 # after dead-process/lock checks returns to the original mode.
                 state = WINDOW / 'window.state'
@@ -211,7 +226,7 @@ def run(fixture):
         SHARED.rmdir()
         assert identity(Path('/var/log')) == baseline
         shutil.rmtree(root)
-    print('UPDATE_INTERRUPT_FIXTURE_PASSED count=18; not packaged/live evidence', flush=True)
+    print('UPDATE_INTERRUPT_FIXTURE_PASSED count=21; not packaged/live evidence', flush=True)
 
 
 if __name__ == '__main__':

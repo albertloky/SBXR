@@ -144,6 +144,16 @@ def ptrace(request, pid, addr=0, data=0):
     return result
 
 
+def ptrace_at_stop(request, pid, addr=0, data=0):
+    # Call only for a stop already collected by waitpid. A concurrent thread
+    # group exit/SIGKILL can remove that tracee before ptrace; retain its PID
+    # until waitpid reports death, and keep the normal deadline/leader checks.
+    try:
+        return ptrace(request, pid, addr, data)
+    except ProcessLookupError:
+        return None
+
+
 def trace(boundary, expectation, deadline):
     wanted = expected(expectation)
     initial_proof(wanted)
@@ -180,21 +190,29 @@ def trace(boundary, expectation, deadline):
                 pending.pop(pid, None)
                 require(pid != leader, 'product-exited-before-boundary')
                 continue
+            require(os.WIFSTOPPED(status), 'unexpected-trace-status')
             traced.add(pid)
             sig, event = os.WSTOPSIG(status), status >> 16
             if event in (1, 2, 3):  # fork/vfork/clone includes Go OS threads.
                 child = ctypes.c_ulong()
-                ptrace(0x4201, pid, data=ctypes.byref(child))
+                if ptrace_at_stop(0x4201, pid, data=ctypes.byref(child)) is None:
+                    pending.pop(pid, None)
+                    continue
                 traced.add(child.value)
             elif event == 4:  # exec may collapse a nonleader thread's TID.
                 former = ctypes.c_ulong()
-                ptrace(0x4201, pid, data=ctypes.byref(former))
+                if ptrace_at_stop(0x4201, pid, data=ctypes.byref(former)) is None:
+                    pending.pop(pid, None)
+                    continue
                 if former.value != pid:
                     traced.discard(former.value)
                     pending.pop(former.value, None)
             elif sig == signal.SIGTRAP | 0x80:
                 info = ctypes.create_string_buffer(88)
-                size = ptrace(0x420e, pid, 88, info)  # GET_SYSCALL_INFO
+                size = ptrace_at_stop(0x420e, pid, 88, info)  # GET_SYSCALL_INFO
+                if size is None:
+                    pending.pop(pid, None)
+                    continue
                 require(size >= 24, 'syscall-info-unavailable')
                 raw = info.raw
                 arch = struct.unpack_from('=I', raw, 4)[0]
@@ -234,7 +252,8 @@ def trace(boundary, expectation, deadline):
                                        syscall_result=0, source_executable_sha256=wanted['prior_executable_sha256'],
                                        candidate_executable_sha256=wanted['candidate_executable_sha256'])
                             break
-            ptrace(24, pid, data=0 if event or sig in (signal.SIGTRAP, signal.SIGSTOP, signal.SIGTRAP | 0x80) else sig)
+            if ptrace_at_stop(24, pid, data=0 if event or sig in (signal.SIGTRAP, signal.SIGSTOP, signal.SIGTRAP | 0x80) else sig) is None:
+                pending.pop(pid, None)
         require(hit is not None, 'boundary-not-observed')
     finally:
         # Kill traced product threads/children only; leave the permission
@@ -254,8 +273,11 @@ def trace(boundary, expectation, deadline):
             if not pid:
                 time.sleep(0.001)
             elif os.WIFSTOPPED(status):
-                os.kill(pid, signal.SIGKILL)
-                ptrace(24, pid, data=signal.SIGKILL)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                ptrace_at_stop(24, pid, data=signal.SIGKILL)
     require(hit is not None, 'boundary-not-observed')
     require(digest(private_read(STATE / 'update.json')) == hit['update_record_sha256'],
             'checkpoint-changed-after-death')

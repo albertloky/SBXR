@@ -45,6 +45,22 @@ func main() {
 	if run == "" {
 		panic("fixture run directory required")
 	}
+	if len(os.Args) > 1 && os.Args[1] == "startup" {
+		write(filepath.Join(run, fmt.Sprint(os.Getpid())+".startup"), []byte("startup child\n"), 0600)
+		ready := make(chan bool)
+		for i := 0; i < 8; i++ {
+			go func() {
+				runtime.LockOSThread()
+				write(filepath.Join(run, fmt.Sprint(syscall.Gettid())+".startup-thread"), []byte("startup thread\n"), 0600)
+				ready <- true
+				select {}
+			}()
+			<-ready
+		}
+		// Go exits the thread group when main returns. Other threads can
+		// disappear after their tracer has collected a syscall stop.
+		return
+	}
 	if len(os.Args) > 1 {
 		write(filepath.Join(run, fmt.Sprint(os.Getpid())+".child"), []byte("child\n"), 0600)
 		for {
@@ -52,9 +68,17 @@ func main() {
 		}
 	}
 	write(filepath.Join(run, "product.pid"), []byte(fmt.Sprint(os.Getpid())), 0600)
+	mode := os.Getenv("SBXR_INTERRUPT_MODE")
+	if mode == "startup-thread-exit" || mode == "startup-exit" {
+		for i := 0; i < 5; i++ {
+			must(exec.Command("/usr/local/bin/sbxr", "startup").Run())
+		}
+		if mode == "startup-exit" {
+			return
+		}
+	}
 	scan := bufio.NewScanner(os.Stdin)
 	menu := "SBXR V3\n1. Update\n0. Exit"
-	mode := os.Getenv("SBXR_INTERRUPT_MODE")
 	fmt.Println(menu)
 	scan.Scan()
 	// Match the real terminal's review-before-confirmation order.

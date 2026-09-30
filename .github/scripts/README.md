@@ -113,7 +113,9 @@ without writing bytecode into the four-file directory. Use the
 [current operator procedure](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption).
 `test_mvp_update_interrupt.py FIXTURE` requires the marked root VM; build its
 synthetic native Go fixture from `testdata/update-interrupt-fixture`. It tests
-18 success/refusal/cancellation cases with real Linux tracing and cleanup,
+21 success/refusal/cancellation cases with real Linux tracing and cleanup,
+including short-lived multithreaded Go children before the menu and refusal
+when the product itself exits before any checkpoint,
 not a packaged upgrade or CA operation. `v3_update_interrupt_test.go` provides
 portable syntax checks and an opt-in `SBXR_UPDATE_CONTROL_VM=1` root VM wrapper.
 The early-deadline wrapper cleanup failure is retained in the
