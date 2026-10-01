@@ -37,7 +37,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	latency := release.Support != nil && release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair
 	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
 	latency = latency && policyOK && slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy)
-	mvp := scope == softwarelifecycle.SubscriptionCleanInstallRepair && policyOK && policy == softwarelifecycle.MVPLiveEvidencePolicy
+	mvp := scope == softwarelifecycle.SubscriptionCleanInstallRepair && policyOK && (policy == softwarelifecycle.MVPLiveEvidencePolicy || policy == softwarelifecycle.MVPHTTPEvidencePolicy)
 	if !mvp && (hasRecordLine("Live acceptance coverage: ") || hasMVPScenario()) {
 		return false
 	}
@@ -71,7 +71,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
 	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
 	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
-		if !policyOK || !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy, softwarelifecycle.MVPLiveEvidencePolicy}, policy) {
+		if !policyOK || !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy, softwarelifecycle.MVPLiveEvidencePolicy, softwarelifecycle.MVPHTTPEvidencePolicy}, policy) {
 			return false
 		}
 		if mvp {
@@ -128,7 +128,7 @@ func qualifiedRecurringMVPRecord(body string, release softwarelifecycle.LatestRe
 	if !has("Recurring evidence policy: ") {
 		return !has("Recurring live acceptance coverage: ") && !has("Recurring Karing evidence: ") && !has("Journey: ")
 	}
-	if !ok || policy != softwarelifecycle.MVPRecurringEvidencePolicy || release.Support == nil || release.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || len(release.Support.Sources) != 1 {
+	if !ok || (policy != softwarelifecycle.MVPRecurringEvidencePolicy && policy != softwarelifecycle.MVPHTTPRecurringEvidencePolicy) || release.Support == nil || release.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || len(release.Support.Sources) != 1 {
 		return false
 	}
 	coverage, coverageOK := uniqueRecordValue(body, "Recurring live acceptance coverage: ")
@@ -136,7 +136,15 @@ func qualifiedRecurringMVPRecord(body string, release softwarelifecycle.LatestRe
 	if !coverageOK || coverage != softwarelifecycle.MVPRecurringCoverage || !karingOK || karing != softwarelifecycle.MVPKaringEvidence {
 		return false
 	}
-	if !qualifiedScenarioReferences(body, "Journey: ", strings.Fields(softwarelifecycle.MVPLiveScenarios)) {
+	journeys := softwarelifecycle.MVPLiveScenarios
+	if policy == softwarelifecycle.MVPHTTPRecurringEvidencePolicy {
+		journeys = softwarelifecycle.MVPHTTPScenarios
+		transport, ok := uniqueRecordValue(body, "Subscription transport: ")
+		if !ok || transport != softwarelifecycle.MVPHTTPTransportDisclosure {
+			return false
+		}
+	}
+	if !qualifiedScenarioReferences(body, "Journey: ", strings.Fields(journeys)) {
 		return false
 	}
 	var scenarios []string
@@ -163,7 +171,15 @@ func qualifiedScenarioReferences(body, prefix string, ids []string) bool {
 
 func qualifiedMVPScenarios(body string) bool {
 	expected := map[string]bool{}
-	for _, id := range strings.Fields(softwarelifecycle.MVPLiveScenarios) {
+	journeys := softwarelifecycle.MVPLiveScenarios
+	if policy, _ := uniqueRecordValue(body, "Evidence policy: "); policy == softwarelifecycle.MVPHTTPEvidencePolicy {
+		transport, ok := uniqueRecordValue(body, "Subscription transport: ")
+		if !ok || transport != softwarelifecycle.MVPHTTPTransportDisclosure {
+			return false
+		}
+		journeys = softwarelifecycle.MVPHTTPScenarios
+	}
+	for _, id := range strings.Fields(journeys) {
 		expected[id] = true
 	}
 	seen := map[string]bool{}

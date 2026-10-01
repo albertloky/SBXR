@@ -121,14 +121,14 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8} {
+	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} {
 		schema := variant
 		if variant >= 3 {
 			schema = 2
 		}
 		t.Run(fmt.Sprint(variant), func(t *testing.T) {
 			fixture := newInstallerFixture(t)
-			if variant == 8 {
+			if variant >= 8 {
 				// A newer installer must also restore an exact recurring release
 				// committed to finish removal, not just a schema-1 release.
 				buildInstallerSupportIndex(t, fixture, softwarelifecycle.RecurringSubscriptionUpgrade, 1)
@@ -171,7 +171,7 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`"removal_checkpoint":0`), []byte(`"removal_checkpoint":11`), 1)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"finishing_release_identity":` + string(finisherJSON) + "}\n")
 			}
-			if variant == 6 || variant == 8 {
+			if variant == 6 || variant >= 8 {
 				authority := hostadapter.NewLockProvisioningAuthority()
 				resources, _ := json.Marshal(authority.Resources())
 				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), resources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
@@ -189,6 +189,9 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 			}
 			if variant >= 4 {
 				authority := hostadapter.ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}}
+				if variant == 9 || variant == 10 || variant >= 12 {
+					authority.HTTP, authority.CertificateGeneration, authority.CertificateSHA256 = true, 0, [4]string{}
+				}
 				resources, _ := json.Marshal(authority.Resources())
 				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), resources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
 				var fields map[string]json.RawMessage
@@ -204,6 +207,50 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
 				serving, _ := json.Marshal(authority)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"serving":` + string(serving) + "}\n")
+				if variant == 9 || variant == 10 || variant >= 12 {
+					subscription := hostadapter.SubscriptionResourcesForEnablement("8.8.8.8", hostadapter.SubscriptionPreflight{HTTP: true})
+					additional, _ := json.Marshal(subscription.Resources())
+					ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), additional[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
+					var fields map[string]json.RawMessage
+					if json.Unmarshal(ownership, &fields) != nil {
+						t.Fatal("HTTP resource authority failed")
+					}
+					var extra []byte
+					for range subscription.Resources() {
+						extra = append(extra, ',')
+						extra = append(extra, fields["release_identity"]...)
+					}
+					extra = append(extra, []byte(`],"finishing_release_identity"`)...)
+					ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
+					if variant == 10 {
+						repair := `{"operation_id":"` + strings.Repeat("3", 32) + `","kind":"repair subscription","direction":"forward","correction":"restart owned serving runtime","effects":["restart owned serving runtime"],"completed_effects":["restart owned serving runtime"],"checkpoint":"accepted","source":` + string(serving) + `,"target":` + string(serving) + `}`
+						ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"subscription_repair":` + repair + "}\n")
+					}
+					subscriptionJSON, _ := json.Marshal(subscription)
+					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"subscription_resources":` + string(subscriptionJSON) + "}\n")
+				}
+				if variant == 11 {
+					// A normal legacy HTTPS record has no repair journal delimiter.
+					renewal := hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: hostadapter.OfficialRenewalInvocation}
+					subscription := hostadapter.SubscriptionResourceAuthority{PublicIPv4: "8.8.8.8", FirewallSHA256: strings.Repeat("2", 64)}
+					additional := append(renewal.Resources(), subscription.Resources()...)
+					additionalJSON, _ := json.Marshal(additional)
+					ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), additionalJSON[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
+					var fields map[string]json.RawMessage
+					if json.Unmarshal(ownership, &fields) != nil {
+						t.Fatal("normal legacy authority failed")
+					}
+					var extra []byte
+					for range additional {
+						extra = append(extra, ',')
+						extra = append(extra, fields["release_identity"]...)
+					}
+					extra = append(extra, []byte(`],"finishing_release_identity"`)...)
+					ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
+					renewalJSON, _ := json.Marshal(renewal)
+					subscriptionJSON, _ := json.Marshal(subscription)
+					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"renewal":` + string(renewalJSON) + `,"subscription_resources":` + string(subscriptionJSON) + "}\n")
+				}
 				if variant == 5 {
 					renewal := hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: hostadapter.OfficialRenewalInvocation}
 					subscription := hostadapter.SubscriptionResourceAuthority{PublicIPv4: "8.8.8.8", FirewallSHA256: strings.Repeat("2", 64)}
@@ -242,7 +289,7 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"renewal":` + string(renewalJSON) + `,"subscription_repair":` + repair + `,"subscription_resources":` + string(subscriptionJSON) + "}\n")
 				}
 			}
-			if variant == 7 || variant == 8 {
+			if variant == 7 || variant >= 8 {
 				startup := hostadapter.ProxyStartupAuthority{DropInSHA256: strings.Repeat("9", 64), DirectoryCreated: true}
 				startupResources, _ := json.Marshal(startup.Resources())
 				ownership = bytes.Replace(ownership, []byte(`],"cleanup_checkpoint"`), append(append([]byte(","), startupResources[1:]...), []byte(`,"cleanup_checkpoint"`)...), 1)
@@ -260,13 +307,51 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = bytes.Replace(ownership, []byte(`],"finishing_release_identity"`), extra, 1)
 				startupJSON, _ := json.Marshal(startup)
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"proxy_startup":` + string(startupJSON) + "}\n")
-				if variant == 8 {
+				if variant >= 8 {
 					lockJSON, _ := json.Marshal(hostadapter.NewLockProvisioningAuthority())
 					ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"lock_provisioning":` + string(lockJSON) + "}\n")
 				}
 			} else if variant == 6 {
 				authority, _ := json.Marshal(hostadapter.NewLockProvisioningAuthority())
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"lock_provisioning":` + string(authority) + "}\n")
+			}
+			if variant >= 12 {
+				retired := hostadapter.HTTPSRetirementAuthority{
+					Serving:           hostadapter.ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}},
+					Renewal:           hostadapter.RenewalAuthority{RecorderID: strings.Repeat("1", 32), Lineage: "sbxr-subscription", PublicIPv4: "8.8.8.8", Invocation: hostadapter.OfficialRenewalInvocation},
+					Resources:         hostadapter.SubscriptionResourcesForEnablement("8.8.8.8", hostadapter.SubscriptionPreflight{}),
+					ConfigurationMode: 0600, ConfigurationSHA256: strings.Repeat("6", 64), EvidenceSHA256: strings.Repeat("7", 64),
+				}
+				if variant == 13 {
+					retired.Resources.RecorderDirectoryCreated = true
+					retired.ConfigurationMode = 0644
+				}
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(ownership, &fields) != nil {
+					t.Fatal("retained authority fixture")
+				}
+				// Insert retired resources before startup/lock resources, exactly
+				// where the domain's canonical record producer puts them.
+				var resources []string
+				var creators []json.RawMessage
+				if json.Unmarshal(fields["permitted_resources"], &resources) != nil || json.Unmarshal(fields["resource_creating_releases"], &creators) != nil {
+					t.Fatal("retained resource fixture")
+				}
+				for i, resource := range resources {
+					if strings.HasPrefix(resource, "/etc/systemd/system/sing-box.service.d") {
+						resources = append(append(append([]string{}, resources[:i]...), retired.ResourcesList()...), resources[i:]...)
+						for range retired.ResourcesList() {
+							creators = append(creators, fields["release_identity"])
+						}
+						break
+					}
+				}
+				resourceJSON, _ := json.Marshal(resources)
+				creatorJSON, _ := json.Marshal(creators)
+				ownership = bytes.Replace(ownership, fields["permitted_resources"], resourceJSON, 1)
+				ownership = bytes.Replace(ownership, fields["resource_creating_releases"], creatorJSON, 1)
+				retirementJSON, _ := json.Marshal(retired)
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"https_retirement":` + string(retirementJSON) + "}\n")
 			}
 			ownershipPath := filepath.Join(fixture.root, "var/lib/sbxr/proxy-ownership.json")
 			if err := os.WriteFile(ownershipPath, ownership, 0o600); err != nil {
@@ -289,7 +374,7 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				"conflicting identity alias": bytes.Replace(ownership, []byte(`"Tag":`), []byte(`"tag":"v9.0.0","Tag":`), 1),
 				"unknown resource":           bytes.Replace(ownership, []byte(`root:root 0600 one-link`), []byte(`unproved resource`), 1),
 			}
-			if variant == 7 || variant == 8 {
+			if variant == 7 || variant >= 8 {
 				invalid["changed startup authority"] = bytes.Replace(ownership, []byte(`"drop_in_sha256":"`+strings.Repeat("9", 64)+`"`), []byte(`"drop_in_sha256":"`+strings.Repeat("0", 64)+`"`), 1)
 				finishing := bytes.Index(ownership, []byte(`],"finishing_release_identity"`))
 				if finishing < 0 {
@@ -300,6 +385,18 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 					t.Fatal("missing creator")
 				}
 				invalid["wrong provenance count"] = append(append([]byte{}, ownership[:lastCreator]...), ownership[finishing:]...)
+			}
+			if variant == 9 || variant == 10 || variant >= 12 {
+				invalid["HTTP certificate claim"] = bytes.Replace(ownership, []byte(`"certificate_generation":0`), []byte(`"certificate_generation":1`), 1)
+				invalid["HTTP dependency claim"] = bytes.Replace(ownership, []byte(`"certbot_created":false`), []byte(`"certbot_created":true`), 1)
+				invalid["HTTP extra CA resource"] = bytes.Replace(ownership, []byte(`tcp/8443 comment=sbxr-subscription exact-owned`), []byte(`tcp/80 comment=sbxr-subscription exact-owned`), 1)
+				invalid["HTTP unknown transport"] = bytes.Replace(ownership, []byte(`"http":true`), []byte(`"http":false`), 1)
+			}
+			if variant >= 12 {
+				invalid["retirement missing field"] = bytes.Replace(ownership, []byte(`,"evidence_sha256":"`+strings.Repeat("7", 64)+`"`), nil, 1)
+				invalid["retirement wrong mode"] = bytes.Replace(ownership, []byte(`"configuration_mode":`), []byte(`"configuration_mode":1,"unknown_mode":`), 1)
+				invalid["retirement wrong nested shape"] = bytes.Replace(ownership, []byte(`"https_retirement":{"serving":{`), []byte(`"https_retirement":{"serving":{"http":true,`), 1)
+				invalid["retirement unfinished migration"] = bytes.Replace(ownership, []byte(`,"https_retirement":`), []byte(`,"subscription_transport_migration":true,"https_retirement":`), 1)
 			}
 			for name, wrong := range invalid {
 				t.Run(name, func(t *testing.T) {
@@ -880,6 +977,7 @@ import "os"
 func main() {
 	if root := os.Getenv("SBXR_INSTALL_TEST_ROOT"); root != "" {
 		_ = os.WriteFile(root+"/fixtures/launched", []byte("launched"), 0600)
+		_ = os.WriteFile(root+"/fixtures/capabilities", []byte("SBXR-SUBSCRIPTION-HTTP-V1 SBXR-SUBSCRIPTION-HTTPS-RETIREMENT-V1"), 0600)
 		_ = os.WriteFile(root+"/fixtures/launched-locale", []byte(os.Getenv("LC_ALL")), 0600)
 	}
 }

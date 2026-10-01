@@ -23,13 +23,16 @@ type subscriptionRepairHost interface {
 
 func (module *installedInterface) repairDiagnosis(ctx context.Context, record ownershipRecord, activation hostadapter.CertificateActivationInspection) (subscriptionRepairCorrection, hostadapter.RenewalInspection, bool) {
 	host, ok := module.host.(subscriptionRepairHost)
-	if !ok || record.Serving == nil || record.Renewal == nil || record.Repair != nil || !activation.Observed || !activation.Accepted || activation.Published != *record.Serving {
+	if !ok || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || record.Repair != nil || !activation.Observed || !activation.Accepted || activation.Published != *record.Serving {
 		return "", hostadapter.RenewalInspection{}, false
 	}
 	if stored, safe := host.InspectCertificateServingState(*record.Serving, false); !safe || stored != *record.Serving {
 		return "", hostadapter.RenewalInspection{}, false
 	}
-	renewal := host.InspectRenewal(*record.Renewal)
+	renewal := hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true, Accepted: true}, State: hostadapter.RenewalAttemptHealthy}
+	if record.Renewal != nil {
+		renewal = host.InspectRenewal(*record.Renewal)
+	}
 	if activation.Loaded == *record.Serving && (renewal.State == hostadapter.RenewalAttemptFailed || renewal.State == hostadapter.RenewalAttemptAbandoned) {
 		return repairCertificate, renewal, true
 	}
@@ -41,20 +44,23 @@ func (module *installedInterface) repairDiagnosis(ctx context.Context, record ow
 
 func (module *installedInterface) certificateReplacementDiagnosis(ctx context.Context, record ownershipRecord, activation hostadapter.CertificateActivationInspection) (hostadapter.RenewalInspection, bool) {
 	host, supported := module.host.(subscriptionRepairHost)
-	if !supported || record.Serving == nil || record.Renewal == nil || record.Repair != nil || !activation.Observed || !activation.Accepted || activation.Published != *record.Serving || activation.Loaded != *record.Serving {
+	if !supported || record.Serving == nil || record.Serving.HTTP || record.Renewal == nil || record.Repair != nil || !activation.Observed || !activation.Accepted || activation.Published != *record.Serving || activation.Loaded != *record.Serving {
 		return hostadapter.RenewalInspection{}, false
 	}
 	if stored, safe := host.InspectCertificateServingState(*record.Serving, false); !safe || stored != *record.Serving {
 		return hostadapter.RenewalInspection{}, false
 	}
-	renewal := host.InspectRenewal(*record.Renewal)
+	renewal := hostadapter.RenewalInspection{Observation: hostadapter.Observation{Observed: true, Accepted: true}, State: hostadapter.RenewalAttemptHealthy}
+	if record.Renewal != nil {
+		renewal = host.InspectRenewal(*record.Renewal)
+	}
 	return renewal, renewal.State == hostadapter.RenewalAttemptHealthy && renewal.Observed && renewal.Accepted
 }
 
 func (module *installedInterface) prepareSubscriptionCertificateReplacementReview(ctx context.Context, review Review, activation hostadapter.CertificateActivationInspection) Review {
 	body, err := module.readOwnership()
 	record, valid := decodeOwnership(body)
-	if err != nil || !valid || record.Serving == nil || record.Renewal == nil {
+	if err != nil || !valid || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil {
 		review.Result = refused(Running, "Subscription replacement authority", "Restore one consistent owned subscription generation, then review again.")
 		return review
 	}
@@ -65,7 +71,7 @@ func (module *installedInterface) prepareSubscriptionCertificateReplacementRevie
 func (module *installedInterface) prepareSubscriptionRepairReview(ctx context.Context, review Review, activation hostadapter.CertificateActivationInspection) Review {
 	body, err := module.readOwnership()
 	record, valid := decodeOwnership(body)
-	if err != nil || !valid || record.Serving == nil || record.Renewal == nil {
+	if err != nil || !valid || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil {
 		review.Result = refused(Running, "Subscription repair authority", "Restore one consistent owned subscription generation, then review again.")
 		return review
 	}
@@ -129,6 +135,9 @@ func subscriptionCertificateReplacementPlan() []string {
 }
 
 func subscriptionRepairPlan(correction subscriptionRepairCorrection, source hostadapter.ServingAuthority) []string {
+	if source.HTTP {
+		return []string{"Action: Repair subscription", "Diagnosed fault: the owned HTTP Subscription Serving runtime is unavailable.", "Restart only the owned serving runtime and verify the current authenticated HTTP artifact. No certificate or renewal operation occurs.", "Keep the Subscription Link, Client Identity, Proxy Profile and working proxy unchanged.", "HTTP remains exposed to interception and tampering.", "Before commitment discard unused repair authority; afterward finish only the selected runtime correction."}
+	}
 	if correction == repairCertificate {
 		return []string{
 			"Action: Repair subscription",
@@ -151,7 +160,7 @@ func subscriptionRepairPlan(correction subscriptionRepairCorrection, source host
 }
 
 func (module *installedInterface) prepareSubscriptionRepairFinishReview(ctx context.Context, review Review, record ownershipRecord, body []byte) Review {
-	if record.Repair == nil || record.Serving == nil || record.Renewal == nil || module.lifecycle == nil {
+	if record.Repair == nil || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || module.lifecycle == nil {
 		review.Result = refused(Running, "Subscription repair authority", "Restore the exact durable repair authority, then inspect again.")
 		return review
 	}
@@ -252,7 +261,7 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 	current, err := module.readOwnership()
 	record, valid := decodeOwnership(current)
 	installed := module.statusUnderMutationLock(context.WithoutCancel(ctx), lock)
-	if err != nil || !valid || !bytes.Equal(current, authority.record) || record.Serving == nil || record.Renewal == nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) {
+	if err != nil || !valid || !bytes.Equal(current, authority.record) || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) {
 		return refused(Running, "Prepared Action facts", "Restore the exact reviewed installation and subscription authority, then review again.")
 	}
 	running := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
@@ -261,7 +270,7 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 	}
 	finishing := authority.action == FinishSubscriptionChangeAction
 	if record.Repair == nil {
-		activation := host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, *record.Serving)
+		activation := host.InspectCertificateActivation(context.WithoutCancel(ctx), renewalContext(record), *record.Serving)
 		var correction subscriptionRepairCorrection
 		var renewal hostadapter.RenewalInspection
 		var diagnosed bool
@@ -322,7 +331,7 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 	if record.Repair.Checkpoint == repairCommitted {
 		if record.Repair.Correction == repairCertificate {
 			report(progress, "Renewing subscription certificate")
-			inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, record.Repair.Source)
+			inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), renewalContext(record), record.Repair.Source)
 			if !inspection.Observed || !inspection.Accepted || inspection.Published == record.Repair.Source {
 				if ctx.Err() != nil {
 					return subscriptionRepairIncomplete("Owned certificate replacement", "The operation was interrupted before a new certificate attempt. Review Finish subscription change to inspect the remaining work.")
@@ -331,7 +340,7 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 				if !replacement.Replaced {
 					return subscriptionRepairIncomplete("Owned certificate replacement", certificateFailureCorrection(replacement.Failure))
 				}
-				inspection = host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, record.Repair.Source)
+				inspection = host.InspectCertificateActivation(context.WithoutCancel(ctx), renewalContext(record), record.Repair.Source)
 			}
 			if !inspection.Observed || !inspection.Accepted || !compatibleCertificateTarget(record.Repair.Source, inspection.Published) || inspection.Published == record.Repair.Source {
 				return subscriptionRepairIncomplete("Published replacement certificate", "Restore one valid owned replacement generation, then use Finish subscription change again.")
@@ -355,21 +364,25 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 			record, _ = decodeOwnership(current)
 		}
 	}
-	renewalExclusion, acquired := host.AcquireRenewalExclusion(*record.Renewal)
-	if !acquired {
-		return subscriptionRepairIncomplete("Renewal exclusion", "Wait for the exact managed renewal attempt and evidence writer to become idle, then use Finish subscription change again.")
+	var renewalExclusion *hostadapter.RenewalExclusion
+	if record.Renewal != nil {
+		var acquired bool
+		renewalExclusion, acquired = host.AcquireRenewalExclusion(*record.Renewal)
+		if !acquired {
+			return subscriptionRepairIncomplete("Renewal exclusion", "Wait for the exact managed renewal attempt and evidence writer to become idle, then use Finish subscription change again.")
+		}
+		defer renewalExclusion.Release()
 	}
-	defer renewalExclusion.Release()
 	if record.Repair.Checkpoint == repairCommitted {
 		report(progress, "Repairing subscription serving")
-		inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, record.Repair.Source)
+		inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), renewalContext(record), record.Repair.Source)
 		if record.Repair.Target == nil || inspection.Published != *record.Repair.Target || inspection.Loaded != *record.Repair.Target {
-			if record.Repair.Target == nil || ctx.Err() != nil || !host.ActivateServing(context.WithoutCancel(ctx), *record.Renewal, *record.Repair.Target) {
+			if record.Repair.Target == nil || ctx.Err() != nil || !host.ActivateServing(context.WithoutCancel(ctx), renewalContext(record), *record.Repair.Target) {
 				return subscriptionRepairIncomplete("Subscription Serving correction", "Restore the exact owned service and use Finish subscription change again.")
 			}
 		}
 		report(progress, "Verifying subscription result")
-		inspection = host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, record.Repair.Source)
+		inspection = host.InspectCertificateActivation(context.WithoutCancel(ctx), renewalContext(record), record.Repair.Source)
 		if !inspection.Observed || !inspection.Accepted || record.Repair.Target == nil || inspection.Published != *record.Repair.Target || inspection.Loaded != *record.Repair.Target {
 			return subscriptionRepairIncomplete("Subscription repair verification", "Restore the exact selected certificate, service, listener, and local HTTPS behavior, then use Finish subscription change again.")
 		}
@@ -383,14 +396,16 @@ func (module *installedInterface) executeSubscriptionRepair(ctx context.Context,
 		}
 		record, _ = decodeOwnership(current)
 	}
-	inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), *record.Renewal, *record.Serving)
+	inspection := host.InspectCertificateActivation(context.WithoutCancel(ctx), renewalContext(record), *record.Serving)
 	if !inspection.Observed || !inspection.Accepted || inspection.Published != *record.Serving || inspection.Loaded != *record.Serving {
 		return subscriptionRepairIncomplete("Accepted certificate verification", "Restore the exact accepted published and loaded certificate before finishing its protected state publication.")
 	}
-	if record.Repair.Target == nil || !host.PublishCertificateServingState(*record.Renewal, record.Repair.Source, *record.Repair.Target) {
+	if record.Repair.Target == nil || !host.PublishCertificateServingState(renewalContext(record), record.Repair.Source, *record.Repair.Target) {
 		return subscriptionRepairIncomplete("Protected serving state publication", "Preserve the accepted certificate and use Finish subscription change to complete its protected state publication.")
 	}
-	renewalExclusion.Release()
+	if renewalExclusion != nil {
+		renewalExclusion.Release()
+	}
 	if record.Repair.Correction == repairCertificate && !host.ResolveRenewalFailure(*record.Renewal, *record.Serving) {
 		return subscriptionRepairIncomplete("Renewal outcome accounting", "Preserve the repaired generation and restore protected renewal evidence storage, then use Finish subscription change again.")
 	}

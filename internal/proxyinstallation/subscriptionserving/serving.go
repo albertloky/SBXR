@@ -1,4 +1,4 @@
-// Package subscriptionserving owns the private, bounded HTTPS runtime. It has
+// Package subscriptionserving owns the private, bounded subscription runtime. It has
 // no durable authority and performs no filesystem or recovery operations.
 package subscriptionserving
 
@@ -65,6 +65,7 @@ type State struct {
 	generation  Generation
 	certificate tls.Certificate
 	expires     time.Time
+	http        bool
 }
 
 func (*State) String() string   { return "Subscription state (redacted)" }
@@ -130,6 +131,17 @@ func (m *Module) Prepare(f singbox.ConnectionFacts, generation Generation, cert 
 	return &State{artifact: string(artifact), ip: f.PublicIPv4, generation: generation, certificate: pair, expires: expires}, Ready
 }
 
+// PrepareHTTP requires the same artifact and bearer credential as HTTPS, but
+// intentionally provides no transport confidentiality or server authentication.
+// Legacy HTTPS generations continue through Prepare and its full trust checks.
+func (m *Module) PrepareHTTP(f singbox.ConnectionFacts, generation Generation) (*State, Code) {
+	artifact, code := Artifact(f)
+	if code != Ready || !linkID.MatchString(generation.LinkID) || generation.CredentialSHA256 == [32]byte{} {
+		return nil, Refused
+	}
+	return &State{artifact: string(artifact), ip: f.PublicIPv4, generation: generation, http: true}, Ready
+}
+
 // Artifact prepares secret-bearing node bytes independently of TLS availability.
 func Artifact(f singbox.ConnectionFacts) ([]byte, Code) {
 	ip, err := netip.ParseAddr(f.PublicIPv4)
@@ -166,7 +178,7 @@ func (m *Module) Inspect(state *State) Facts {
 		return Facts{Code: Refused, Runtime: RuntimeUnknown}
 	}
 	code := Ready
-	if !m.now().Before(state.expires) {
+	if !state.http && !m.now().Before(state.expires) {
 		code = Expired
 	}
 	m.mu.Lock()
@@ -204,7 +216,12 @@ func (m *Module) Serve(ctx context.Context, state *State, listener net.Listener)
 	m.loaded, m.running = state, true
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.running = false; m.mu.Unlock() }()
-	ctx, cancel := context.WithDeadline(ctx, state.expires)
+	var cancel context.CancelFunc
+	if state.http {
+		ctx, cancel = context.WithCancel(ctx)
+	} else {
+		ctx, cancel = context.WithDeadline(ctx, state.expires)
+	}
 	defer cancel()
 	config := &tls.Config{Certificates: []tls.Certificate{state.certificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
 	var mu sync.Mutex
@@ -226,7 +243,7 @@ func (m *Module) Serve(ctx context.Context, state *State, listener net.Listener)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if !time.Now().Before(state.expires) {
+			if !state.http && !time.Now().Before(state.expires) {
 				return Expired
 			}
 			if ctx.Err() != nil {
@@ -245,7 +262,11 @@ func (m *Module) Serve(ctx context.Context, state *State, listener net.Listener)
 		mu.Unlock()
 		work := func() {
 			defer func() { conn.Close(); mu.Lock(); delete(connections, conn); mu.Unlock() }()
-			m.respond(ctx, state, tls.Server(conn, config), &limiter, overloaded)
+			wire := conn
+			if !state.http {
+				wire = tls.Server(conn, config)
+			}
+			m.respond(ctx, state, wire, &limiter, overloaded)
 		}
 		if overloaded {
 			work()
@@ -256,17 +277,19 @@ func (m *Module) Serve(ctx context.Context, state *State, listener net.Listener)
 	}
 }
 
-func (m *Module) respond(ctx context.Context, state *State, conn *tls.Conn, limiter *sourceLimiter, overloaded bool) {
+func (m *Module) respond(ctx context.Context, state *State, conn net.Conn, limiter *sourceLimiter, overloaded bool) {
 	deadline := time.Now().Add(5 * time.Second)
 	if overloaded {
 		deadline = time.Now().Add(time.Second)
 	}
-	if state.expires.Before(deadline) {
+	if !state.http && state.expires.Before(deadline) {
 		deadline = state.expires
 	}
 	conn.SetDeadline(deadline)
-	if conn.HandshakeContext(ctx) != nil {
-		return
+	if encrypted, ok := conn.(*tls.Conn); ok {
+		if encrypted.HandshakeContext(ctx) != nil {
+			return
+		}
 	}
 	if overloaded {
 		writeResponse(conn, 503)

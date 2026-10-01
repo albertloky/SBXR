@@ -31,7 +31,7 @@ func (module *installedInterface) prepareSubscriptionRotationReview(ctx context.
 	body, err := module.readOwnership()
 	record, ok := decodeOwnership(body)
 	host, supported := module.host.(subscriptionRotationHost)
-	if err != nil || !ok || !supported || record.Serving == nil || record.Renewal == nil || record.Rotation != nil || !inspection.Observed || inspection.Published != *record.Serving || !host.ServingPublicIPv4(ctx, record.PublicIPv4) {
+	if err != nil || !ok || !supported || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || record.Rotation != nil || !inspection.Observed || inspection.Published != *record.Serving || !host.ServingPublicIPv4(ctx, record.PublicIPv4) {
 		review.Prepared = nil
 		review.Result = refused(Running, "Subscription rotation authority", "Restore one freshly verified current Subscription Link generation and recorded public IPv4, then review again.")
 		return review
@@ -80,7 +80,7 @@ func (module *installedInterface) rotateSubscriptionLink(ctx context.Context, au
 	current, err := module.readOwnership()
 	record, valid := decodeOwnership(current)
 	installed := module.statusUnderMutationLock(ctx, lock)
-	if ctx.Err() != nil || err != nil || !valid || !bytes.Equal(current, authority.record) || record.Serving == nil || record.Renewal == nil || record.Rotation != nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) {
+	if ctx.Err() != nil || err != nil || !valid || !bytes.Equal(current, authority.record) || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || record.Rotation != nil || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) {
 		return refused(Running, "Prepared Action facts", "Review Rotate subscription link again after restoring every changed authority fact.")
 	}
 	running := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
@@ -90,8 +90,7 @@ func (module *installedInterface) rotateSubscriptionLink(ctx context.Context, au
 	if link, accepted := host.ReadSubscriptionLink(*record.Serving, record.PublicIPv4); !accepted || len(link) == 0 {
 		return refused(Running, "Current Subscription Link generation", "Restore the exact reviewed link generation, then review again.")
 	}
-	activationHost, ok := module.host.(certificateActivationHost)
-	if !ok || !reflect.DeepEqual(activationHost.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving), authority.activation) || authority.activation.Published != *record.Serving {
+	if !reflect.DeepEqual(module.inspectServingTransport(ctx, record), authority.activation) || authority.activation.Published != *record.Serving {
 		return refused(Running, "Prepared Action facts", "Review Rotate subscription link again after restoring the reviewed published, accepted, and loaded certificate facts.")
 	}
 	replacement := make([]byte, 32)
@@ -117,7 +116,7 @@ func (module *installedInterface) rotateSubscriptionLink(ctx context.Context, au
 	if !published {
 		return subscriptionRotationIncomplete("Replacement generation authority", "Inspect the durable Ownership Record before retrying.")
 	}
-	input := hostadapter.SubscriptionRotationInput{Source: operation.Source, Target: operation.Target, Renewal: *record.Renewal, Credential: credential}
+	input := hostadapter.SubscriptionRotationInput{Source: operation.Source, Target: operation.Target, Renewal: renewalContext(record), Credential: credential}
 	report(progress, "Preparing subscription credential")
 	if !host.PrepareSubscriptionRotation(input) {
 		return subscriptionRotationIncomplete("Replacement Subscription Link preparation", "Use Finish subscription change to restore the old generation and remove unused target material.")
@@ -182,7 +181,7 @@ func (module *installedInterface) currentSubscriptionRotation(authority prepared
 
 func (module *installedInterface) finishSubscriptionRotation(ctx context.Context, authority preparedReview, record ownershipRecord, current []byte, progress ProgressReporter) Result {
 	host, ok := module.host.(subscriptionRotationHost)
-	if !ok || record.Renewal == nil {
+	if !ok || !record.Serving.HTTP && record.Renewal == nil {
 		return subscriptionRotationIncomplete("Subscription rotation Adapter", "Use a qualified release with complete rotation recovery support.")
 	}
 	lock, busy, err := module.host.AcquireMutationLock(hostSetupSpec.LockPath)
@@ -202,7 +201,7 @@ func (module *installedInterface) finishSubscriptionRotation(ctx context.Context
 		return refused(Running, "Prepared Action facts", "Restore the reviewed proxy, public IPv4, and rotation authority, then review again.")
 	}
 	record = freshRecord
-	input := hostadapter.SubscriptionRotationInput{Source: record.Rotation.Source, Target: record.Rotation.Target, Renewal: *record.Renewal}
+	input := hostadapter.SubscriptionRotationInput{Source: record.Rotation.Source, Target: record.Rotation.Target, Renewal: renewalContext(record)}
 	if record.Rotation.Checkpoint != rotationCommitted {
 		report(progress, "Cleaning up subscription change")
 		if !host.RestoreSubscriptionRotation(context.WithoutCancel(ctx), input) {

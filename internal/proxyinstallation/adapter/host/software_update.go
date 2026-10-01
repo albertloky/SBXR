@@ -26,6 +26,21 @@ func (a Adapter) SoftwareUpdateContracts(ctx context.Context, serving *ServingAu
 	if serving == nil {
 		return renewal == nil && resources == nil && a.InspectSubscriptionAbsence(ctx).Accepted
 	}
+	if serving.HTTP {
+		if renewal != nil || resources == nil || !resources.HTTP || !resources.Valid() || !a.InspectServingFiles(*serving, false).Accepted || !a.VerifyClientIdentityServingStartup(ctx) || !a.exactHTTPSubscriptionFirewall(resources.PublicIPv4) {
+			return false
+		}
+		unit, err := a.protectedServingFile(SubscriptionFirewallUnitPath, 0644, resources.FirewallSHA256)
+		if err != nil || string(unit) != subscriptionResourceUnit(*resources) {
+			return false
+		}
+		for _, path := range []string{SubscriptionCandidateStatePath, ClientIdentityArtifactPath, ServingUnitPath + ".sbxr-next"} {
+			if !a.safelyAbsent(path) {
+				return false
+			}
+		}
+		return true
+	}
 	dependencies := a.subscriptionDependencies(ctx, SubscriptionPreflight{})
 	if !dependencies.Dependencies.Accepted || !dependencies.CertbotInstalled || !dependencies.SnapdInstalled {
 		return false

@@ -41,6 +41,15 @@ func (module *installedInterface) subscriptionAdmission(ctx context.Context, fac
 	if _, err := module.host.ReadOwnership(hostSetupSpec.OwnershipNextPath); !errors.Is(err, os.ErrNotExist) {
 		return "Pending ownership publication", "Inspect the pending Ownership Record publication and finish its proved direction before enabling a subscription."
 	}
+	if facts.HTTP {
+		if !facts.TCP8443.Observed || !facts.TCP8443.Accepted {
+			return "Local TCP 8443", "Free TCP 8443 on the recorded IPv4, then review again."
+		}
+		if !facts.Firewall.Observed || !facts.Firewall.Accepted {
+			return "Local firewall", "Restore readable iptables filter rules and resolve conflicting sbxr-subscription contributions; preserve unrelated rules."
+		}
+		return "", ""
+	}
 	for _, check := range []struct {
 		fact             hostadapter.Observation
 		name, correction string
@@ -75,11 +84,6 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 	}
 	defer lock.Release()
 	ctx = hostadapter.RuntimeStartContext(ctx, lock)
-	packageLocks, packageBusy, packageErr := module.host.AcquirePackageLocks()
-	if packageErr != nil || packageBusy {
-		return refused(Running, "Ubuntu package locks", "Wait for APT and dpkg to finish, then review Enable subscription again.")
-	}
-	defer packageLocks.Release()
 	current, err := module.readOwnership()
 	record, valid := decodeOwnership(current)
 	installed := module.statusUnderMutationLock(ctx, lock)
@@ -87,7 +91,7 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 		return refused(Running, "Prepared Action facts", "Review Enable subscription again after restoring the exact reviewed installation and subscription absence.")
 	}
 	running := module.host.InspectRunning(ctx, hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
-	facts := module.host.PreflightSubscription(ctx, record.PublicIPv4)
+	facts := module.preflightSubscription(ctx, record.PublicIPv4)
 	if failed, correction := module.subscriptionAdmission(ctx, facts); failed != "" {
 		return refused(Running, failed, correction)
 	}
@@ -124,17 +128,17 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 	input = hostadapter.SubscriptionEnableInput{
 		PublicIPv4: record.PublicIPv4,
 		Credential: encoded,
-		Serving:    hostadapter.ServingAuthority{LinkID: enablement.LinkID, CredentialSHA256: enablement.CredentialSHA256},
-		Renewal:    hostadapter.RenewalAuthority{RecorderID: enablement.RecorderID, Lineage: "sbxr-subscription", PublicIPv4: record.PublicIPv4, Invocation: hostadapter.OfficialRenewalInvocation},
+		Serving:    hostadapter.ServingAuthority{HTTP: true, LinkID: enablement.LinkID, CredentialSHA256: enablement.CredentialSHA256},
 		Resources:  resources,
 		Report:     func(phase string) { report(progress, phase) },
 		Authorize: func(checkpoint int, serving *hostadapter.ServingAuthority) bool {
-			if checkpoint != enablement.Checkpoint+1 || checkpoint >= hostadapter.SubscriptionServingCheckpoint && serving == nil || checkpoint < hostadapter.SubscriptionServingCheckpoint && serving != nil {
+			nextCheckpoint := checkpoint == enablement.Checkpoint+1 || enablement.Checkpoint == 3 && checkpoint == 8 || enablement.Checkpoint == 15 && checkpoint == 22
+			if !nextCheckpoint || checkpoint >= hostadapter.SubscriptionServingCheckpoint && serving == nil || checkpoint < hostadapter.SubscriptionServingCheckpoint && serving != nil {
 				return false
 			}
 			enablement.Checkpoint = checkpoint
 			if serving != nil {
-				enablement.Serving, enablement.Renewal = serving, &input.Renewal
+				enablement.Serving = serving
 			}
 			record.Enablement = &enablement
 			updateSubscriptionResources(&record, authority.release)
@@ -147,10 +151,10 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 		},
 	}
 	prepared := host.PrepareSubscription(context.WithoutCancel(ctx), input)
-	if !prepared.Prepared || !prepared.Serving.Valid() || !prepared.Renewal.Valid() || prepared.Resources != resources || prepared.Serving.LinkID != enablement.LinkID || prepared.Serving.CredentialSHA256 != enablement.CredentialSHA256 || prepared.Renewal != input.Renewal {
+	if !prepared.Prepared || !prepared.Serving.Valid() || !prepared.Serving.HTTP || prepared.Renewal != (hostadapter.RenewalAuthority{}) || prepared.Resources != resources || prepared.Serving.LinkID != enablement.LinkID || prepared.Serving.CredentialSHA256 != enablement.CredentialSHA256 {
 		return subscriptionEnablementIncomplete("Subscription preparation", "Use Finish subscription change to clean the proved provisional generation.")
 	}
-	enablement.Serving, enablement.Renewal, enablement.Resources = &prepared.Serving, &prepared.Renewal, &prepared.Resources
+	enablement.Serving, enablement.Resources = &prepared.Serving, &prepared.Resources
 	record.Enablement = &enablement
 	updateSubscriptionResources(&record, authority.release)
 	next = ownershipBytes(record)
@@ -167,16 +171,17 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 		return subscriptionEnablementIncomplete("Activation authority", "Use Finish subscription change to clean the proved provisional generation.")
 	}
 	current = next
-	if !host.ActivatePreparedSubscription(context.WithoutCancel(ctx), prepared.Serving, prepared.Renewal) {
+	transportContext := hostadapter.RenewalAuthority{PublicIPv4: record.PublicIPv4}
+	if !host.ActivatePreparedSubscription(context.WithoutCancel(ctx), prepared.Serving, transportContext) {
 		return subscriptionEnablementIncomplete("Provisional Subscription Serving activation", "Use Finish subscription change to clean the proved provisional generation.")
 	}
-	verified := host.InspectPreparedSubscription(context.WithoutCancel(ctx), prepared.Serving, prepared.Renewal)
+	verified := host.InspectPreparedSubscription(context.WithoutCancel(ctx), prepared.Serving, transportContext)
 	report(progress, "Verifying subscription result")
 	proxy := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
 	if ctx.Err() != nil || !verified.Observed || !verified.Accepted || !runningAccepted(proxy) {
-		return subscriptionEnablementIncomplete("Provisional subscription verification", "Use Finish subscription change after correcting the exact local certificate, service, listener, or HTTPS fault.")
+		return subscriptionEnablementIncomplete("Provisional subscription verification", "Use Finish subscription change after correcting the exact local service, listener, or HTTP fault.")
 	}
-	record.Serving, record.Renewal, record.SubscriptionResources, record.Enablement = &prepared.Serving, &prepared.Renewal, &prepared.Resources, nil
+	record.Serving, record.SubscriptionResources, record.Enablement = &prepared.Serving, &prepared.Resources, nil
 	updateSubscriptionResources(&record, authority.release)
 	next = ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err != nil {
@@ -186,7 +191,7 @@ func (module *installedInterface) enableSubscription(ctx context.Context, author
 		}
 	}
 	if progress != nil {
-		progress(Progress{SubscriptionLink: []byte("https://" + record.PublicIPv4 + ":8443/s/" + string(encoded))})
+		progress(Progress{SubscriptionLink: []byte("http://" + record.PublicIPv4 + ":8443/s/" + string(encoded))})
 	}
 	return Result{Status: Running, SubscriptionStatus: SubscriptionAvailable, ProxyTraffic: ProvedWorking, SubscriptionServing: ProvedWorking, Message: "Subscription was enabled and passed local checks. Import the link in Karing.", Code: SubscriptionEnabled}
 }
@@ -279,6 +284,9 @@ func updateSubscriptionResources(record *ownershipRecord, creator softwarelifecy
 }
 
 func subscriptionResourceIdentity(resource string) string {
+	if strings.HasPrefix(resource, hostadapter.RenewalEvidencePath+" ") {
+		return hostadapter.RenewalEvidencePath
+	}
 	if strings.HasPrefix(resource, "/etc/sing-box/config.json ") {
 		return "/etc/sing-box/config.json"
 	}
@@ -286,6 +294,17 @@ func subscriptionResourceIdentity(resource string) string {
 }
 
 func subscriptionPlan(ipv4 string, facts hostadapter.SubscriptionPreflight) []string {
+	if facts.HTTP {
+		return []string{
+			"Action: Enable subscription",
+			"Serve an authenticated HTTP Subscription Link on recorded IPv4 " + ipv4 + " with fixed TCP 8443; keep the REALITY proxy on TCP 443 unchanged.",
+			"HTTP exposes the Subscription Link credential and downloaded proxy credentials to network interception and permits response tampering. Token authentication does not protect the transport.",
+			"Create one exact owned iptables INPUT rule for IPv4 " + ipv4 + "/32 TCP 8443; preserve unrelated rules. The Owner must allow provider-firewall TCP 8443.",
+			"Create protected subscription-token, serving state, and the owned serving/firewall units. No Certbot, certificate, renewal hook or TCP 80 contribution is created.",
+			"Disclose the link only after commitment and local verification; preserve the Proxy Profile, Client Identity and working proxy.",
+			"Local HTTP checks do not prove outside reachability or Karing acceptance.",
+		}
+	}
 	snapd, certbot := "Install missing snapd", "install missing official Certbot snap 5.4+"
 	if facts.SnapdInstalled {
 		snapd = "Reuse compatible snapd"
@@ -312,4 +331,31 @@ func subscriptionPlan(ipv4 string, facts hostadapter.SubscriptionPreflight) []st
 		"Preserve the Proxy Profile, Client Identity, and working proxy traffic. Before enablement commitment, clean up only proved created preparation; afterward finish the same generation forward.",
 		"Local bind and HTTPS checks do not prove outside reachability, provider-firewall policy, or live Karing acceptance.",
 	}
+}
+
+func (module *installedInterface) preflightSubscription(ctx context.Context, ipv4 string) hostadapter.SubscriptionPreflight {
+	host, ok := module.host.(interface {
+		PreflightHTTPSubscription(context.Context, string) hostadapter.SubscriptionPreflight
+	})
+	if !ok {
+		return hostadapter.SubscriptionPreflight{HTTP: true}
+	}
+	return host.PreflightHTTPSubscription(ctx, ipv4)
+}
+
+// renewalContext supplies the address to shared transport operations without
+// manufacturing or persisting a renewal authority for an HTTP subscription.
+func renewalContext(record ownershipRecord) hostadapter.RenewalAuthority {
+	if record.Renewal != nil {
+		return *record.Renewal
+	}
+	return hostadapter.RenewalAuthority{PublicIPv4: record.PublicIPv4}
+}
+
+func (module *installedInterface) inspectServingTransport(ctx context.Context, record ownershipRecord) hostadapter.CertificateActivationInspection {
+	host, ok := module.host.(certificateActivationHost)
+	if !ok || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil {
+		return hostadapter.CertificateActivationInspection{}
+	}
+	return host.InspectCertificateActivation(ctx, renewalContext(record), *record.Serving)
 }

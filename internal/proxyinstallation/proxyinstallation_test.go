@@ -204,8 +204,10 @@ func (host *controlledHost) PrepareSubscription(_ context.Context, input hostada
 	host.subscriptionCredential = bytes.Clone(input.Credential)
 	host.subscriptionCredentialCount++
 	host.subscriptionServing = input.Serving
-	host.subscriptionServing.CertificateGeneration = 1
-	host.subscriptionServing.CertificateSHA256 = [4]string{strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64)}
+	if !input.Serving.HTTP {
+		host.subscriptionServing.CertificateGeneration = 1
+		host.subscriptionServing.CertificateSHA256 = [4]string{strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64)}
+	}
 	host.subscriptionRenewal = input.Renewal
 	resources := input.Resources
 	for checkpoint := 1; checkpoint < hostadapter.SubscriptionServingCheckpoint; checkpoint++ {
@@ -229,7 +231,7 @@ func (host *controlledHost) InspectPreparedSubscription(_ context.Context, servi
 		host.failRotationEffect = ""
 		return hostadapter.Observation{Observed: true}
 	}
-	accepted := host.subscriptionPrepared && serving == host.subscriptionServing && renewal == host.subscriptionRenewal
+	accepted := host.subscriptionPrepared && serving == host.subscriptionServing && (serving.HTTP || renewal == host.subscriptionRenewal)
 	return hostadapter.Observation{Observed: true, Accepted: accepted}
 }
 
@@ -308,7 +310,11 @@ func (host *controlledHost) ReadSubscriptionLink(serving hostadapter.ServingAuth
 	if serving != host.subscriptionServing || len(host.subscriptionCredential) != 43 {
 		return nil, false
 	}
-	return []byte("https://" + publicIPv4 + ":8443/s/" + string(host.subscriptionCredential)), true
+	scheme := "https"
+	if serving.HTTP {
+		scheme = "http"
+	}
+	return []byte(scheme + "://" + publicIPv4 + ":8443/s/" + string(host.subscriptionCredential)), true
 }
 
 func (host *controlledHost) CleanupPreparedSubscription(context.Context, hostadapter.SubscriptionCleanupInput) bool {
@@ -353,7 +359,8 @@ func (host *controlledHost) InspectCertificateActivation(context.Context, hostad
 	return hostadapter.CertificateActivationInspection{Published: published, Loaded: loaded, Observed: true, Accepted: true}
 }
 
-func (*controlledHost) ActivateServing(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool {
+func (host *controlledHost) ActivateServing(context.Context, hostadapter.RenewalAuthority, hostadapter.ServingAuthority) bool {
+	host.subscriptionStopped = false
 	return true
 }
 
@@ -379,6 +386,11 @@ func (*controlledHost) RemoveRenewalIntegration(context.Context, hostadapter.Ren
 	return true
 }
 func (*controlledHost) RenewalIntegrationAbsent(hostadapter.RenewalAuthority) bool { return true }
+
+func (host *controlledHost) PreflightHTTPSubscription(ctx context.Context, ipv4 string) hostadapter.SubscriptionPreflight {
+	legacy := host.PreflightSubscription(ctx, ipv4)
+	return hostadapter.SubscriptionPreflight{HTTP: true, TCP8443: legacy.TCP8443, Firewall: legacy.Firewall, FirewallIdentity: legacy.FirewallIdentity, PackageLocks: legacy.PackageLocks, RenewalIdle: hostadapter.Observation{Observed: true, Accepted: true}}
+}
 
 func (host *controlledHost) PreflightSubscription(context.Context, string) hostadapter.SubscriptionPreflight {
 	if host.subscriptionPreflight != nil {
@@ -1280,7 +1292,7 @@ func TestOwnerCanReviewAndDeclineSubscriptionEnablement(t *testing.T) {
 				t.Fatalf("enable review = %#v", review)
 			}
 			plan := strings.Join(review.Plan, "\n")
-			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "80", "provider", "snapd", "Certbot", "sbxr-subscription", "renewal", "shared", "Karing", "Create /etc/systemd/system/snap.certbot.renew.service.d", "only when empty"} {
+			for _, want := range []string{"Enable subscription", "8.8.8.8", "8443", "HTTP", "provider", "No Certbot", "renewal", "Karing", "interception"} {
 				if !strings.Contains(plan, want) {
 					t.Errorf("Plan missing %q: %s", want, plan)
 				}
@@ -1322,15 +1334,15 @@ func TestOwnerCanEnableOneVerifiedSubscriptionGeneration(t *testing.T) {
 	if result.Code != SubscriptionEnabled || result.Status != Running || result.SubscriptionStatus != SubscriptionAvailable || len(links) != 1 {
 		t.Fatalf("enable = %#v links=%q", result, links)
 	}
-	if !strings.HasPrefix(string(links[0]), "https://8.8.8.8:8443/s/") || len(strings.TrimPrefix(string(links[0]), "https://8.8.8.8:8443/s/")) != 43 {
+	if !strings.HasPrefix(string(links[0]), "http://8.8.8.8:8443/s/") || len(strings.TrimPrefix(string(links[0]), "http://8.8.8.8:8443/s/")) != 43 {
 		t.Fatalf("link = %q", links[0])
 	}
 	record, ok := decodeOwnership(host.ownership)
-	if !ok || record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || !host.subscriptionPrepared {
+	if !ok || record.Schema != 2 || record.Serving == nil || !record.Serving.HTTP || record.Renewal != nil || record.Enablement != nil || !host.subscriptionPrepared {
 		t.Fatalf("ownership = %#v valid=%t", record, ok)
 	}
-	if record.SubscriptionResources == nil || !record.SubscriptionResources.RecorderDirectoryCreated {
-		t.Fatal("recorder directory creation provenance was not retained in ownership")
+	if record.SubscriptionResources == nil || !record.SubscriptionResources.HTTP || record.SubscriptionResources.RecorderDirectoryCreated {
+		t.Fatal("HTTP-only resource authority was not retained in ownership")
 	}
 	if bytes.Contains(host.ownership, host.subscriptionCredential) || bytes.Contains(host.ownership, links[0]) {
 		t.Fatal("Ownership Record contains a subscription credential")
@@ -1506,7 +1518,7 @@ func TestSubscriptionFaultNeitherAutomaticallyAllowsNorBlocksRotation(t *testing
 	enable := installation.Review(t.Context(), EnableSubscriptionAction)
 	installation.Execute(t.Context(), *enable.Prepared, Approved, nil)
 	host.renewalProblem = true
-	if review := installation.Review(t.Context(), RotateSubscriptionLinkAction); review.Prepared == nil || review.SubscriptionStatus != SubscriptionProblemDetected {
+	if review := installation.Review(t.Context(), RotateSubscriptionLinkAction); review.Prepared == nil || review.SubscriptionStatus != SubscriptionAvailable {
 		t.Fatalf("unrelated renewal fault blocked safe rotation: %#v", review)
 	}
 	host.publicIPDrift = true
@@ -1775,7 +1787,7 @@ func TestSubscriptionReviewRefusesUnsafeAuthorityAndPreservesSecrets(t *testing.
 }
 
 func TestSubscriptionReviewGatesFreshSafetyFacts(t *testing.T) {
-	for _, check := range []string{"TCP80", "TCP8443", "Clock", "PackageLocks", "RenewalIdle", "Dependencies", "RecorderDirectory", "Firewall"} {
+	for _, check := range []string{"TCP8443", "Firewall"} {
 		for _, observed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/observed=%t", check, observed), func(t *testing.T) {
 				host := acceptedHost()
@@ -1803,70 +1815,22 @@ func TestSubscriptionReviewGatesFreshSafetyFacts(t *testing.T) {
 	}
 }
 
-func TestReviewExplainsSharedCertbotRefusalForBothActions(t *testing.T) {
-	for _, test := range []struct {
-		name       string
-		observed   bool
-		correction string
-	}{
-		{"unsafe parent", true, "Unsafe Certbot parent /var/log (mode 0775). Require a root-owned directory with no group or other write permission; inspect and correct it before reviewing again."},
-		{"unknown inspection", false, ""},
-		{"busy", true, "Shared Certbot lock /var/log/letsencrypt/.certbot.lock is busy. Wait for shared Certbot work to finish; do not terminate it."},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			host := acceptedHost()
-			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
-			setup := installation.Review(t.Context(), StartSetupAction)
-			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
-			facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
-			facts.RenewalIdle = hostadapter.Observation{Observed: test.observed}
-			facts.RenewalCorrection = test.correction
-			host.subscriptionPreflight = &facts
-			correction := test.correction
-			if correction == "" {
-				correction = "Shared Certbot safety cannot be verified. Inspect its parent directories, lock files, and processes, then review again."
-			}
-			wantUnavailable := []UnavailableAction{
-				{Action: EnableSubscriptionAction, FailedCheck: "Shared Certbot admission", Correction: correction},
-				{Action: RotateClientIdentityAction, FailedCheck: "Shared Certbot admission", Correction: correction},
-			}
-			before := host.facts()
-			for _, action := range []Action{StatusAction, ViewDetailsAction, EnableSubscriptionAction, RotateClientIdentityAction} {
-				review := installation.Review(t.Context(), action)
-				if !reflect.DeepEqual(review.UnavailableActions, wantUnavailable) {
-					t.Fatalf("typed unavailable actions = %#v, want %#v", review.UnavailableActions, wantUnavailable)
-				}
-				details := strings.Join(review.Details, "\n")
-				if review.Status != Running || review.Prepared != nil || slices.Contains(review.LegalActions, EnableSubscriptionAction) || slices.Contains(review.LegalActions, RotateClientIdentityAction) || !strings.Contains(details, "Rotate Client Identity") || !strings.Contains(details, "Enable subscription") {
-					t.Fatalf("missing both action refusals: %#v", review)
-				}
-				if action == EnableSubscriptionAction || action == RotateClientIdentityAction {
-					if review.Result.Code != ActionRefused || review.Result.FailedCheck != "Shared Certbot admission" || test.correction != "" && review.Result.Correction != test.correction || !test.observed && strings.Contains(review.Result.Correction, "Wait") {
-						t.Fatalf("misleading refusal: %#v", review.Result)
-					}
-				}
-				if test.correction != "" && !strings.Contains(details, test.correction) {
-					t.Fatalf("missing diagnostic: %s", details)
-				}
-			}
-			if !reflect.DeepEqual(before, host.facts()) {
-				t.Fatal("refusal mutated host")
-			}
-		})
+func TestLegacyHTTPSClientIdentityReviewRetainsSharedCertbotSafety(t *testing.T) {
+	installation, host := legacyEnabledIdentityInstallation(t)
+	facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
+	facts.RenewalIdle = hostadapter.Observation{Observed: true}
+	facts.RenewalCorrection = "Shared Certbot lock is busy; do not terminate it."
+	host.subscriptionPreflight = &facts
+	before := host.facts()
+	review := installation.Review(t.Context(), RotateClientIdentityAction)
+	want := []UnavailableAction{{Action: RotateClientIdentityAction, FailedCheck: "Shared Certbot admission", Correction: facts.RenewalCorrection}}
+	if !reflect.DeepEqual(review.UnavailableActions, want) || review.Prepared != nil || !reflect.DeepEqual(before, host.facts()) {
+		t.Fatalf("legacy writer safety not preserved: %#v", review)
 	}
 }
 
 func TestEnabledSubscriptionOnlyReportsClientIdentityCertbotUnavailability(t *testing.T) {
-	host := acceptedHost()
-	installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
-	setup := installation.Review(t.Context(), StartSetupAction)
-	if result := installation.Execute(t.Context(), *setup.Prepared, Approved, nil); result.Code != SetupComplete {
-		t.Fatalf("setup = %#v", result)
-	}
-	enable := installation.Review(t.Context(), EnableSubscriptionAction)
-	if result := installation.Execute(t.Context(), *enable.Prepared, Approved, func(Progress) {}); result.Code != SubscriptionEnabled {
-		t.Fatalf("enable = %#v", result)
-	}
+	installation, host := legacyEnabledIdentityInstallation(t)
 	facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
 	facts.RenewalIdle = hostadapter.Observation{Observed: true}
 	facts.RenewalCorrection = "Unsafe Certbot parent /var/log (mode 0775). Inspect and correct it before reviewing again."
@@ -1884,27 +1848,20 @@ func TestEnabledSubscriptionOnlyReportsClientIdentityCertbotUnavailability(t *te
 	}
 }
 
-func TestExecuteReportsChangedCertbotSafetyForBothActions(t *testing.T) {
-	for _, action := range []Action{EnableSubscriptionAction, RotateClientIdentityAction} {
-		t.Run(string(action), func(t *testing.T) {
-			host := acceptedHost()
-			installation := newInstalledInterface(readyLifecycle{}, host, acceptedSingBox{})
-			setup := installation.Review(t.Context(), StartSetupAction)
-			installation.Execute(t.Context(), *setup.Prepared, Approved, nil)
-			review := installation.Review(t.Context(), action)
-			if review.Prepared == nil {
-				t.Fatalf("action not admitted: %#v", review)
-			}
-			facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
-			facts.RenewalIdle = hostadapter.Observation{Observed: true}
-			facts.RenewalCorrection = "Unsafe Certbot parent /var/log (mode 0775). Inspect and correct it before reviewing again."
-			host.subscriptionPreflight = &facts
-			before := host.facts()
-			result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
-			if result.Code != ActionRefused || result.FailedCheck != "Shared Certbot admission" || result.Correction != facts.RenewalCorrection || !reflect.DeepEqual(before, host.facts()) {
-				t.Fatalf("changed Certbot safety: %#v", result)
-			}
-		})
+func TestLegacyHTTPSClientIdentityExecuteRechecksCertbotSafety(t *testing.T) {
+	installation, host := legacyEnabledIdentityInstallation(t)
+	review := installation.Review(t.Context(), RotateClientIdentityAction)
+	if review.Prepared == nil {
+		t.Fatal("legacy rotation not admitted")
+	}
+	facts := host.PreflightSubscription(t.Context(), "8.8.8.8")
+	facts.RenewalIdle = hostadapter.Observation{Observed: true}
+	facts.RenewalCorrection = "Unsafe Certbot parent; inspect and correct it before reviewing again."
+	host.subscriptionPreflight = &facts
+	before := host.facts()
+	result := installation.Execute(t.Context(), *review.Prepared, Approved, nil)
+	if result.Code != ActionRefused || result.FailedCheck != "Shared Certbot admission" || result.Correction != facts.RenewalCorrection || !reflect.DeepEqual(before, host.facts()) {
+		t.Fatalf("legacy safety recheck: %#v", result)
 	}
 }
 

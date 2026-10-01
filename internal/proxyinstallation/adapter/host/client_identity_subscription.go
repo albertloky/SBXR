@@ -30,13 +30,13 @@ func (s ClientIdentitySubscription) Valid() bool {
 		b, err := hex.DecodeString(value)
 		return err == nil && len(b) == 32 && hex.EncodeToString(b) == value && value != strings.Repeat("0", 64)
 	}
-	return s.Source.Valid() && s.Target.Valid() && s.Source.LinkID == s.Target.LinkID && s.Source.CredentialSHA256 == s.Target.CredentialSHA256 &&
+	return s.Source.Valid() && s.Target.Valid() && s.Source.HTTP == s.Target.HTTP && s.Source.LinkID == s.Target.LinkID && s.Source.CredentialSHA256 == s.Target.CredentialSHA256 &&
 		(s.Source == s.Target || s.Target.CertificateGeneration > s.Source.CertificateGeneration) &&
 		validDigest(s.SourceArtifactSHA256) && validDigest(s.TargetArtifactSHA256) && s.SourceArtifactSHA256 != s.TargetArtifactSHA256
 }
 
 func (a Adapter) ClientIdentitySubscriptionReady(ctx context.Context, source ServingAuthority, renewal RenewalAuthority) (ServingAuthority, bool) {
-	if !a.ServingPublicIPv4(ctx, renewal.PublicIPv4) || !a.renewalFiles(renewal) {
+	if !a.ServingPublicIPv4(ctx, renewal.PublicIPv4) || !source.HTTP && !a.renewalFiles(renewal) {
 		return ServingAuthority{}, false
 	}
 	if _, ok := a.ReadSubscriptionLink(source, renewal.PublicIPv4); !ok {

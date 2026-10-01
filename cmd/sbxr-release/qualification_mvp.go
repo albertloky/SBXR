@@ -9,11 +9,66 @@ import (
 // A policy identifier distinguishes the reduced scope from historical attempts;
 // it adds no evidence envelope, prerequisite or product behavior.
 func mvpLiveAttempt(attempt v3QualificationAttempt) bool {
-	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.MVPLiveEvidencePolicy
+	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.MVPLiveEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy)
 }
 
 func mvpRecurringAttempt(attempt v3QualificationAttempt) bool {
-	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade && attempt.EvidencePolicy == softwarelifecycle.MVPRecurringEvidencePolicy
+	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.RecurringSubscriptionUpgrade && (attempt.EvidencePolicy == softwarelifecycle.MVPRecurringEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.MVPHTTPRecurringEvidencePolicy)
+}
+
+func httpLiveAttempt(attempt v3QualificationAttempt) bool {
+	return attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.MVPHTTPRecurringEvidencePolicy
+}
+
+func ordinaryJourneys(attempt v3QualificationAttempt) []string {
+	if httpLiveAttempt(attempt) {
+		return strings.Fields(softwarelifecycle.MVPHTTPScenarios)
+	}
+	return strings.Fields(softwarelifecycle.MVPLiveScenarios)
+}
+
+func ordinaryChecks(attempt v3QualificationAttempt, id string) []string {
+	if !httpLiveAttempt(attempt) {
+		if strings.HasPrefix(id, "source-") {
+			return mvpUpgradeChecks(id)
+		}
+		return mvpLiveChecks(id)
+	}
+	if strings.HasPrefix(id, "source-") {
+		checks := mvpUpgradeChecks(id)
+		for i, check := range checks {
+			if strings.HasSuffix(id, "-precommit") {
+				if check == "outside-trusted-https" {
+					checks[i] = "outside-subscription-transport-preserved"
+				}
+				continue
+			}
+			switch check {
+			case "no-ownership-migration":
+				checks[i] = "updater-ownership-preserved-until-cleanup"
+			case "subscription-link-unchanged":
+				checks[i] = "subscription-address-port-path-token-preserved"
+			case "outside-trusted-https":
+				checks[i] = "outside-authenticated-http"
+			}
+		}
+		if !strings.HasSuffix(id, "-precommit") {
+			checks = append(checks, strings.Fields("mandatory-http-handoff-completed retained-certificate-bytes-and-provenance-preserved owned-renewal-and-http80-retired existing-client-profile-refreshed-with-settings-preserved no-migration-ca-operation no-migration-authority-residue")...)
+		}
+		return checks
+	}
+	if id == "mvp-renewal" {
+		return nil
+	}
+	if id == "mvp-serving" {
+		return strings.Fields("serving-restart-preserves-link current-artifact-after-restart outside-authenticated-http no-certificate-or-renewal-resources proxy-traffic-preserved")
+	}
+	checks := mvpLiveChecks(id)
+	if id == "mvp-subscription" {
+		checks[0] = "outside-authenticated-http"
+		checks = append(checks, "no-certificate-or-renewal-resources", "http-exposure-disclosed")
+	}
+	return checks
 }
 
 func ordinaryLiveAttempt(attempt v3QualificationAttempt) bool {

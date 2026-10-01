@@ -25,6 +25,7 @@ import (
 
 // SubscriptionPreflight contains read-only admission facts, not execution authority.
 type SubscriptionPreflight struct {
+	HTTP                                                                     bool
 	TCP80, TCP8443, Clock, PackageLocks, RenewalIdle, Dependencies, Firewall Observation
 	RecorderDirectory                                                        Observation
 	RecorderDirectoryCreated                                                 bool
@@ -76,6 +77,7 @@ const SubscriptionCandidateTokenPath = ServingStagingPath + "/credential"
 const SubscriptionCandidateStatePath = ServingStagingPath + "/serving.json"
 
 type SubscriptionResourceAuthority struct {
+	HTTP                     bool   `json:"http,omitempty"`
 	PublicIPv4               string `json:"public_ipv4"`
 	FirewallSHA256           string `json:"firewall_sha256"`
 	SnapdCreated             bool   `json:"snapd_created"`
@@ -84,12 +86,18 @@ type SubscriptionResourceAuthority struct {
 }
 
 func (a SubscriptionResourceAuthority) Valid() bool {
+	if a.HTTP && (a.SnapdCreated || a.CertbotCreated || a.RecorderDirectoryCreated) {
+		return false
+	}
 	ip := net.ParseIP(a.PublicIPv4)
 	digest, err := hex.DecodeString(a.FirewallSHA256)
 	return ip != nil && ip.To4() != nil && ip.String() == a.PublicIPv4 && err == nil && len(digest) == 32 && hex.EncodeToString(digest) == a.FirewallSHA256
 }
 
 func (a SubscriptionResourceAuthority) Resources() []string {
+	if a.HTTP {
+		return []string{SubscriptionFirewallUnitPath + " root:root 0644 one-link sha256:" + a.FirewallSHA256, "iptables filter INPUT " + a.PublicIPv4 + "/32 tcp/8443 comment=sbxr-subscription exact-owned"}
+	}
 	snapd, certbot := "reused", "reused"
 	if a.SnapdCreated {
 		snapd = "created"
@@ -111,6 +119,9 @@ func (a SubscriptionResourceAuthority) Resources() []string {
 }
 
 func SubscriptionResourcesForEnablement(publicIPv4 string, facts SubscriptionPreflight) SubscriptionResourceAuthority {
+	if facts.HTTP {
+		return SubscriptionResourceAuthority{HTTP: true, PublicIPv4: publicIPv4, FirewallSHA256: digest([]byte(httpSubscriptionFirewallUnit(publicIPv4)))}
+	}
 	return SubscriptionResourceAuthority{
 		PublicIPv4: publicIPv4, FirewallSHA256: digest([]byte(subscriptionFirewallUnit(publicIPv4))),
 		SnapdCreated: !facts.SnapdInstalled, CertbotCreated: !facts.CertbotInstalled,
@@ -293,6 +304,9 @@ func (adapter Adapter) subscriptionDependencies(ctx context.Context, facts Subsc
 }
 
 func (adapter Adapter) PrepareSubscription(ctx context.Context, input SubscriptionEnableInput) SubscriptionEnableResult {
+	if input.Serving.HTTP {
+		return adapter.prepareHTTPSubscription(ctx, input)
+	}
 	decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(input.Credential))
 	if err != nil || len(input.Credential) != 43 || len(decoded) != 32 || input.Serving.CertificateGeneration != 0 || input.Serving.LinkID == "" || input.Serving.CredentialSHA256 != digest(input.Credential) || !input.Renewal.Valid() || input.Renewal.PublicIPv4 != input.PublicIPv4 {
 		return SubscriptionEnableResult{}
@@ -489,6 +503,9 @@ func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os
 }
 
 func (adapter Adapter) ActivatePreparedSubscription(ctx context.Context, serving ServingAuthority, renewal RenewalAuthority) bool {
+	if serving.HTTP {
+		return adapter.activateHTTPSubscription(ctx, serving, renewal.PublicIPv4)
+	}
 	published, valid := adapter.publishedServingAuthority(renewal, serving)
 	if !serving.Valid() || !renewal.Valid() || !valid || published != serving || !adapter.renewalFiles(renewal) || !adapter.exactSubscriptionFirewall(renewal.PublicIPv4) {
 		return false
@@ -511,7 +528,7 @@ func (adapter Adapter) ActivatePreparedSubscription(ctx context.Context, serving
 
 func (adapter Adapter) PrepareSubscriptionRotation(input SubscriptionRotationInput) bool {
 	decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(input.Credential))
-	if err != nil || len(input.Credential) != 43 || len(decoded) != 32 || !input.Source.Valid() || !input.Target.Valid() || !input.Renewal.Valid() || input.Source.CertificateGeneration != input.Target.CertificateGeneration || input.Source.CertificateSHA256 != input.Target.CertificateSHA256 || input.Source.LinkID == input.Target.LinkID || input.Source.CredentialSHA256 == input.Target.CredentialSHA256 || input.Target.CredentialSHA256 != digest(input.Credential) {
+	if err != nil || len(input.Credential) != 43 || len(decoded) != 32 || !input.Source.Valid() || !input.Target.Valid() || input.Source.HTTP != input.Target.HTTP || !input.Source.HTTP && !input.Renewal.Valid() || input.Source.CertificateGeneration != input.Target.CertificateGeneration || input.Source.CertificateSHA256 != input.Target.CertificateSHA256 || input.Source.LinkID == input.Target.LinkID || input.Source.CredentialSHA256 == input.Target.CredentialSHA256 || input.Target.CredentialSHA256 != digest(input.Credential) {
 		return false
 	}
 	if link, ok := adapter.ReadSubscriptionLink(input.Source, input.Renewal.PublicIPv4); !ok || len(link) == 0 || !adapter.prepareServingStaging() {
@@ -556,7 +573,7 @@ func (adapter Adapter) RestoreSubscriptionRotation(ctx context.Context, input Su
 }
 
 func (adapter Adapter) RemoveSubscriptionRotation(ctx context.Context, input SubscriptionRotationInput, exclusion *ServingExclusion) bool {
-	if !input.Source.Valid() || !input.Target.Valid() || !adapter.validServingExclusion(exclusion) || !adapter.servingCommand(ctx, "disable", "--now", "sbxr-subscription.service") || !adapter.ServingQuiescent() || !adapter.removeSubscriptionCandidates(&input.Target, input.Target.CredentialSHA256) {
+	if !input.Source.Valid() || !input.Target.Valid() || input.Source.HTTP != input.Target.HTTP || !input.Source.HTTP && !adapter.validServingExclusion(exclusion) || !adapter.servingCommand(ctx, "disable", "--now", "sbxr-subscription.service") || !adapter.ServingQuiescent() || !adapter.removeSubscriptionCandidates(&input.Target, input.Target.CredentialSHA256) {
 		return false
 	}
 	token, tokenErr := adapter.protectedServingFile(ServingTokenPath, 0600, "")
@@ -571,6 +588,9 @@ func (adapter Adapter) RemoveSubscriptionRotation(ctx context.Context, input Sub
 }
 
 func (adapter Adapter) RemoveSubscriptionRepair(ctx context.Context, source, target ServingAuthority, exclusion *ServingExclusion) bool {
+	if source.HTTP || target.HTTP {
+		return source == target && adapter.removeHTTPServingRuntime(ctx, source, exclusion)
+	}
 	stagingAccepted := adapter.servingDirectory(ServingStagingPath, nil, false) || adapter.safelyAbsent(ServingStagingPath)
 	if !source.Valid() || !target.Valid() || source.LinkID != target.LinkID || source.CredentialSHA256 != target.CredentialSHA256 || !adapter.validServingExclusion(exclusion) || !stagingAccepted || !adapter.safeCertbotReadme() {
 		return false
@@ -725,6 +745,13 @@ func (adapter Adapter) exactSubscriptionFirewall(ipv4 string) bool {
 }
 
 func (adapter Adapter) InspectPreparedSubscription(ctx context.Context, serving ServingAuthority, renewal RenewalAuthority) Observation {
+	if serving.HTTP {
+		if !adapter.InspectServingFiles(serving, false).Accepted || !adapter.exactHTTPSubscriptionFirewall(renewal.PublicIPv4) {
+			return observation(false, true)
+		}
+		loaded, observed := adapter.loadedServingAuthority(ctx, renewal, serving, serving)
+		return observation(loaded == serving, observed)
+	}
 	if !serving.Valid() || !renewal.Valid() || !adapter.InspectServingFiles(serving, false).Accepted || !adapter.renewalFiles(renewal) || !adapter.exactSubscriptionFirewall(renewal.PublicIPv4) {
 		return observation(false, true)
 	}
@@ -749,10 +776,17 @@ func (adapter Adapter) ReadSubscriptionLink(serving ServingAuthority, publicIPv4
 	if err != nil || len(decoded) != 32 {
 		return nil, false
 	}
-	return []byte("https://" + publicIPv4 + ":8443/s/" + string(token[:43])), true
+	scheme := "https"
+	if serving.HTTP {
+		scheme = "http"
+	}
+	return []byte(scheme + "://" + publicIPv4 + ":8443/s/" + string(token[:43])), true
 }
 
 func (adapter Adapter) CleanupPreparedSubscription(ctx context.Context, input SubscriptionCleanupInput) bool {
+	if input.Resources != nil && input.Resources.HTTP {
+		return adapter.cleanupHTTPSubscription(ctx, input)
+	}
 	if input.Resources == nil || !input.Resources.Valid() {
 		return false
 	}
@@ -1055,10 +1089,10 @@ func (adapter Adapter) RemoveSubscriptionResources(ctx context.Context, authorit
 		return false
 	}
 	unit, err := adapter.protectedServingFile(SubscriptionFirewallUnitPath, 0644, authority.FirewallSHA256)
-	if err != nil && !errors.Is(err, os.ErrNotExist) || err == nil && string(unit) != subscriptionFirewallUnit(authority.PublicIPv4) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) || err == nil && string(unit) != subscriptionResourceUnit(authority) {
 		return false
 	}
-	if !adapter.removeSubscriptionPublication(SubscriptionFirewallUnitPath, []byte(subscriptionFirewallUnit(authority.PublicIPv4)), 0644) {
+	if !adapter.removeSubscriptionPublication(SubscriptionFirewallUnitPath, []byte(subscriptionResourceUnit(authority)), 0644) {
 		return false
 	}
 	run := adapter.subscriptionCommand
@@ -1071,7 +1105,7 @@ func (adapter Adapter) RemoveSubscriptionResources(ctx context.Context, authorit
 			return false
 		}
 	}
-	if !adapter.removeOwnedLineage(serving) {
+	if !authority.HTTP && !adapter.removeOwnedLineage(serving) {
 		return false
 	}
 	if authority.RecorderDirectoryCreated {

@@ -274,7 +274,7 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 	twoIssuance := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && attempt.EvidencePolicy == softwarelifecycle.RepairTwoIssuanceEvidencePolicy
 	initial, boundary, recovery, final := "Running", "observed", "none", "Running"
 	if ordinaryLiveAttempt(attempt) {
-		if len(mvpLiveChecks(id)) == 0 && (!mvpRecurringAttempt(attempt) || len(mvpUpgradeChecks(id)) == 0) {
+		if len(ordinaryChecks(attempt, id)) == 0 {
 			return false
 		}
 		if id == "mvp-install" {
@@ -341,8 +341,8 @@ func validScenarioResult(scenario v3ScenarioEvidence, attempt v3QualificationAtt
 		return false
 	}
 	checks := requiredV3Checks(id)
-	if mvpRecurringAttempt(attempt) && source != nil {
-		checks = mvpUpgradeChecks(id)
+	if ordinaryLiveAttempt(attempt) {
+		checks = ordinaryChecks(attempt, id)
 	}
 	latency := attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy)
 	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.RepairLifecycleEvidencePolicy || latency) && id == "lifecycle-menu" {
@@ -521,8 +521,14 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 			// reserves the old MVP headers for clean-install repair. New explicit
 			// headers disclose this policy without mislabelling it as that scope.
 			body.WriteString("Recurring evidence policy: " + attempt.EvidencePolicy + "\nRecurring live acceptance coverage: " + softwarelifecycle.MVPRecurringCoverage + "\nRecurring Karing evidence: " + softwarelifecycle.MVPKaringEvidence + "\n")
+			if httpLiveAttempt(*attempt) {
+				body.WriteString("Subscription transport: " + softwarelifecycle.MVPHTTPTransportDisclosure + "\n")
+			}
 		} else if mvpLiveAttempt(*attempt) {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nLive acceptance coverage: " + softwarelifecycle.MVPLiveCoverage + "\nKaring connectivity evidence: " + softwarelifecycle.MVPKaringEvidence + "\n")
+			if httpLiveAttempt(*attempt) {
+				body.WriteString("Subscription transport: " + softwarelifecycle.MVPHTTPTransportDisclosure + "\n")
+			}
 		} else if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nAutomated-only scenarios (not live): " + strings.Join(attempt.AutomatedOnlyScenarios, " ") + "\nAutomated-only result: Passed in native amd64/arm64 workflow\n")
 			if slices.Contains([]string{softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, attempt.EvidencePolicy) {

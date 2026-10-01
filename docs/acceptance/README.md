@@ -1,5 +1,10 @@
 # Acceptance documentation
 
+Fresh HTTP subscription candidates follow [HTTP live qualification](http-subscription-live.md)
+under [ADR-0026](../adr/0026-http-subscription.md). Historical HTTPS evidence
+retains its policy and cannot qualify changed HTTP candidate bytes.
+
+
 ## Recorded release state
 
 [v3.1.81 / 159 stable publication — 2026-09-25](reports/v3.1.81-stable-publication-2026-09-25.md)

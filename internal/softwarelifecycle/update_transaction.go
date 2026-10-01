@@ -204,8 +204,16 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 	if err != nil {
 		status := statusFromInspection(inspector.inspectReadyUnderLock())
 		if status.State == Ready {
+			authority := &MutationLockAuthority{file: lock, path: inspector.path(mutationLockPath), uid: inspector.uid}
+			handoff, complete := inspector.afterRuntime(ctx, root, authority)
+			if !complete {
+				return updateResult(RecoveryRequiredState, inspector.activeRecoveryIdentity(root), RecoverFailed, handoff)
+			}
 			status.Code = RecoverNotRequired
 			status.Message = "SBXR does not need recovery."
+			if handoff != "" {
+				status.Message += "\n" + handoff
+			}
 			return status
 		}
 		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
@@ -223,6 +231,12 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "Recovery was cancelled before effects. Review Recover again.")
 	}
 	authority := &MutationLockAuthority{file: lock, path: inspector.path(mutationLockPath), uid: inspector.uid}
+	var releaseRuntime func()
+	defer func() {
+		if releaseRuntime != nil {
+			releaseRuntime()
+		}
+	}()
 	if record.Schema == 2 {
 		body, err := updateOwnership(root)
 		if err != nil || digestBytes(body) != record.OwnershipSHA256 {
@@ -234,7 +248,7 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 		if !ok {
 			return updateResult(RecoveryRequiredState, nil, RecoverRefused, "Recovery contracts are unsafe or busy. Wait for active writers and inspect pending proxy work.")
 		}
-		defer release()
+		releaseRuntime = release
 	}
 	switch record.Checkpoint {
 	case preparedCheckpoint:
@@ -273,12 +287,23 @@ func (inspector filesystemInspector) recover(ctx context.Context, progress Progr
 		if err := cleanupCommitted(root, record); err != nil {
 			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
 		}
+		if releaseRuntime != nil {
+			releaseRuntime()
+			releaseRuntime = nil
+		}
+		handoff, complete := inspector.afterRuntime(ctx, root, authority)
+		if !complete {
+			return updateResult(RecoveryRequiredState, inspector.activeRecoveryIdentity(root), RecoverFailed, handoff)
+		}
 		status := statusFromInspection(inspector.inspectReadyUnderLock())
 		if status.State != Ready {
 			return updateResult(RecoveryRequiredState, nil, RecoverFailed, "SBXR recovery could not reach a verified terminal state.")
 		}
 		status.Code = RecoverCandidateRetained
 		status.Message = "The committed SBXR release was retained."
+		if handoff != "" {
+			status.Message += "\n" + handoff
+		}
 		return status
 	default:
 		return updateResult(RecoveryRequiredState, nil, RecoverRefused, "SBXR recovery was refused because safe recovery could not be proven.")
@@ -537,6 +562,12 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 	}
 	authority := &MutationLockAuthority{file: lock, path: inspector.path(mutationLockPath), uid: inspector.uid}
 	var ownership []byte
+	var releaseRuntime func()
+	defer func() {
+		if releaseRuntime != nil {
+			releaseRuntime()
+		}
+	}()
 	if inspector.updateRuntime != nil {
 		var release func()
 		var admitted bool
@@ -544,7 +575,7 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 		if !admitted {
 			return updateResult(Ready, &prior.identity, UpdateReleaseRefused, "Proxy or subscription contracts are unsafe or busy. Finish pending work, then Check again.")
 		}
-		defer release()
+		releaseRuntime = release
 	}
 	record := bindUpdateRecord(priorInspection, candidate)
 	if inspector.updateRuntime != nil {
@@ -599,7 +630,19 @@ func (inspector filesystemInspector) update(ctx context.Context, latest LatestRe
 	if err := cleanupCommitted(root, record); err != nil {
 		return updateResult(RecoveryRequiredState, &candidate.cell.release.Identity, UpdateRecoveryRequired, "The update needs recovery before normal operations can continue.")
 	}
-	return Result{State: Ready, Installed: &candidate.cell.release.Identity, UpdateInstalled: true, Code: UpdateInstalled, Message: "SBXR was updated."}
+	if releaseRuntime != nil {
+		releaseRuntime()
+		releaseRuntime = nil
+	}
+	handoff, complete := inspector.afterRuntime(ctx, root, authority)
+	if !complete {
+		return updateResult(RecoveryRequiredState, &candidate.cell.release.Identity, UpdateRecoveryRequired, handoff)
+	}
+	message := "SBXR was updated."
+	if handoff != "" {
+		message += "\n" + handoff
+	}
+	return Result{State: Ready, Installed: &candidate.cell.release.Identity, UpdateInstalled: true, Code: UpdateInstalled, Message: message}
 }
 
 func proxyAuthorityAllowsUpdate(root *os.Root, admission UpdateAdmission, source ReleaseIdentity, target *UpdateTarget) bool {

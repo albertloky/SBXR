@@ -27,6 +27,9 @@ func (a Adapter) InspectCertificateServingState(target ServingAuthority, pending
 		return ServingAuthority{}, false
 	}
 	source := state.Serving
+	if target.HTTP {
+		return source, source == target && source.Valid() && a.InspectServingFiles(target, false).Accepted
+	}
 	if !source.Valid() || !target.Valid() || source.LinkID != target.LinkID || source.CredentialSHA256 != target.CredentialSHA256 || source.CertificateGeneration > target.CertificateGeneration || source.CertificateGeneration == target.CertificateGeneration && source != target {
 		return ServingAuthority{}, false
 	}
@@ -56,6 +59,9 @@ func (a Adapter) certificateStateStaging(target ServingAuthority) bool {
 // that checkpoint until this expected-current publication and staging cleanup
 // are durable, including after a previous rename succeeded but fsync failed.
 func (a Adapter) PublishCertificateServingState(renewal RenewalAuthority, source, target ServingAuthority) bool {
+	if source.HTTP || target.HTTP {
+		return source == target && source.HTTP && a.InspectServingFiles(target, false).Accepted && a.SyncOwnership(ServingStatePath, servingStateBytes(target)) == nil
+	}
 	if !source.Valid() || !target.Valid() || source.LinkID != target.LinkID || source.CredentialSHA256 != target.CredentialSHA256 || source.CertificateGeneration > target.CertificateGeneration || source.CertificateGeneration == target.CertificateGeneration && source != target {
 		return false
 	}

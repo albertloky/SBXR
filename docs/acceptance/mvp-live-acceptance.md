@@ -1,5 +1,13 @@
 # MVP live acceptance
 
+Fresh HTTP candidates use [HTTP subscription live qualification](http-subscription-live.md)
+and [ADR-0026](../adr/0026-http-subscription.md). This document retains the
+HTTPS policies' meaning. Its non-certificate safeguards remain applicable;
+certificate-replacement and trusted-subscription-TLS requirements do not apply
+to a fresh HTTP candidate. Existing HTTPS source preparations still use their
+unchanged certificate and renewal contract.
+
+
 For future recurring releases use [ordinary recurring acceptance](ordinary-recurring-live.md)
 and ADR-0025. This document retains the practical procedure for a candidate declaring
 `mvp-live-v1`. It is a clean-install scope. It does not prove an incoming

@@ -75,4 +75,17 @@ func TestOrdinaryRecordCompatibility(t *testing.T) {
 			}
 		}
 	}
+	if strings.Contains(fixture.Body, "Recurring evidence policy: "+softwarelifecycle.MVPHTTPRecurringEvidencePolicy+"\n") {
+		disclosure := "Subscription transport: " + softwarelifecycle.MVPHTTPTransportDisclosure + "\n"
+		for _, bad := range []string{
+			strings.Replace(fixture.Body, disclosure, "", 1),
+			fixture.Body + disclosure,
+			strings.Replace(fixture.Body, disclosure, "Subscription transport: HTTPS\n", 1),
+			strings.Replace(fixture.Body, "Journey: mvp-serving ", "Journey: mvp-renewal ", 1),
+		} {
+			if qualifiedReleaseSupport(bad, fixture.Release) {
+				t.Fatal("inexact HTTP disclosure or serving journey accepted")
+			}
+		}
+	}
 }

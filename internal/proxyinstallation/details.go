@@ -61,6 +61,9 @@ func ownedDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bo
 		"Client Identity: " + present(facts.Configuration.Accepted),
 		"Running is local VPS truth only; outside-client traffic is not claimed.",
 	}
+	if record.Serving != nil && record.Serving.HTTP {
+		details = append(details, "Subscription transport: HTTP; the link and configuration are exposed to interception and tampering.")
+	}
 	if status != ProblemDetected {
 		return details
 	}

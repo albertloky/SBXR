@@ -11,23 +11,33 @@ import (
 )
 
 func TestMVPPythonAssemblerProducesFiveValidatorAcceptedPrefixes(t *testing.T) {
-	testMVPAssembler(t, false)
+	testMVPAssembler(t, false, false)
 }
 
 func TestMVPRecurringPythonAssemblerProducesEightValidatorAcceptedPrefixes(t *testing.T) {
-	testMVPAssembler(t, true)
+	testMVPAssembler(t, true, false)
 }
 
-func testMVPAssembler(t *testing.T, recurring bool) {
+func TestHTTPPythonAssemblerProducesFiveValidatorAcceptedPrefixes(t *testing.T) {
+	testMVPAssembler(t, false, true)
+}
+
+func TestHTTPRecurringRecorderAndAssemblerProduceEightValidatorAcceptedPrefixes(t *testing.T) {
+	testMVPAssembler(t, true, true)
+}
+
+func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
-	fixture := mvpQualificationFixture
+	var boundary string
+	var manifest []byte
 	if recurring {
-		fixture = mvpRecurringQualificationFixture
+		boundary, manifest, _ = mvpRecurringQualificationFixtureFor(t, binary, httpSubscription)
+	} else {
+		boundary, manifest, _ = mvpQualificationFixtureWithTransport(t, binary, false, httpSubscription)
 	}
-	boundary, manifest, _ := fixture(t, binary)
 	directory := t.TempDir()
 	write := func(name string, value []byte) string {
 		t.Helper()
@@ -52,7 +62,7 @@ func testMVPAssembler(t *testing.T, recurring bool) {
 		if id == "mvp-subscription" {
 			limit = 7200
 		}
-		expectedChecks := ordinaryFixtureChecks(id)
+		expectedChecks := ordinaryFixtureChecksFor(id, httpSubscription)
 		request := map[string]any{
 			"deadline_unix": now.Add(time.Duration(limit) * time.Second).Unix(), "not_before": stamp,
 			"qualification_manifest_sha256": sha256String(string(manifest)),

@@ -23,7 +23,7 @@ type certificateActivationHost interface {
 }
 
 func compatibleCertificateTarget(source, target hostadapter.ServingAuthority) bool {
-	return source.Valid() && target.Valid() && source.LinkID == target.LinkID && source.CredentialSHA256 == target.CredentialSHA256 && (target == source || target.CertificateGeneration > source.CertificateGeneration)
+	return source.Valid() && target.Valid() && source.HTTP == target.HTTP && source.LinkID == target.LinkID && source.CredentialSHA256 == target.CredentialSHA256 && (target == source || target.CertificateGeneration > source.CertificateGeneration)
 }
 
 func (module *installedInterface) inspectSubscription(ctx context.Context) (SubscriptionStatus, hostadapter.CertificateActivationInspection) {
@@ -66,6 +66,13 @@ func (module *installedInterface) inspectSubscription(ctx context.Context) (Subs
 	}
 	if record.ClientRotation != nil {
 		return SubscriptionChangeIncomplete, hostadapter.CertificateActivationInspection{}
+	}
+	if record.Serving.HTTP {
+		inspection := module.inspectServingTransport(ctx, record)
+		if !inspection.Observed || !inspection.Accepted || inspection.Loaded != *record.Serving || record.SubscriptionCompromised {
+			return SubscriptionProblemDetected, inspection
+		}
+		return SubscriptionAvailable, inspection
 	}
 	activationHost, ok := module.host.(certificateActivationHost)
 	renewalHost, renewalOK := module.host.(renewalHost)

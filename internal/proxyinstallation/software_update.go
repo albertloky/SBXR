@@ -14,7 +14,11 @@ import (
 // Software Lifecycle transaction; it creates no Proxy Installation Action.
 func SoftwareUpdateRuntime() softwarelifecycle.UpdateRuntime {
 	host := hostadapter.New()
-	return softwareUpdateRuntime(host)
+	runtime := softwareUpdateRuntime(host)
+	runtime.AfterComplete = func(ctx context.Context, installed softwarelifecycle.ReleaseIdentity, lock *softwarelifecycle.MutationLockAuthority) (string, bool) {
+		return migrateLegacyHTTPSubscription(ctx, host, installed, lock)
+	}
+	return runtime
 }
 
 type softwareUpdateHost interface {
@@ -62,6 +66,15 @@ func softwareUpdateRuntime(host softwareUpdateHost) softwarelifecycle.UpdateRunt
 				release()
 				return nil, false
 			}
+			if record.HTTPSRetirement != nil {
+				retiredHost, ok := host.(interface {
+					InspectHTTPSRetirement(hostadapter.HTTPSRetirementAuthority, bool) bool
+				})
+				if !ok || !retiredHost.InspectHTTPSRetirement(*record.HTTPSRetirement, false) {
+					release()
+					return nil, false
+				}
+			}
 			if record.Renewal != nil {
 				exclusion, ok := host.AcquireRenewalExclusion(*record.Renewal)
 				if !ok {
@@ -70,7 +83,7 @@ func softwareUpdateRuntime(host softwareUpdateHost) softwarelifecycle.UpdateRunt
 				}
 				release = func() { exclusion.Release(); packageLocks.Release() }
 			}
-			if record.Serving != nil {
+			if record.Serving != nil && !record.Serving.HTTP {
 				exclusion, ok := host.AcquireServingExclusion()
 				if !ok {
 					release()
@@ -90,7 +103,7 @@ func softwareUpdateRuntime(host softwareUpdateHost) softwarelifecycle.UpdateRunt
 				release()
 				return nil, false
 			}
-			if target != nil && record.Serving != nil && !host.InspectPreparedSubscription(ctx, *record.Serving, *record.Renewal).Accepted {
+			if target != nil && record.Serving != nil && !host.InspectPreparedSubscription(ctx, *record.Serving, renewalContext(record)).Accepted {
 				release()
 				return nil, false
 			}
@@ -109,7 +122,7 @@ func softwareUpdateRuntime(host softwareUpdateHost) softwarelifecycle.UpdateRunt
 			if !ok {
 				return false
 			}
-			if record.Serving != nil && !host.CompleteSoftwareUpdateServing(hostadapter.RuntimeStartContext(ctx, lock), *record.Serving, *record.Renewal) {
+			if record.Serving != nil && !host.CompleteSoftwareUpdateServing(hostadapter.RuntimeStartContext(ctx, lock), *record.Serving, renewalContext(record)) {
 				return false
 			}
 			current, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)

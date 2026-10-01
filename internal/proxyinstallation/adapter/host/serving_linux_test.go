@@ -88,42 +88,52 @@ func TestServingSandboxChild(t *testing.T) {
 }
 
 func TestServingSandboxUsesRealInaccessibleMounts(t *testing.T) {
-	a, authority := servingFiles(t)
-	body, _ := json.Marshal(authority)
-	if err := os.WriteFile(filepath.Join(a.root, "authority.json"), body, 0600); err != nil {
-		t.Fatal(err)
-	}
-	args := []string{os.Args[0], "-test.run=^TestServingSandboxChild$"}
-	program := args[0]
-	args = args[1:]
-	if os.Geteuid() != 0 {
-		if exec.Command("sudo", "-n", "true").Run() != nil {
-			if os.Getenv("GITHUB_ACTIONS") == "true" {
-				t.Fatal("CI requires root mount capability")
+	for _, http := range []bool{false, true} {
+		t.Run(map[bool]string{false: "HTTPS", true: "HTTP"}[http], func(t *testing.T) {
+			a, authority := servingFiles(t)
+			if http {
+				authority.HTTP, authority.CertificateGeneration, authority.CertificateSHA256 = true, 0, [4]string{}
+				if os.WriteFile(a.path(ServingStatePath), servingStateBytes(authority), 0600) != nil || os.RemoveAll(a.path(servingArchive)) != nil || os.RemoveAll(a.path(servingLive)) != nil {
+					t.Fatal("HTTP sandbox fixture")
+				}
 			}
-			t.Skip("root mount capability unavailable")
-		}
-		// The child changes only this fixture's ownership. Restore it before
-		// t.TempDir cleanup in the unprivileged parent, including on failures.
-		t.Cleanup(func() {
-			owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
-			if exec.Command("sudo", "-n", "chown", "-R", owner, a.root).Run() != nil {
-				t.Error("sandbox fixture ownership cleanup failed")
+			body, _ := json.Marshal(authority)
+			if err := os.WriteFile(filepath.Join(a.root, "authority.json"), body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{os.Args[0], "-test.run=^TestServingSandboxChild$"}
+			program := args[0]
+			args = args[1:]
+			if os.Geteuid() != 0 {
+				if exec.Command("sudo", "-n", "true").Run() != nil {
+					if os.Getenv("GITHUB_ACTIONS") == "true" {
+						t.Fatal("CI requires root mount capability")
+					}
+					t.Skip("root mount capability unavailable")
+				}
+				// The child changes only this fixture's ownership. Restore it before
+				// t.TempDir cleanup in the unprivileged parent, including on failures.
+				t.Cleanup(func() {
+					owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+					if exec.Command("sudo", "-n", "chown", "-R", owner, a.root).Run() != nil {
+						t.Error("sandbox fixture ownership cleanup failed")
+					}
+				})
+				program = "sudo"
+				args = []string{"-n", "--preserve-env=SBXR_TEST_SERVING_ROOT", os.Args[0], "-test.run=^TestServingSandboxChild$"}
+			}
+			cmd := exec.Command(program, args...)
+			cmd.Env = append(os.Environ(), "SBXR_TEST_SERVING_ROOT="+a.root)
+			output, err := cmd.CombinedOutput()
+			if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 77 {
+				if os.Getenv("GITHUB_ACTIONS") == "true" {
+					t.Fatal("CI requires mount namespace capability")
+				}
+				t.Skip("mount namespace capability unavailable")
+			}
+			if err != nil {
+				t.Fatalf("sandbox mechanics failed: %v %s", err, output)
 			}
 		})
-		program = "sudo"
-		args = []string{"-n", "--preserve-env=SBXR_TEST_SERVING_ROOT", os.Args[0], "-test.run=^TestServingSandboxChild$"}
-	}
-	cmd := exec.Command(program, args...)
-	cmd.Env = append(os.Environ(), "SBXR_TEST_SERVING_ROOT="+a.root)
-	output, err := cmd.CombinedOutput()
-	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 77 {
-		if os.Getenv("GITHUB_ACTIONS") == "true" {
-			t.Fatal("CI requires mount namespace capability")
-		}
-		t.Skip("mount namespace capability unavailable")
-	}
-	if err != nil {
-		t.Fatalf("sandbox mechanics failed: %v %s", err, output)
 	}
 }

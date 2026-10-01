@@ -70,6 +70,8 @@ type ownershipRecord struct {
 	Startup                  *hostadapter.ProxyStartupAuthority         `json:"proxy_startup,omitempty"`
 	LockProvisioning         *hostadapter.LockProvisioningAuthority     `json:"lock_provisioning,omitempty"`
 	ClientRotation           *clientIdentityRotation                    `json:"client_identity_rotation,omitempty"`
+	HTTPSRetirement          *hostadapter.HTTPSRetirementAuthority      `json:"https_retirement,omitempty"`
+	TransportMigrating       bool                                       `json:"subscription_transport_migration,omitempty"`
 }
 
 type clientIdentityRotation struct {
@@ -232,17 +234,62 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "lock_provisioning", "client_identity_rotation"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "lock_provisioning", "client_identity_rotation", "https_retirement", "subscription_transport_migration"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return ownershipRecord{}, false
 		}
 	}
+	if raw, exists := fields["subscription_transport_migration"]; exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("true")) {
+		return ownershipRecord{}, false
+	}
+	if raw, exists := fields["https_retirement"]; exists {
+		var retained map[string]json.RawMessage
+		if json.Unmarshal(raw, &retained) != nil || len(retained) != 6 {
+			return ownershipRecord{}, false
+		}
+		for _, name := range []string{"serving", "renewal", "resources", "configuration_mode", "configuration_sha256", "evidence_sha256"} {
+			if len(retained[name]) == 0 || bytes.Equal(bytes.TrimSpace(retained[name]), []byte("null")) {
+				return ownershipRecord{}, false
+			}
+		}
+		for name, required := range map[string][]string{
+			"serving":   {"link_id", "credential_sha256", "certificate_generation", "certificate_sha256"},
+			"renewal":   {"recorder_id", "lineage", "public_ipv4", "invocation"},
+			"resources": {"public_ipv4", "firewall_sha256", "snapd_created", "certbot_created"},
+		} {
+			var nested map[string]json.RawMessage
+			if json.Unmarshal(retained[name], &nested) != nil {
+				return ownershipRecord{}, false
+			}
+			count := len(required)
+			if name == "resources" && bytes.Equal(bytes.TrimSpace(nested["recorder_directory_created"]), []byte("true")) {
+				count++
+			}
+			if len(nested) != count {
+				return ownershipRecord{}, false
+			}
+			for _, field := range required {
+				if len(nested[field]) == 0 || bytes.Equal(bytes.TrimSpace(nested[field]), []byte("null")) {
+					return ownershipRecord{}, false
+				}
+			}
+			if name == "serving" {
+				var hashes []string
+				if json.Unmarshal(nested["certificate_sha256"], &hashes) != nil || len(hashes) != 4 {
+					return ownershipRecord{}, false
+				}
+			}
+		}
+	}
 	if raw, exists := fields["serving"]; exists {
 		var serving map[string]json.RawMessage
 		var hashes []string
-		if json.Unmarshal(raw, &serving) != nil || len(serving) != 4 || json.Unmarshal(serving["certificate_sha256"], &hashes) != nil || len(hashes) != 4 {
+		if json.Unmarshal(raw, &serving) != nil || (len(serving) != 4 && len(serving) != 5) || json.Unmarshal(serving["certificate_sha256"], &hashes) != nil || len(hashes) != 4 {
+			return ownershipRecord{}, false
+		}
+		if len(serving) == 5 && !bytes.Equal(bytes.TrimSpace(serving["http"]), []byte("true")) {
 			return ownershipRecord{}, false
 		}
 		for _, name := range []string{"link_id", "credential_sha256", "certificate_generation", "certificate_sha256"} {
@@ -302,6 +349,29 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 		for name, value := range repair {
 			if !slices.Contains([]string{"operation_id", "kind", "direction", "correction", "effects", "completed_effects", "checkpoint", "source", "target"}, name) || name == "target" && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+				return ownershipRecord{}, false
+			}
+		}
+	}
+	if raw, exists := fields["subscription_resources"]; exists {
+		var resources map[string]json.RawMessage
+		if json.Unmarshal(raw, &resources) != nil {
+			return ownershipRecord{}, false
+		}
+		count := 4
+		for _, optional := range []string{"http", "recorder_directory_created"} {
+			if value, present := resources[optional]; present {
+				if !bytes.Equal(bytes.TrimSpace(value), []byte("true")) {
+					return ownershipRecord{}, false
+				}
+				count++
+			}
+		}
+		if len(resources) != count {
+			return ownershipRecord{}, false
+		}
+		for _, field := range []string{"public_ipv4", "firewall_sha256", "snapd_created", "certbot_created"} {
+			if len(resources[field]) == 0 || bytes.Equal(bytes.TrimSpace(resources[field]), []byte("null")) {
 				return ownershipRecord{}, false
 			}
 		}
@@ -374,7 +444,7 @@ func validOwnership(record ownershipRecord) bool {
 		return false
 	}
 	if record.Schema == 1 {
-		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.SubscriptionResources != nil || record.Startup != nil || record.ClientRotation != nil {
+		if record.ResourceCreatingReleases != nil || record.FinishingRelease != nil || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.SubscriptionResources != nil || record.Startup != nil || record.ClientRotation != nil || record.HTTPSRetirement != nil || record.TransportMigrating {
 			return false
 		}
 	} else {
@@ -394,10 +464,19 @@ func validOwnership(record ownershipRecord) bool {
 			return false
 		}
 	}
+	if record.HTTPSRetirement != nil && (record.Schema != 2 || !record.HTTPSRetirement.Valid() || record.HTTPSRetirement.Renewal.PublicIPv4 != record.PublicIPv4 || record.Serving == nil || !record.Serving.HTTP || record.Renewal != nil) {
+		return false
+	}
+	if record.TransportMigrating && (record.HTTPSRetirement == nil || record.Phase != runningPhase || record.Direction != noDirection || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.ClientRotation != nil || record.Activation != nil || record.Serving.LinkID != record.HTTPSRetirement.Serving.LinkID || record.Serving.CredentialSHA256 != record.HTTPSRetirement.Serving.CredentialSHA256) {
+		return false
+	}
 	if record.Serving != nil && (!record.Serving.Valid() || record.Package == "" || record.Phase != runningPhase && record.Phase != removalCommitted) {
 		return false
 	}
-	if record.Renewal != nil && (record.Serving == nil || !record.Renewal.Valid() || record.Renewal.PublicIPv4 != record.PublicIPv4 || record.Phase != runningPhase && record.Phase != removalCommitted) {
+	if record.Serving != nil && record.Serving.HTTP && (record.Renewal != nil || record.SubscriptionResources == nil || !record.SubscriptionResources.HTTP || record.Activation != nil || record.Repair != nil && record.Repair.Correction != repairRuntime) {
+		return false
+	}
+	if record.Renewal != nil && (record.Serving == nil || record.Serving.HTTP || !record.Renewal.Valid() || record.Renewal.PublicIPv4 != record.PublicIPv4 || record.Phase != runningPhase && record.Phase != removalCommitted) {
 		return false
 	}
 	if record.Activation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Direction != noDirection || record.Phase != runningPhase || record.Activation.Checkpoint == activationTargetRecorded && record.Activation.Source != *record.Serving || record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target != *record.Serving || !validCertificateActivation(*record.Activation)) {
@@ -406,16 +485,16 @@ func validOwnership(record ownershipRecord) bool {
 	if record.Enablement != nil && (record.Schema != 2 || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionEnablement(*record.Enablement)) {
 		return false
 	}
-	if record.Rotation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRotation(*record.Rotation) || record.Rotation.Checkpoint != rotationCommitted && *record.Serving != record.Rotation.Source || record.Rotation.Checkpoint == rotationCommitted && *record.Serving != record.Rotation.Target) {
+	if record.Rotation != nil && (record.Schema != 2 || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || record.Enablement != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRotation(*record.Rotation) || record.Rotation.Checkpoint != rotationCommitted && *record.Serving != record.Rotation.Source || record.Rotation.Checkpoint == rotationCommitted && *record.Serving != record.Rotation.Target) {
 		return false
 	}
-	if record.Repair != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Enablement != nil || record.Rotation != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRepair(*record.Repair) || record.Repair.Checkpoint != repairAccepted && *record.Serving != record.Repair.Source || record.Repair.Checkpoint == repairAccepted && (record.Repair.Target == nil || *record.Serving != *record.Repair.Target)) {
+	if record.Repair != nil && (record.Schema != 2 || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || record.Enablement != nil || record.Rotation != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionRepair(*record.Repair) || record.Repair.Checkpoint != repairAccepted && *record.Serving != record.Repair.Source || record.Repair.Checkpoint == repairAccepted && (record.Repair.Target == nil || *record.Serving != *record.Repair.Target)) {
 		return false
 	}
 	if record.SubscriptionCompromised && (record.Schema != 2 || record.Serving == nil) {
 		return false
 	}
-	if record.SubscriptionResources != nil && (record.Schema != 2 || !record.SubscriptionResources.Valid() || record.SubscriptionResources.PublicIPv4 != record.PublicIPv4 || record.Serving == nil || record.Renewal == nil) {
+	if record.SubscriptionResources != nil && (record.Schema != 2 || !record.SubscriptionResources.Valid() || record.SubscriptionResources.PublicIPv4 != record.PublicIPv4 || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil || record.Serving.HTTP != record.SubscriptionResources.HTTP) {
 		return false
 	}
 	if record.Startup != nil && (record.Schema != 2 || !record.Startup.Valid() || record.Phase != runningPhase && record.Phase != removalCommitted) {
@@ -429,7 +508,7 @@ func validOwnership(record ownershipRecord) bool {
 	}
 	if record.ClientRotation != nil {
 		sub := record.ClientRotation.Subscription
-		if (sub == nil) != (record.Serving == nil) || sub != nil && (!sub.Valid() || record.Renewal == nil || *record.Serving != sub.Source && *record.Serving != sub.Target) {
+		if (sub == nil) != (record.Serving == nil) || sub != nil && (!sub.Valid() || !sub.Source.HTTP && record.Renewal == nil || *record.Serving != sub.Source && *record.Serving != sub.Target) {
 			return false
 		}
 	}
@@ -472,6 +551,14 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	}
 	if record.SubscriptionResources != nil {
 		resources = append(resources, record.SubscriptionResources.Resources()...)
+	}
+	if record.HTTPSRetirement != nil {
+		resources = append(resources, record.HTTPSRetirement.ResourcesList()...)
+		if record.TransportMigrating {
+			for _, path := range []string{hostadapter.HTTPSRetirementDirectory + "/renewal.conf", hostadapter.HTTPSRetirementDirectory + "/recorder.conf", hostadapter.HTTPSRetirementDirectory + "/deploy-hook", hostadapter.HTTPSRetirementDirectory + "/post-hook", hostadapter.ServingStatePath, hostadapter.SubscriptionFirewallUnitPath} {
+				resources = append(resources, path+".sbxr-next root-owned retained-https migration publication")
+			}
+		}
 	}
 	if record.Repair != nil {
 		additional := record.Repair.Target
@@ -571,6 +658,11 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 				hostadapter.ServingUnitPath+".sbxr-next.sbxr-next root-owned Client Identity serving startup publication")
 		}
 	}
+	if record.Enablement != nil && record.Enablement.Resources != nil && record.Enablement.Resources.HTTP {
+		resources = slices.DeleteFunc(resources, func(resource string) bool {
+			return strings.Contains(resource, "letsencrypt") || strings.Contains(resource, "certbot") || strings.Contains(resource, "renewal-")
+		})
+	}
 	return resources
 }
 
@@ -596,6 +688,9 @@ func validSubscriptionEnablement(enablement subscriptionEnablement) bool {
 		decoded, err := hex.DecodeString(value)
 		return err == nil && len(decoded) == size && hex.EncodeToString(decoded) == value && value != strings.Repeat("0", size*2)
 	}
+	if enablement.Resources != nil && enablement.Resources.HTTP {
+		return enablement.Checkpoint >= 0 && enablement.Checkpoint <= hostadapter.SubscriptionActivationCheckpoint && validHex(enablement.LinkID, 16) && validHex(enablement.CredentialSHA256, 32) && validHex(enablement.RecorderID, 16) && enablement.Resources.Valid() && enablement.Renewal == nil && (enablement.Serving == nil && enablement.Checkpoint < hostadapter.SubscriptionServingCheckpoint || enablement.Serving != nil && enablement.Serving.HTTP && enablement.Serving.Valid() && enablement.Serving.LinkID == enablement.LinkID && enablement.Serving.CredentialSHA256 == enablement.CredentialSHA256)
+	}
 	if enablement.Checkpoint < 0 || enablement.Checkpoint > hostadapter.SubscriptionActivationCheckpoint || !validHex(enablement.LinkID, 16) || !validHex(enablement.CredentialSHA256, 32) || !validHex(enablement.RecorderID, 16) || (enablement.Serving == nil) != (enablement.Renewal == nil) || enablement.Serving != nil && enablement.Resources == nil {
 		return false
 	}
@@ -617,7 +712,7 @@ func validSubscriptionRotation(rotation subscriptionRotation) bool {
 		direction = "forward"
 	}
 	operationID, err := hex.DecodeString(rotation.OperationID)
-	return checkpointOK && err == nil && len(operationID) == 16 && hex.EncodeToString(operationID) == rotation.OperationID && rotation.OperationID != strings.Repeat("0", 32) && rotation.Kind == "rotate subscription link" && rotation.Direction == direction && slices.Equal(rotation.Effects, subscriptionRotationEffects) && slices.Equal(rotation.Completed, wantCompleted) && rotation.Source.Valid() && rotation.Target.Valid() && rotation.Source.LinkID != rotation.Target.LinkID && rotation.Source.CredentialSHA256 != rotation.Target.CredentialSHA256 && rotation.Source.CertificateGeneration == rotation.Target.CertificateGeneration && rotation.Source.CertificateSHA256 == rotation.Target.CertificateSHA256
+	return checkpointOK && err == nil && len(operationID) == 16 && hex.EncodeToString(operationID) == rotation.OperationID && rotation.OperationID != strings.Repeat("0", 32) && rotation.Kind == "rotate subscription link" && rotation.Direction == direction && slices.Equal(rotation.Effects, subscriptionRotationEffects) && slices.Equal(rotation.Completed, wantCompleted) && rotation.Source.Valid() && rotation.Target.Valid() && rotation.Source.LinkID != rotation.Target.LinkID && rotation.Source.CredentialSHA256 != rotation.Target.CredentialSHA256 && rotation.Source.HTTP == rotation.Target.HTTP && rotation.Source.CertificateGeneration == rotation.Target.CertificateGeneration && rotation.Source.CertificateSHA256 == rotation.Target.CertificateSHA256
 }
 
 func validCertificateActivation(activation certificateActivation) bool {
@@ -683,16 +778,23 @@ func compatibleOwnership(record ownershipRecord, installed softwarelifecycle.Rel
 // AdmitSoftwareUpdate keeps Proxy Installation's exact durable-record rules
 // out of Software Lifecycle. A target must understand every creating release.
 const expandedProxyAuthorityCapability = "SBXR-PROXY-AUTHORITY-SCHEMA-2-CLIENT-IDENTITY-ROTATION-V1"
+const httpSubscriptionCapability = "SBXR-SUBSCRIPTION-HTTP-V1"
 
 func AdmitSoftwareUpdate(body []byte, source softwarelifecycle.ReleaseIdentity, target *softwarelifecycle.UpdateTarget) bool {
 	record, ok := decodeOwnership(body)
-	if !ok || record.Phase != runningPhase || record.Direction != noDirection || record.FinishingRelease != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.ClientRotation != nil || !compatibleOwnership(record, source) {
+	if !ok || record.Phase != runningPhase || record.Direction != noDirection || record.FinishingRelease != nil || record.Activation != nil || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.ClientRotation != nil || record.TransportMigrating || !compatibleOwnership(record, source) {
 		return false
 	}
 	if target == nil {
 		return true
 	}
 	if !validReleaseIdentity(target.Identity) || target.Support == nil || target.Support.Scope != softwarelifecycle.RecurringSubscriptionUpgrade || target.Support.Contract != softwarelifecycle.SubscriptionUpdateContract || !slices.Contains(target.Support.Sources, source) || !bytes.Contains(target.Executable, []byte(expandedProxyAuthorityCapability)) || record.LockProvisioning != nil && !bytes.Contains(target.Executable, []byte(hostadapter.LockProvisioningCapability())) {
+		return false
+	}
+	if record.Serving != nil && !bytes.Contains(target.Executable, []byte(httpSubscriptionCapability)) {
+		return false
+	}
+	if (record.HTTPSRetirement != nil || record.Serving != nil && !record.Serving.HTTP) && !bytes.Contains(target.Executable, []byte(hostadapter.HTTPSRetirementCapability())) {
 		return false
 	}
 	return true

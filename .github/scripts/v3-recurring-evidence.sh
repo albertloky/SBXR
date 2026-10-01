@@ -5,6 +5,10 @@ umask 077
 export PYTHONDONTWRITEBYTECODE=1
 
 mvp_required_checks() {
+  if jq -e '.v3_attempt.evidence_policy == "mvp-http-live-v1" or .v3_attempt.evidence_policy == "mvp-http-recurring-live-v1"' "$manifest" >/dev/null; then
+    python3 .github/scripts/v3-mvp-evidence.py --checks "$manifest" "$1"
+    return
+  fi
   case "$1" in
     mvp-install) printf '%s' 'packaged-install reviewed-setup outside-proxy-traffic menu-status-and-lifecycle ssh-access-preserved' ;;
     mvp-subscription) printf '%s' 'trusted-outside-https one-correct-subscription-node wrong-token-refused private-files-and-logs-protected karing-import fresh-karing-node-latency manual-refresh selected-connection-preserved' ;;
@@ -55,8 +59,8 @@ manifest=handoff/qualification-manifest.json
 boundary=handoff/qualification-boundary-facts.json
 tool=handoff/sbxr-release
 jq -e '(.schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and (.source_state == "v3-recurring" or .source_state == "v3-subscription-clean")' "$manifest" >/dev/null
-if ! jq -e '.v3_attempt.evidence_policy == "mvp-live-v1" or .v3_attempt.evidence_policy == "mvp-recurring-live-v1"' "$manifest" >/dev/null; then
-  printf '%s\n' 'The current checkout produces only mvp-live-v1 or mvp-recurring-live-v1 evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
+if ! jq -e '.v3_attempt.evidence_policy == "mvp-live-v1" or .v3_attempt.evidence_policy == "mvp-recurring-live-v1" or .v3_attempt.evidence_policy == "mvp-http-live-v1" or .v3_attempt.evidence_policy == "mvp-http-recurring-live-v1"' "$manifest" >/dev/null; then
+  printf '%s\n' 'The current checkout produces ordinary HTTPS or HTTP MVP evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
   exit 2
 fi
 chmod 0600 "$manifest" "$boundary"

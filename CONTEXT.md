@@ -50,7 +50,7 @@ The Owner-disclosable bearer credential that authorizes read-only retrieval of t
 The non-secret identity of one Subscription Link Credential generation, used to correlate secret-safe status, diagnostics, transitions, and acceptance evidence.
 
 ### Subscription Link
-The stable HTTPS capability URL that carries the Subscription Link Credential and returns the current Subscription Artifact. It remains stable until explicit rotation or Complete removal.
+The authenticated capability URL that carries the Subscription Link Credential and returns the current Subscription Artifact. New subscriptions and completed migrations use HTTP. A legacy updater transaction preserves HTTPS through cleanup, then its mandatory root handoff changes only the scheme while keeping the address, port, path and token. The link otherwise remains stable until explicit rotation or Complete removal.
 
 ### Subscription Artifact
 The secret-bearing representation of exactly one current Proxy Profile returned through the Subscription Link for Karing import and refresh. It owns the imported proxy-node fields but not Karing's profile settings, DNS, routing, TUN, or selector behavior.
@@ -66,6 +66,9 @@ A server-side secret that is never disclosed through a Client Configuration, sta
 
 ### Ownership Record
 The root-owned durable authority that proves which exact resources V3 created and therefore may remove, and which unfinished proxy or subscription change direction is legal.
+
+### Retired HTTPS Authority
+The exact historical certificate and quarantined renewal-resource cleanup authority retained after HTTP migration. It authorizes reviewed Complete removal, not serving, renewal or CA operations. Its resource creators remain recorded; the unfinished transport-migration direction is separate and disappears on completion.
 
 ### Creating Release Identity
 The Release Identity that created an installation or an owned resource, retained as provenance across compatible software updates.
@@ -99,6 +102,8 @@ The single stable-publication gate that binds unchanged release bytes to the aut
 
 ### MVP Live Acceptance
 The `mvp-live-v1` clean-install Release Qualification scope: five normal product journeys for installation, subscription/Karing, credential rotation, supported certificate renewal, and restart/removal. It requires real packaged-host, outside-traffic, trusted-HTTPS, and Karing evidence, while leaving forced interruption, contention, and historical V4 evidence protocol work to their applicable regression or historical scopes.
+
+`mvp-http-live-v1` and `mvp-http-recurring-live-v1` use HTTP for fresh subscriptions and replace certificate renewal with serving restart proof; historical HTTPS policies retain their meanings. See ADR-0026.
 
 `mvp-recurring-live-v1` retains these five journeys and adds normal packaged
 update, precommit rollback and postcommit forward recovery from one exact

@@ -91,6 +91,7 @@ func knownServingUnit(body []byte) bool {
 // authority file. This bounded runtime-only contract has no renewal writer,
 // firewall rule, pending credential operation or additional certificate history.
 type ServingAuthority struct {
+	HTTP                  bool      `json:"http,omitempty"`
 	LinkID                string    `json:"link_id"`
 	CredentialSHA256      string    `json:"credential_sha256"`
 	CertificateGeneration int       `json:"certificate_generation"`
@@ -115,7 +116,13 @@ func (a ServingAuthority) Valid() bool {
 		b, e := hex.DecodeString(s)
 		return e == nil && len(b) == n && hex.EncodeToString(b) == s && s != strings.Repeat("0", 2*n)
 	}
-	if !validHex(a.LinkID, 16) || !validHex(a.CredentialSHA256, 32) || a.CertificateGeneration < 1 || a.CertificateGeneration > 1000000 {
+	if !validHex(a.LinkID, 16) || !validHex(a.CredentialSHA256, 32) {
+		return false
+	}
+	if a.HTTP {
+		return a.CertificateGeneration == 0 && a.CertificateSHA256 == [4]string{}
+	}
+	if a.CertificateGeneration < 1 || a.CertificateGeneration > 1000000 {
 		return false
 	}
 	for _, digest := range a.CertificateSHA256 {
@@ -130,6 +137,9 @@ var certificateNames = []string{"cert", "chain", "fullchain", "privkey"}
 
 func (a ServingAuthority) Resources() []string {
 	resources := []string{ServingUnitPath + " root:root 0644 one-link fixed-serving-v1", ServingUnitWantsPath + " root-owned symlink ../sbxr-subscription.service", ServingTokenPath + " root:root 0600 one-link credential", ServingStatePath + " root:root 0600 immutable serving state", ServingStagingPath + " root:root 0700 empty-directory", servingArchive + " root:root 0700 directory", servingLive + " root:root 0700 directory"}
+	if a.HTTP {
+		return resources[:5]
+	}
 	for i, name := range certificateNames {
 		archive := servingArchive + "/" + name + strconv.Itoa(a.CertificateGeneration) + ".pem"
 		mode := "0644"
@@ -281,16 +291,19 @@ func (a Adapter) inspectServingFiles(authority ServingAuthority, removing, sandb
 	if len(stored) == 1 {
 		state = stored[0]
 	}
-	return a.inspectServingFilesWithState(authority, state, removing, sandbox, false)
+	return a.inspectServingFilesWithState(authority, state, removing, sandbox, false, false)
 }
 
 func (a Adapter) inspectCertificateServingFiles(authority, stored ServingAuthority) Observation {
-	return a.inspectServingFilesWithState(authority, stored, false, false, true)
+	return a.inspectServingFilesWithState(authority, stored, false, false, true, false)
 }
 
-func (a Adapter) inspectServingFilesWithState(authority, stateAuthority ServingAuthority, removing, sandbox, certificatePublication bool) Observation {
+func (a Adapter) inspectServingFilesWithState(authority, stateAuthority ServingAuthority, removing, sandbox, certificatePublication, allowDisabledHTTP bool) Observation {
 	if !authority.Valid() {
 		return observation(false, true)
+	}
+	if !allowDisabledHTTP && !a.safelyAbsent(ServingStatePath+".sbxr-next") {
+		return Observation{}
 	}
 	// Unknown staging, renewal, hooks and overrides belong to later complete
 	// lifecycle contracts. Never adopt or delete them as this runtime footprint.
@@ -304,7 +317,7 @@ func (a Adapter) inspectServingFilesWithState(authority, stateAuthority ServingA
 			return Observation{}
 		}
 	}
-	if !a.servingDirectory("/var/lib/sbxr", []string{"update.json", ".update.json.next", ".installed.json.prior", ".installed.json.candidate", "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "client-identity-target.json", "client-identity-target.json.sbxr-next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock"}, removing) {
+	if !a.servingDirectory("/var/lib/sbxr", []string{"update.json", ".update.json.next", ".installed.json.prior", ".installed.json.candidate", "installed.json", "proxy-ownership.json", ".proxy-ownership.json.next", "client-identity-target.json", "client-identity-target.json.sbxr-next", "subscription-token", "subscription-serving.json", "subscription-staging", "renewal-attempts.json", ".renewal-attempts.json.next", "renewal-admission.lock", "renewal-writer.lock", "subscription-https-retired", "subscription-serving.json.sbxr-next"}, removing) {
 		return Observation{}
 	}
 	stagingSafe := a.servingDirectory(ServingStagingPath, nil, removing)
@@ -319,10 +332,13 @@ func (a Adapter) inspectServingFilesWithState(authority, stateAuthority ServingA
 		archive = append(archive, name+strconv.Itoa(authority.CertificateGeneration)+".pem")
 		live = append(live, name+".pem")
 	}
-	if !a.servingDirectory(servingArchive, archive, removing) || !a.servingDirectory(servingLive, live, removing) {
+	if !authority.HTTP && (!a.servingDirectory(servingArchive, archive, removing) || !a.servingDirectory(servingLive, live, removing)) {
 		return Observation{}
 	}
 	for i, name := range certificateNames {
+		if authority.HTTP {
+			break
+		}
 		mode := os.FileMode(0644)
 		if name == "privkey" {
 			mode = 0600
@@ -346,11 +362,14 @@ func (a Adapter) inspectServingFilesWithState(authority, stateAuthority ServingA
 	if err != nil && !(removing && errors.Is(err, os.ErrNotExist)) || err == nil && !knownServingUnit(unit) {
 		return Observation{}
 	}
+	if err := a.safeParents(ServingUnitWantsPath); err != nil && !(removing && errors.Is(err, os.ErrNotExist)) {
+		return Observation{}
+	}
 	wantsInfo, wantsErr := os.Lstat(a.path(ServingUnitWantsPath))
 	wantsTarget, targetErr := os.Readlink(a.path(ServingUnitWantsPath))
 	wantsStat, wantsOwned := infoSys(wantsInfo)
-	if removing && errors.Is(wantsErr, os.ErrNotExist) {
-		// Safe partial removal.
+	if (removing || allowDisabledHTTP && authority.HTTP) && errors.Is(wantsErr, os.ErrNotExist) {
+		// Safe partial removal, or a complete HTTP preparation before enablement.
 	} else if wantsErr != nil || !wantsOwned || wantsStat.Uid != a.ownerUID() || wantsStat.Nlink != 1 || wantsInfo.Mode()&os.ModeSymlink == 0 || targetErr != nil || wantsTarget != "../sbxr-subscription.service" && wantsTarget != ServingUnitPath {
 		return Observation{}
 	}
@@ -432,6 +451,9 @@ func (a Adapter) publishedCertificateAuthority(renewal RenewalAuthority, accepte
 }
 
 func (a Adapter) publishedServingAuthority(renewal RenewalAuthority, accepted ServingAuthority) (ServingAuthority, bool) {
+	if accepted.HTTP {
+		return accepted, a.InspectServingFiles(accepted, false).Accepted
+	}
 	target, valid := a.publishedCertificateAuthority(renewal, accepted)
 	if !valid || !a.certificateStateStaging(target) {
 		return ServingAuthority{}, false
@@ -474,10 +496,14 @@ func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuth
 	if err != nil || len(token) != 44 || token[43] != '\n' || digest(token[:43]) != published.CredentialSHA256 {
 		return ServingAuthority{}, false
 	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, ServerName: renewal.PublicIPv4}}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, ServerName: renewal.PublicIPv4}, Proxy: nil}
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer transport.CloseIdleConnections()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+net.JoinHostPort(renewal.PublicIPv4, "8443")+"/s/"+string(token[:43]), nil)
+	scheme := "https"
+	if published.HTTP {
+		scheme = "http"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+net.JoinHostPort(renewal.PublicIPv4, "8443")+"/s/"+string(token[:43]), nil)
 	if err != nil {
 		return ServingAuthority{}, false
 	}
@@ -488,7 +514,7 @@ func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuth
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
 	closeErr := response.Body.Close()
 	state := response.TLS
-	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Content-Type-Options") != "nosniff" || len(body) < 1 || len(body) > 4096 || body[len(body)-1] != '\n' || bytes.Count(body, []byte{'\n'}) != 1 || state == nil || len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || !state.VerifiedChains[0][0].Equal(state.PeerCertificates[0]) {
+	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Content-Type-Options") != "nosniff" || len(body) < 1 || len(body) > 4096 || body[len(body)-1] != '\n' || bytes.Count(body, []byte{'\n'}) != 1 || !published.HTTP && (state == nil || len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || !state.VerifiedChains[0][0].Equal(state.PeerCertificates[0])) || published.HTTP && state != nil {
 		return ServingAuthority{}, false
 	}
 	// A valid certificate and envelope do not prove the current Client Identity.
@@ -498,6 +524,9 @@ func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuth
 	expected, artifactCode := subscriptionserving.Artifact(facts)
 	if err != nil || factsErr != nil || artifactCode != subscriptionserving.Ready || !bytes.Equal(body, expected) {
 		return ServingAuthority{}, false
+	}
+	if published.HTTP {
+		return published, true
 	}
 	for _, candidate := range []ServingAuthority{published, accepted} {
 		body, err := a.protectedServingFile(servingArchive+"/cert"+strconv.Itoa(candidate.CertificateGeneration)+".pem", 0644, candidate.CertificateSHA256[0])
@@ -540,6 +569,13 @@ func pemDecodeCertificate(body []byte) (*x509.Certificate, error) {
 func (a Adapter) InspectCertificateActivation(ctx context.Context, renewal RenewalAuthority, accepted ServingAuthority) CertificateActivationInspection {
 	if !a.ServingPublicIPv4(ctx, renewal.PublicIPv4) {
 		return CertificateActivationInspection{Observed: true}
+	}
+	if accepted.HTTP {
+		if !a.InspectServingFiles(accepted, false).Accepted || !a.exactHTTPSubscriptionFirewall(renewal.PublicIPv4) {
+			return CertificateActivationInspection{Observed: true}
+		}
+		loaded, observed := a.loadedServingAuthority(ctx, renewal, accepted, accepted)
+		return CertificateActivationInspection{Published: accepted, Loaded: loaded, Observed: observed, Accepted: true}
 	}
 	published, valid := a.publishedServingAuthority(renewal, accepted)
 	if !valid {
@@ -742,6 +778,9 @@ func (a Adapter) AcquireServingExclusion() (*ServingExclusion, bool) {
 // RemoveServingRuntime requires retained precommit exclusion. It never opens
 // another descriptor for those POSIX lock inodes (closing it would unlock them).
 func (a Adapter) RemoveServingRuntime(ctx context.Context, authority ServingAuthority, exclusion *ServingExclusion) bool {
+	if authority.HTTP {
+		return a.removeHTTPServingRuntime(ctx, authority, exclusion)
+	}
 	if !a.validServingExclusion(exclusion) || !a.InspectServingFiles(authority, true).Accepted {
 		return false
 	}

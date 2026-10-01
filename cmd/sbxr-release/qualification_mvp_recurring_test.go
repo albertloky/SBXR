@@ -30,7 +30,33 @@ func ordinaryFixtureChecks(id string) []string {
 	return strings.Fields(ordinarySourceChecks + " " + extra)
 }
 
+func ordinaryFixtureChecksFor(id string, httpSubscription bool) []string {
+	checks := slices.Clone(ordinaryFixtureChecks(id))
+	if !httpSubscription {
+		return checks
+	}
+	if strings.HasPrefix(id, "source-") {
+		if strings.HasSuffix(id, "-precommit") {
+			return strings.Fields(strings.ReplaceAll(strings.Join(checks, " "), "outside-trusted-https", "outside-subscription-transport-preserved"))
+		}
+		text := strings.NewReplacer("no-ownership-migration", "updater-ownership-preserved-until-cleanup", "subscription-link-unchanged", "subscription-address-port-path-token-preserved", "outside-trusted-https", "outside-authenticated-http").Replace(strings.Join(checks, " "))
+		return strings.Fields(text + " mandatory-http-handoff-completed retained-certificate-bytes-and-provenance-preserved owned-renewal-and-http80-retired existing-client-profile-refreshed-with-settings-preserved no-migration-ca-operation no-migration-authority-residue")
+	}
+	if id == "mvp-subscription" {
+		checks[0] = "outside-authenticated-http"
+		return append(checks, "no-certificate-or-renewal-resources", "http-exposure-disclosed")
+	}
+	if id == "mvp-serving" {
+		return strings.Fields("serving-restart-preserves-link current-artifact-after-restart outside-authenticated-http no-certificate-or-renewal-resources proxy-traffic-preserved")
+	}
+	return checks
+}
+
 func mvpRecurringQualificationFixture(t *testing.T, binary string) (string, []byte, map[string]any) {
+	return mvpRecurringQualificationFixtureFor(t, binary, false)
+}
+
+func mvpRecurringQualificationFixtureFor(t *testing.T, binary string, httpSubscription bool) (string, []byte, map[string]any) {
 	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
@@ -51,6 +77,10 @@ func mvpRecurringQualificationFixture(t *testing.T, binary string) (string, []by
 	attempt["support"], attempt["baseline"] = facts.Candidate.Support, historyBaseline(facts.SubscriptionHistory)
 	attempt["sources"].([]any)[0].(map[string]any)["ownership_schema"] = 2
 	attempt["required_scenarios"] = strings.Fields("source-v3.1.81-precommit source-v3.1.81-upgrade source-v3.1.81-postcommit mvp-install mvp-subscription mvp-credentials mvp-renewal mvp-removal")
+	if httpSubscription {
+		attempt["evidence_policy"] = "mvp-http-recurring-live-v1"
+		attempt["required_scenarios"] = strings.Fields("source-v3.1.81-precommit source-v3.1.81-upgrade source-v3.1.81-postcommit mvp-install mvp-subscription mvp-credentials mvp-serving mvp-removal")
+	}
 	attempt["after_snap_refresh"] = attempt["packages"]
 	var assets []softwarelifecycle.LatestAssetProof
 	for _, raw := range draftAssets(0) {
@@ -78,7 +108,8 @@ func mvpRecurringQualificationFixture(t *testing.T, binary string) (string, []by
 			s["final_state"] = "Not installed"
 		}
 		var checks []any
-		for _, check := range ordinaryFixtureChecks(id) {
+		expectedChecks := ordinaryFixtureChecksFor(id, httpSubscription)
+		for _, check := range expectedChecks {
 			checks = append(checks, map[string]any{"record": map[string]any{"check": check, "observed_at": s["completed_at"], "result": "observed"}, "sha256": ""})
 		}
 		s["evidence"] = checks

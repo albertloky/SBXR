@@ -1209,7 +1209,10 @@ func (adapter Adapter) InspectSubscriptionAbsence(ctx context.Context) Observati
 		"/etc/letsencrypt/live/sbxr-subscription", "/etc/letsencrypt/archive/sbxr-subscription",
 		"/etc/letsencrypt/renewal/sbxr-subscription.conf",
 	} {
-		if err := adapter.safeParents(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Absence grants no CA mutation authority. Fresh HTTP subscriptions do
+		// not require safe shared Certbot parents; retain refusal of any visible
+		// old SBXR lineage. Legacy issuance separately validates every CA parent.
+		if err := adapter.safeParents(name); !strings.HasPrefix(name, "/etc/letsencrypt/") && !strings.Contains(name, "certbot") && !strings.Contains(name, "letsencrypt") && err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Observation{}
 		}
 		if _, err := os.Lstat(adapter.path(name)); err == nil {

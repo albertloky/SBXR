@@ -57,7 +57,21 @@ func (m *installedInterface) acquireSubscriptionExclusion(record ownershipRecord
 			return nil, false
 		}
 	}
-	if record.Serving != nil {
+	if record.HTTPSRetirement != nil {
+		host, ok := m.host.(interface {
+			AcquireHTTPSRetirementExclusion(hostadapter.HTTPSRetirementAuthority, bool) (*hostadapter.RenewalExclusion, bool)
+		})
+		if !ok {
+			exclusion.Release()
+			return nil, false
+		}
+		exclusion.renewal, ok = host.AcquireHTTPSRetirementExclusion(*record.HTTPSRetirement, record.Direction == removalRequired)
+		if !ok {
+			exclusion.Release()
+			return nil, false
+		}
+	}
+	if record.Serving != nil && !record.Serving.HTTP || record.HTTPSRetirement != nil {
 		host, ok := m.host.(servingRemovalHost)
 		if !ok {
 			exclusion.Release()
@@ -169,6 +183,9 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || !ok || record.Direction != noDirection || record.Phase != runningPhase || !compatibleOwnership(record, *installed.Installed) {
 		return subscriptionserving.Refused
 	}
+	if record.TransportMigrating && !borrowed {
+		return subscriptionserving.Refused
+	}
 	if record.Rotation != nil && !borrowed {
 		return subscriptionserving.Refused
 	}
@@ -189,7 +206,7 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	var renewal *hostadapter.RenewalAuthority
 	if record.Serving != nil {
 		selected, renewal = *record.Serving, record.Renewal
-	} else if record.Enablement != nil && record.Enablement.Serving != nil && record.Enablement.Renewal != nil {
+	} else if record.Enablement != nil && record.Enablement.Serving != nil && (record.Enablement.Serving.HTTP || record.Enablement.Renewal != nil) {
 		selected, renewal = *record.Enablement.Serving, record.Enablement.Renewal
 	} else {
 		return subscriptionserving.Refused
@@ -216,11 +233,17 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 	if err != nil || facts.ServerName != record.DestinationName {
 		return subscriptionserving.Refused
 	}
-	certificate, ok := host.LoadServingCertificate(selected)
-	if !ok {
-		return subscriptionserving.Refused
+	var state *subscriptionserving.State
+	var code subscriptionserving.Code
+	if selected.HTTP {
+		state, code = m.PrepareHTTP(facts, host.ServingGeneration(selected))
+	} else {
+		certificate, ok := host.LoadServingCertificate(selected)
+		if !ok {
+			return subscriptionserving.Refused
+		}
+		state, code = m.Prepare(facts, host.ServingGeneration(selected), certificate)
 	}
-	state, code := m.Prepare(facts, host.ServingGeneration(selected), certificate)
 	if code != subscriptionserving.Ready {
 		return code
 	}

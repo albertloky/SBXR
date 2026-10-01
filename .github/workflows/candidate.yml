@@ -279,7 +279,7 @@ jobs:
           V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
-          if test "$MODE" = v3 && test "$(jq -r .support.scope <<<"$V3_ATTEMPT")" = subscription-clean-install-repair; then
+          if test "$MODE" = v3 && jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null; then
             go test -p 1 -timeout 30m ./... -count=1
             go test -race -p 1 -timeout 30m ./... -count=1
             go vet ./...

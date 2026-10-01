@@ -124,7 +124,7 @@ func TestHistoricalDeclarationDispatchIsRetiredBeforeGitHub(t *testing.T) {
 			cmd := exec.Command("bash", script, "dispatch", filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CALLED="+filepath.Join(dir, "called"), "TOOL_CALLED="+filepath.Join(dir, "tool-called"))
 			out, err := cmd.CombinedOutput()
-			if err == nil || !strings.Contains(string(out), "produces only mvp-live-v1 or mvp-recurring-live-v1 evidence") || !strings.Contains(string(out), "0859e96") {
+			if err == nil || !strings.Contains(string(out), "produces ordinary HTTPS or HTTP MVP evidence") || !strings.Contains(string(out), "0859e96") {
 				t.Fatalf("historical producer was not retired clearly: %v %s", err, out)
 			}
 			if _, err := os.Stat(filepath.Join(dir, "called")); !os.IsNotExist(err) {

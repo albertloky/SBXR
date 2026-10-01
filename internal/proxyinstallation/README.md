@@ -34,11 +34,26 @@ finish pending work, convert durable authority, or create missing authority.
 | Linux filesystem, systemd, Certbot, firewall, process, and lock mechanics | [adapter/host](adapter/host) |
 | sing-box configuration and UUID-only Client Identity replacement | [adapter/singbox/singbox.go](adapter/singbox/singbox.go) |
 | Numbered Owner menu and Software Lifecycle choices | [adapter/terminal/run.go](adapter/terminal/run.go) and [adapter/terminal/lifecycle.go](adapter/terminal/lifecycle.go) |
-| Private authenticated HTTPS serving behavior | [subscriptionserving/README.md](subscriptionserving/README.md) and [subscriptionserving/serving.go](subscriptionserving/serving.go) |
+| Authenticated HTTP serving and legacy TLS transaction compatibility | [subscriptionserving/README.md](subscriptionserving/README.md) and [subscriptionserving/serving.go](subscriptionserving/serving.go) |
 
 Focused tests live beside their owning files. Adapter tests cover OS and
 sing-box mechanics; package tests cover Review/Execute behavior, interruption,
 restart recovery, refusal, and cleanup.
+
+## Subscription transport
+
+Fresh Enable subscription uses HTTP on fixed TCP 8443 with the existing bearer
+credential and artifact contract. Its explicit HTTP authority owns no certificate,
+Certbot dependency, renewal writer or TCP 80 firewall contribution. Legacy HTTPS
+records remain byte-compatible during updater transaction verification. Once
+transaction cleanup is complete, the root handoff in
+[subscription_transport.go](subscription_transport.go) migrates to HTTP with exact
+token/UUID/configuration and certificate/provenance preservation. It retires only
+owned renewal/TCP 80, keeps `https_retirement` cleanup authority, and journals a
+forward retry. Private roles do not migrate. Reviewed Complete removal owns final
+retained-resource cleanup. See [ADR-0026](../../docs/adr/0026-http-subscription.md).
+
+The certificate-specific behavior below applies to legacy HTTPS records.
 
 ## Durable behavior to preserve
 

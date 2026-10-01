@@ -363,7 +363,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 		if body, err := module.readOwnership(); err == nil {
 			if record, ok := decodeOwnership(body); ok {
 				compromised = record.SubscriptionCompromised && record.Rotation == nil && record.Serving != nil
-				rotationCandidate = record.Rotation == nil && record.Serving != nil && record.Renewal != nil && activation.Observed && activation.Published == *record.Serving
+				rotationCandidate = record.Rotation == nil && record.Serving != nil && (record.Serving.HTTP || record.Renewal != nil) && activation.Observed && activation.Published == *record.Serving
 			}
 		}
 		repairCandidate := false
@@ -617,6 +617,13 @@ func (module *installedInterface) review(ctx context.Context, action Action) Rev
 }
 
 func (module *installedInterface) reviewOwned(ctx context.Context, action Action, review Review, record ownershipRecord, body []byte, installed softwarelifecycle.ReleaseIdentity, installedReady bool) Review {
+	if record.TransportMigrating {
+		review.Status = ChangeInProgress
+		review.LegalActions = []Action{ViewDetailsAction}
+		review.Result = Result{Status: ChangeInProgress, Message: "Finish the recorded subscription HTTP migration by running sudo sbxr again before other changes.", Code: StatusProblemDetected}
+		review.Details = []string{"Subscription HTTP migration: pending; token, proxy identity and retained certificate authority are preserved."}
+		return review
+	}
 	if record.Direction == removalRequired {
 		return module.reviewCommittedRemoval(ctx, action, review, record, body)
 	}
@@ -662,10 +669,14 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	review.Details = ownedDetails(installed, installedReady, review.Status, record, facts, "Available")
 	subscription := hostadapter.SubscriptionPreflight{}
 	if review.Status == Running {
-		subscription = module.host.PreflightSubscription(ctx, record.PublicIPv4)
-		certbotFailed, certbotCorrection := certbotAdmission(subscription)
+		subscription = module.preflightSubscription(ctx, record.PublicIPv4)
+		identityFacts := subscription
+		if record.Renewal != nil {
+			identityFacts = module.host.PreflightSubscription(ctx, record.PublicIPv4)
+		}
+		certbotFailed, certbotCorrection := certbotAdmission(identityFacts)
 		if certbotFailed != "" {
-			for _, unavailable := range []Action{EnableSubscriptionAction, RotateClientIdentityAction} {
+			for _, unavailable := range []Action{RotateClientIdentityAction} {
 				review.UnavailableActions = append(review.UnavailableActions, UnavailableAction{Action: unavailable, FailedCheck: certbotFailed, Correction: certbotCorrection})
 				review.Details = append(review.Details, string(unavailable)+" unavailable: "+certbotFailed, "Safe correction: "+certbotCorrection)
 			}
@@ -693,7 +704,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 			startup.Observed = startup.Observed && idle.Observed
 			startup.Accepted = startup.Accepted && idle.Accepted
 		}
-		if subscriptionSafe && subscription.PackageLocks.Observed && subscription.PackageLocks.Accepted && subscription.RenewalIdle.Observed && subscription.RenewalIdle.Accepted && startup.Observed && startup.Accepted {
+		if subscriptionSafe && identityFacts.PackageLocks.Observed && identityFacts.PackageLocks.Accepted && identityFacts.RenewalIdle.Observed && identityFacts.RenewalIdle.Accepted && startup.Observed && startup.Accepted {
 			review.LegalActions = append(review.LegalActions, RotateClientIdentityAction)
 			if action == RotateClientIdentityAction {
 				configuration, err := module.host.ReadConfiguration(ctx, hostSetupSpec, record.ConfigurationSHA256)
@@ -1359,7 +1370,7 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	}
 	if record.Rotation != nil {
 		host, ok := module.host.(subscriptionRotationHost)
-		if !ok || record.Renewal == nil {
+		if !ok || record.Serving == nil || !record.Serving.HTTP && record.Renewal == nil {
 			return removalInterrupted("Interrupted Subscription Link rotation removal")
 		}
 		if exclusion == nil {
@@ -1370,7 +1381,7 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 			}
 			defer exclusion.Release()
 		}
-		if !host.RemoveSubscriptionRotation(context.WithoutCancel(ctx), hostadapter.SubscriptionRotationInput{Source: record.Rotation.Source, Target: record.Rotation.Target, Renewal: *record.Renewal}, exclusion.serving) {
+		if !host.RemoveSubscriptionRotation(context.WithoutCancel(ctx), hostadapter.SubscriptionRotationInput{Source: record.Rotation.Source, Target: record.Rotation.Target, Renewal: renewalContext(record)}, exclusion.serving) {
 			return removalInterrupted("Interrupted Subscription Link rotation removal")
 		}
 		report(progress, "Cleaning up subscription change")
@@ -1444,7 +1455,7 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 		if !ok {
 			return removalInterrupted("Subscription owned-resource removal")
 		}
-		if exclusion == nil {
+		if exclusion == nil && !record.SubscriptionResources.HTTP {
 			servingHost, ok := module.host.(servingRemovalHost)
 			if !ok {
 				return removalInterrupted("Subscription resource exclusion")
@@ -1464,6 +1475,26 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 			return removalInterrupted("Subscription owned-resource removal")
 		}
 		report(progress, "Subscription owned resources removed")
+	}
+	if record.HTTPSRetirement != nil {
+		host, ok := module.host.(interface {
+			RemoveHTTPSRetirement(context.Context, hostadapter.HTTPSRetirementAuthority) bool
+		})
+		if !ok {
+			return removalInterrupted("Retired HTTPS cleanup authority")
+		}
+		if exclusion == nil {
+			var acquired bool
+			exclusion, acquired = module.acquireSubscriptionExclusion(record)
+			if !acquired {
+				return removalInterrupted("Retired HTTPS exclusion")
+			}
+			defer exclusion.Release()
+		}
+		if !host.RemoveHTTPSRetirement(context.WithoutCancel(ctx), *record.HTTPSRetirement) {
+			return removalInterrupted("Retired HTTPS owned-resource removal")
+		}
+		report(progress, "Retired HTTPS resources removed")
 	}
 	operations := []hostadapter.Operation{}
 	if record.Package != "" {

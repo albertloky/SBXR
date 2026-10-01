@@ -18,7 +18,7 @@ func (h *controlledHost) ClientIdentitySubscriptionReady(_ context.Context, sour
 	if h.clientPublishedCertificate != nil {
 		target = *h.clientPublishedCertificate
 	}
-	return target, source == h.subscriptionServing && renewal == h.subscriptionRenewal && len(h.subscriptionCredential) == 43 && !h.publicIPDrift
+	return target, source == h.subscriptionServing && (source.HTTP || renewal == h.subscriptionRenewal) && len(h.subscriptionCredential) == 43 && !h.publicIPDrift
 }
 func (*controlledHost) UpgradeClientIdentityServingStartup() bool               { return true }
 func (*controlledHost) VerifyClientIdentityServingStartup(context.Context) bool { return true }
@@ -164,7 +164,7 @@ func TestEnabledIdentityRotationRecoversEveryDurableCheckpoint(t *testing.T) {
 }
 
 func TestEnabledIdentityRotationPreservesIndependentRenewalFailure(t *testing.T) {
-	m, host := enabledIdentityInstallation(t)
+	m, host := legacyEnabledIdentityInstallation(t)
 	host.renewalProblem = true
 	rotate := m.Review(t.Context(), RotateClientIdentityAction)
 	if rotate.Prepared == nil || rotate.SubscriptionStatus != SubscriptionProblemDetected {
@@ -217,7 +217,7 @@ func TestEnabledIdentityRotationPlanNamesPreservationAndDirectRefresh(t *testing
 }
 
 func TestEnabledIdentityRotationIncorporatesStandingCertificatePublication(t *testing.T) {
-	m, host := enabledIdentityInstallation(t)
+	m, host := legacyEnabledIdentityInstallation(t)
 	certificate := host.subscriptionServing
 	certificate.CertificateGeneration++
 	certificate.CertificateSHA256 = [4]string{strings.Repeat("6", 64), strings.Repeat("7", 64), strings.Repeat("8", 64), strings.Repeat("9", 64)}
@@ -242,7 +242,7 @@ func TestEnabledIdentityRotationIncorporatesStandingCertificatePublication(t *te
 }
 
 func TestEnabledIdentityRotationRecordsStandingCertificateBeforeTargetPreparation(t *testing.T) {
-	m, host := enabledIdentityInstallation(t)
+	m, host := legacyEnabledIdentityInstallation(t)
 	certificate := host.subscriptionServing
 	certificate.CertificateGeneration++
 	host.clientPublishedCertificate = &certificate
@@ -269,7 +269,7 @@ func TestEnabledIdentityRotationRecordsStandingCertificateBeforeTargetPreparatio
 }
 
 func TestEnabledIdentityRotationCompletesWithExpiredCertificateButNotUncertainArtifact(t *testing.T) {
-	m, host := enabledIdentityInstallation(t)
+	m, host := legacyEnabledIdentityInstallation(t)
 	host.clientCertificateInvalid = true
 	rotate := m.Review(t.Context(), RotateClientIdentityAction)
 	if rotate.Prepared == nil {
@@ -279,4 +279,23 @@ func TestEnabledIdentityRotationCompletesWithExpiredCertificateButNotUncertainAr
 	if got.Code != ClientIdentityRotated || got.SubscriptionStatus != SubscriptionProblemDetected || got.ProxyTraffic != ProvedWorking || !host.subscriptionStopped || !host.active {
 		t.Fatalf("rotation: %s / %s", got.Code, got.SubscriptionStatus)
 	}
+}
+
+func legacyEnabledIdentityInstallation(t *testing.T) (Interface, *controlledHost) {
+	t.Helper()
+	_, host := enabledIdentityInstallation(t)
+	record, ok := decodeOwnership(host.ownership)
+	if !ok {
+		t.Fatal("HTTP fixture invalid")
+	}
+	serving := *record.Serving
+	serving.HTTP = false
+	serving.CertificateGeneration = 1
+	serving.CertificateSHA256 = [4]string{strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64)}
+	renewal := hostadapter.RenewalAuthority{RecorderID: strings.Repeat("a", 32), Lineage: "sbxr-subscription", PublicIPv4: record.PublicIPv4, Invocation: hostadapter.OfficialRenewalInvocation}
+	resources := hostadapter.SubscriptionResourcesForEnablement(record.PublicIPv4, host.PreflightSubscription(t.Context(), record.PublicIPv4))
+	record.Serving, record.Renewal, record.SubscriptionResources = &serving, &renewal, &resources
+	updateSubscriptionResources(&record, record.Release)
+	host.ownership, host.subscriptionServing, host.subscriptionRenewal = ownershipBytes(record), serving, renewal
+	return newInstalledInterface(readyLifecycle{}, host, singboxadapter.New()), host
 }

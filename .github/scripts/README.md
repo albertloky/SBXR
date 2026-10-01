@@ -1,7 +1,9 @@
 # Release and qualification scripts
 
-This directory contains the current release-support tooling. The current live
-producer supports `mvp-live-v1` and `mvp-recurring-live-v1`, described in
+This directory contains the current release-support tooling. Fresh HTTP
+subscriptions use `mvp-http-live-v1` or `mvp-http-recurring-live-v1`, described in
+[HTTP subscription acceptance](../../docs/acceptance/http-subscription-live.md).
+The producer retains `mvp-live-v1` and `mvp-recurring-live-v1` for HTTPS, described in
 [ordinary recurring acceptance](../../docs/acceptance/ordinary-recurring-live.md)
 and [MVP live acceptance](../../docs/acceptance/mvp-live-acceptance.md); it records
 explicit human observations and does not run the historical V4 protocol.

@@ -653,3 +653,80 @@ func TestOrdinaryStartsUnderIsolatedSystemd(t *testing.T) {
 	}
 	t.Log("real systemd ExecCondition and serving sandbox: forced ordinary overlap, late Owner handoff, and 3 simultaneous restarts; both services active, trusted local TLS available; mutation overlap refused")
 }
+
+// This opt-in fixture crosses actual systemd sandbox/private dispatch and TCP
+// serving with all fixture certificate files absent. It uses only the existing
+// disposable-VM guard and cleanup; it is not a production CA or VPS action.
+func TestHTTPSubscriptionUnderIsolatedSystemd(t *testing.T) {
+	h, _, _ := isolatedFixture(t)
+	r, valid := decodeOwnership(h.ownership)
+	if !valid {
+		t.Fatal("fixture authority")
+	}
+	serving := hostadapter.ServingAuthority{HTTP: true, LinkID: r.Serving.LinkID, CredentialSHA256: r.Serving.CredentialSHA256}
+	resources := hostadapter.SubscriptionResourcesForEnablement(r.PublicIPv4, hostadapter.SubscriptionPreflight{HTTP: true})
+	r.Serving, r.Renewal, r.SubscriptionResources = &serving, nil, &resources
+	updateSubscriptionResources(&r, r.Release)
+	h.ownership = ownershipBytes(r)
+	isolatedWrite(t, hostSetupSpec.OwnershipPath, h.ownership, 0600)
+	state, _ := json.Marshal(struct {
+		Schema  int                          `json:"schema"`
+		Serving hostadapter.ServingAuthority `json:"serving"`
+	}{1, serving})
+	isolatedWrite(t, hostadapter.ServingStatePath, append(state, '\n'), 0600)
+	for _, path := range []string{"/etc/letsencrypt", "/var/lib/letsencrypt", "/var/log/letsencrypt", "/etc/ssl/certs/sbxr-isolated.pem"} {
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal("remove synthetic TLS fixture", err)
+		}
+	}
+	isolatedCommand(t, "systemctl", "start", "sing-box.service")
+	proxyPID := strings.TrimSpace(isolatedCommand(t, "systemctl", "show", "--property=MainPID", "--value", "sing-box.service"))
+	if proxyPID == "0" {
+		t.Fatal("fixture proxy not running")
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 3 * time.Second}
+	defer client.CloseIdleConnections()
+	for _, action := range []string{"start", "restart"} {
+		isolatedCommand(t, "systemctl", action, "sbxr-subscription.service")
+		ready, done := context.WithTimeout(t.Context(), 15*time.Second)
+		var response *http.Response
+		for {
+			request, err := http.NewRequestWithContext(ready, http.MethodGet, "http://8.8.8.8:8443/s/"+strings.Repeat("A", 43), nil)
+			if err != nil {
+				done()
+				t.Fatal(err)
+			}
+			response, err = client.Do(request)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, syscall.ECONNREFUSED) {
+				done()
+				t.Fatal("HTTP fixture failed", err)
+			}
+			select {
+			case <-ready.Done():
+				done()
+				t.Fatal("HTTP listener readiness bound")
+			case <-time.After(25 * time.Millisecond):
+			}
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		done()
+		if err != nil || response.TLS != nil || response.StatusCode != 200 || !strings.HasPrefix(string(body), "vless://") || !strings.Contains(response.Header.Get("Cache-Control"), "no-store") {
+			t.Fatal("authenticated HTTP artifact")
+		}
+		wrong, err := client.Get("http://8.8.8.8:8443/s/" + strings.Repeat("B", 43))
+		if err != nil {
+			t.Fatal("wrong-token HTTP", err)
+		}
+		wrong.Body.Close()
+		if wrong.StatusCode == 200 {
+			t.Fatal("wrong token accepted")
+		}
+		if current := strings.TrimSpace(isolatedCommand(t, "systemctl", "show", "--property=MainPID", "--value", "sing-box.service")); current != proxyPID {
+			t.Fatal("serving restart changed proxy process")
+		}
+	}
+}

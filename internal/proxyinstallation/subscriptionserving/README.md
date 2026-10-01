@@ -1,5 +1,22 @@
 # Private Subscription Serving
 
+The current private runtime serves newly enabled subscriptions over plain HTTP
+on the recorded IPv4 TCP 8443 listener. `PrepareHTTP` validates the same one-node
+REALITY artifact and bearer-token generation without certificate material.
+Authentication, request/response bounds, rate limits, no-store responses,
+shutdown and secret-safe diagnostics remain; HTTP has no certificate expiry
+shutdown. HTTP exposes tokens/configuration to interception and tampering.
+
+`Prepare` and the TLS-specific contract below are retained for existing HTTPS
+Ownership Records while frozen updater transactions verify normal TLS and
+unchanged authority. The root handoff migrates only after transaction cleanup;
+this private runtime never writes transport authority. Retired certificates are
+kept solely for cleanup and are not loaded by HTTP. Fresh enablement never calls
+Certbot. See [ADR-0026](../../../docs/adr/0026-http-subscription.md).
+
+## Retained HTTPS contract and shared request protections
+
+
 `Prepare`, `Inspect`, and `Serve` are the concrete private Module boundary.
 The sing-box Adapter supplies typed Client Access Values; the Module never
 imports Proxy Installation or publishes durable state. `Prepare` returns an

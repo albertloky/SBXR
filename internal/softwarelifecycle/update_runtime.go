@@ -12,6 +12,26 @@ import (
 type UpdateRuntime struct {
 	Acquire  func(context.Context, []byte, ReleaseIdentity, *UpdateTarget, *MutationLockAuthority) (func(), bool)
 	Complete func(context.Context, []byte, ReleaseIdentity, *MutationLockAuthority) bool
+	// AfterComplete runs under whole-host authority after update.json is gone
+	// and runtime exclusions have been released. Frozen updaters lack this hook;
+	// the target's first public root CLI launch supplies the same handoff.
+	AfterComplete func(context.Context, ReleaseIdentity, *MutationLockAuthority) (string, bool)
+}
+
+func (inspector filesystemInspector) afterRuntime(ctx context.Context, root *os.Root, lock *MutationLockAuthority) (string, bool) {
+	if inspector.updateRuntime == nil || inspector.updateRuntime.AfterComplete == nil {
+		return "", true
+	}
+	for _, path := range []string{"var/lib/sbxr/update.json", "var/lib/sbxr/.update.json.next"} {
+		if _, err := root.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			return "", false
+		}
+	}
+	identity := inspector.activeRecoveryIdentity(root)
+	if identity == nil {
+		return "", false
+	}
+	return inspector.updateRuntime.AfterComplete(ctx, *identity, lock)
 }
 
 func NewInstalledWithUpdateRuntime(latest LatestReleaseSource, admission UpdateAdmission, runtime UpdateRuntime) Interface {

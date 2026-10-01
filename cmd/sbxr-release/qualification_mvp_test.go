@@ -27,6 +27,10 @@ func mvpQualificationFixture(t *testing.T, binary string) (string, []byte, map[s
 }
 
 func mvpQualificationFixtureFor(t *testing.T, binary string, late bool) (string, []byte, map[string]any) {
+	return mvpQualificationFixtureWithTransport(t, binary, late, false)
+}
+
+func mvpQualificationFixtureWithTransport(t *testing.T, binary string, late, httpSubscription bool) (string, []byte, map[string]any) {
 	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
@@ -46,6 +50,10 @@ func mvpQualificationFixtureFor(t *testing.T, binary string, late bool) (string,
 	attempt["evidence_policy"] = "mvp-live-v1"
 	attempt["support"], attempt["baseline"], attempt["sources"] = facts.Candidate.Support, historyBaseline(facts.SubscriptionHistory), []any{}
 	attempt["required_scenarios"] = strings.Fields("mvp-install mvp-subscription mvp-credentials mvp-renewal mvp-removal")
+	if httpSubscription {
+		attempt["evidence_policy"] = softwarelifecycle.MVPHTTPEvidencePolicy
+		attempt["required_scenarios"] = strings.Fields(softwarelifecycle.MVPHTTPScenarios)
+	}
 	attempt["after_snap_refresh"] = attempt["packages"]
 	if late {
 		archival, err := os.ReadFile("testdata/r24-late-confirmation.json")
@@ -92,7 +100,7 @@ func mvpQualificationFixtureFor(t *testing.T, binary string, late bool) (string,
 			s["final_state"] = "Not installed"
 		}
 		checks := []any{}
-		for _, check := range mvpObservedChecks[i] {
+		for _, check := range ordinaryFixtureChecksFor(s["scenario_id"].(string), httpSubscription) {
 			checks = append(checks, map[string]any{"record": map[string]any{"check": check, "observed_at": s["completed_at"], "result": "observed"}, "sha256": ""})
 		}
 		s["evidence"] = checks

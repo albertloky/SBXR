@@ -59,7 +59,7 @@ func authorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interf
 	status := lc.StatusUnderMutationLock(ctx, lock)
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	record, ok := decodeOwnership(body)
-	if err != nil || !ok || status.State != softwarelifecycle.Ready || status.Installed == nil || !compatibleOwnership(record, *status.Installed) || record.Phase != runningPhase || record.Direction != noDirection || record.Startup == nil || !host.VerifyProxyStartupIntegration(ctx, *record.Startup) {
+	if err != nil || !ok || status.State != softwarelifecycle.Ready || status.Installed == nil || !compatibleOwnership(record, *status.Installed) || record.Phase != runningPhase || record.Direction != noDirection || record.TransportMigrating || record.Startup == nil || !host.VerifyProxyStartupIntegration(ctx, *record.Startup) {
 		return false
 	}
 	if _, err := host.ReadConfiguration(ctx, hostSetupSpec, record.ConfigurationSHA256); err != nil {
@@ -165,6 +165,14 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 }
 
 func (module *installedInterface) inspectOwnedRemoval(ctx context.Context, record ownershipRecord, body []byte) hostadapter.RemovalInspection {
+	if record.HTTPSRetirement != nil {
+		host, ok := module.host.(interface {
+			InspectHTTPSRetirement(hostadapter.HTTPSRetirementAuthority, bool) bool
+		})
+		if !ok || !host.InspectHTTPSRetirement(*record.HTTPSRetirement, record.Direction == removalRequired) {
+			return hostadapter.RemovalInspection{}
+		}
+	}
 	if rotation := record.ClientRotation; rotation != nil {
 		if host, ok := module.host.(interface {
 			InspectClientIdentityRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, string, bool) hostadapter.RemovalInspection
@@ -257,7 +265,10 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 	record, valid := decodeOwnership(current)
 	running := module.host.InspectRunning(context.WithoutCancel(ctx), hostSetupSpec, aptSourceBody, current, record.ConfigurationSHA256, record.PublicIPv4)
 	subscriptionSafe := module.clientIdentitySubscriptionAdmitted(context.WithoutCancel(ctx), record)
-	preflight := module.host.PreflightSubscription(context.WithoutCancel(ctx), record.PublicIPv4)
+	preflight := module.preflightSubscription(context.WithoutCancel(ctx), record.PublicIPv4)
+	if record.Renewal != nil {
+		preflight = module.host.PreflightSubscription(context.WithoutCancel(ctx), record.PublicIPv4)
+	}
 	targetDigest := sha256.Sum256(authority.target)
 	idle := host.ClientIdentityPreparationIdle()
 	if readErr != nil || !valid || !bytes.Equal(current, authority.record) || installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || !compatibleOwnership(record, authority.release) || !reflect.DeepEqual(running, authority.running) || !runningAccepted(running) || !subscriptionSafe || !preflight.PackageLocks.Observed || !preflight.PackageLocks.Accepted || !idle.Observed || !idle.Accepted || authority.startup == nil || len(authority.target) == 0 {
@@ -286,7 +297,7 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 	record.ClientRotation = &clientIdentityRotation{OperationID: hex.EncodeToString(operationID), Direction: "cleanup", Effects: slices.Clone(clientIdentityRotationEffects), Completed: []string{}, Source: record.ConfigurationSHA256, Target: hex.EncodeToString(targetDigest[:]), Checkpoint: clientRotationAuthorized}
 	var artifact []byte
 	if record.Serving != nil {
-		selectedCertificate, ready := module.host.(clientIdentitySubscriptionHost).ClientIdentitySubscriptionReady(ctx, *record.Serving, *record.Renewal)
+		selectedCertificate, ready := module.host.(clientIdentitySubscriptionHost).ClientIdentitySubscriptionReady(ctx, *record.Serving, renewalContext(record))
 		if !ready {
 			return clientIdentityFailed("Subscription authority", "Restore exact subscription material and review again.")
 		}

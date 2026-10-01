@@ -214,7 +214,7 @@ func TestSigningUsesVerifiedIndexArtifactWithoutDraftReadPermission(t *testing.T
 	}
 }
 
-func TestRepairAutomatedEvidenceRunsBeforeNativeAssets(t *testing.T) {
+func TestSubscriptionAutomatedEvidenceRunsBeforeNativeAssets(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -223,14 +223,27 @@ func TestRepairAutomatedEvidenceRunsBeforeNativeAssets(t *testing.T) {
 	build := workflow[strings.Index(workflow, "  build:"):strings.Index(workflow, "  drafts:")]
 	assets := strings.Index(build, "mkdir -m 0700 release evidence")
 	for _, required := range []string{
-		`test "$MODE" = v3 && test "$(jq -r .support.scope <<<"$V3_ATTEMPT")" = subscription-clean-install-repair`,
+		`test "$MODE" = v3 && jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null`,
 		"go test -p 1 -timeout 30m ./... -count=1",
 		"go test -race -p 1 -timeout 30m ./... -count=1",
 		"go vet ./...", "go mod verify",
 	} {
 		position := strings.Index(build, required)
 		if position < 0 || assets < 0 || position >= assets {
-			t.Fatalf("repair native evidence lacks pre-build check %q", required)
+			t.Fatalf("subscription native evidence lacks pre-build check %q", required)
+		}
+	}
+	start := strings.Index(build, `if test "$MODE" = v3`)
+	checks := build[start:assets]
+	for _, scope := range []string{"subscription-clean-install-repair", "recurring-subscription-upgrade", "unknown"} {
+		for _, mode := range []string{"v3", "legacy"} {
+			command := exec.Command("bash", "-c", "set -euo pipefail\ngo() { printf '%s\\n' \"$*\"; }\n"+checks)
+			command.Env = append(os.Environ(), "MODE="+mode, `V3_ATTEMPT={"support":{"scope":"`+scope+`"}}`)
+			output, err := command.CombinedOutput()
+			wantChecks := mode == "v3" && scope != "unknown"
+			if err != nil || (strings.Count(string(output), "\n") == 4) != wantChecks || !wantChecks && len(output) != 0 {
+				t.Fatalf("native check gate %s/%s: %v %s", mode, scope, err, output)
+			}
 		}
 	}
 }

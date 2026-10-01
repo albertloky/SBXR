@@ -31,10 +31,10 @@ func (m *installedInterface) clientIdentitySubscriptionAdmitted(ctx context.Cont
 		return absent.Observed && absent.Accepted
 	}
 	host, ok := m.host.(clientIdentitySubscriptionHost)
-	if !ok || record.Renewal == nil {
+	if !ok || !record.Serving.HTTP && record.Renewal == nil {
 		return false
 	}
-	_, ready := host.ClientIdentitySubscriptionReady(ctx, *record.Serving, *record.Renewal)
+	_, ready := host.ClientIdentitySubscriptionReady(ctx, *record.Serving, renewalContext(record))
 	return ready
 }
 
@@ -67,7 +67,7 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 		return true
 	}
 	host, ok := m.host.(clientIdentitySubscriptionHost)
-	activation, activationOK := m.host.(certificateActivationHost)
+	_, activationOK := m.host.(certificateActivationHost)
 	serving, servingOK := m.host.(subscriptionRotationHost)
 	if !ok || !activationOK || !servingOK {
 		return false
@@ -106,7 +106,7 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 	// Ordinary certificate inspection deliberately requires empty staging.
 	// The exact selected artifact was checked above; remove only its proved
 	// publication before inspecting or activating the selected certificate.
-	inspection := activation.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving)
+	inspection := m.inspectServingTransport(ctx, *record)
 	if inspection.Accepted && inspection.Observed && inspection.Published != *record.Serving {
 		if !compatibleCertificateTarget(*record.Serving, inspection.Published) {
 			return false
@@ -125,7 +125,7 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 		if !published {
 			return false
 		}
-		inspection = activation.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving)
+		inspection = m.inspectServingTransport(ctx, *record)
 	}
 	if _, ok := serving.ReadSubscriptionLink(*record.Serving, record.PublicIPv4); !ok {
 		return false
@@ -136,11 +136,11 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 		return host.StopClientIdentitySubscription(ctx)
 	}
 	if inspection.Loaded != *record.Serving {
-		if !serving.ActivatePreparedSubscription(ctx, *record.Serving, *record.Renewal) {
+		if !serving.ActivatePreparedSubscription(ctx, *record.Serving, renewalContext(*record)) {
 			return host.StopClientIdentitySubscription(ctx)
 		}
 	}
-	fresh := activation.InspectCertificateActivation(ctx, *record.Renewal, *record.Serving)
+	fresh := m.inspectServingTransport(ctx, *record)
 	if !fresh.Observed || !fresh.Accepted || fresh.Published != *record.Serving || fresh.Loaded != *record.Serving {
 		return host.StopClientIdentitySubscription(ctx)
 	}

@@ -27,5 +27,14 @@ func main() {
 		<-ctx.Done()
 		_ = os.Stdin.Close()
 	}()
+	if len(os.Args) == 1 {
+		message, ok := proxyinstallation.CompleteHTTPSubscriptionHandoff(ctx, lifecycle)
+		if message != "" {
+			fmt.Fprintln(os.Stdout, message)
+		}
+		if !ok {
+			os.Exit(1)
+		}
+	}
 	os.Exit(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, lifecycle))
 }

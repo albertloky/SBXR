@@ -137,6 +137,36 @@ class MVPEvidenceTest(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual(refused.stdout, "")
 
+    def test_http_policy_changes_only_transport_and_replacement_checks(self):
+        identity = {"repository": "albertloky/SBXR", "tag": "v3.1.81",
+                    "commit": "c"*40, "release_index_sha256": "d"*64}
+        source = {"release_identity": identity, "ownership_schema": 2}
+        attempt = self.manifest["v3_attempt"]
+        attempt.update(evidence_policy=MVP.HTTP_RECURRING_POLICY, sources=[source],
+                       support={"scope": "recurring-subscription-upgrade",
+                                "contract": "sbxr-subscription-update-v1", "sources": [identity]})
+        order = MVP.scenario_order(attempt)
+        self.assertEqual(order, ["source-v3.1.81-precommit", "source-v3.1.81-upgrade", "source-v3.1.81-postcommit", "mvp-install", "mvp-subscription", "mvp-credentials", "mvp-serving", "mvp-removal"])
+        attempt["required_scenarios"] = order
+        self.write("manifest.json", self.manifest)
+        collector = SCRIPT.with_name("v3-recurring-evidence.sh").read_text()
+        function = collector[collector.index("mvp_required_checks() {"):].split("\n}", 1)[0] + "\n}\n"
+        for index, scenario in enumerate(order):
+            with self.subTest(scenario=scenario):
+                checks = MVP.required_checks(attempt, scenario)
+                self.write("previous.json", [{"scenario_id": name} for name in order[:index]])
+                request, observation = self.scenario_files(scenario)
+                result = subprocess.run(self.command(request, observation, scenario+"-http.json"), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                shell = subprocess.run(["bash", "-c", function+'manifest=$1; mvp_required_checks "$2"', "bash", str(self.root / "manifest.json"), scenario], cwd=SCRIPT.parents[2], capture_output=True, text=True)
+                self.assertEqual(shell.returncode, 0, shell.stderr)
+                self.assertEqual(shell.stdout.split(), checks)
+        self.assertIn("http-exposure-disclosed", MVP.required_checks(attempt, "mvp-subscription"))
+        self.assertIn("no-certificate-or-renewal-resources", MVP.required_checks(attempt, "mvp-serving"))
+        self.assertIn("outside-subscription-transport-preserved", MVP.required_checks(attempt, order[0]))
+        with self.assertRaises(MVP.Refusal):
+            MVP.required_checks(attempt, "mvp-renewal")
+
     def test_documented_template_preserves_checks_but_cannot_be_submitted(self):
         request, _ = self.scenario_files()
         procedure = SCRIPT.parents[2] / "docs/acceptance/mvp-live-acceptance.md"

@@ -91,6 +91,17 @@ ownership before transaction cleanup reopens renewal. Recovery observes an
 already completed restart. Diagnostic renewal evidence is never recovery authority
 and is not cleared by update.
 
+For HTTP-capable successors, the optional `AfterComplete` runtime callback runs
+only after journal cleanup and runtime-exclusion release, while the whole-host
+mutation lock remains held. It performs the mandatory legacy HTTPS-to-HTTP
+handoff and retains historical certificate cleanup authority. Failure keeps the
+committed release; the new root launch or journal-free Recover resumes forward.
+Prepared rollback never invokes it. Frozen v3.1.81 cannot invoke this callback:
+exit its completed old menu and launch the new `sudo sbxr` once. Candidate
+admission requires HTTP and, for TLS sources or retained cleanup, retirement
+capability markers in addition to the attested support contract. See
+[ADR-0026](../../docs/adr/0026-http-subscription.md).
+
 The first subscription release admits no incoming update from `v3.0.21` or any
 other release. Existing Owners must use reviewed Complete removal and its exact
 release recovery if interrupted, then install/setup fresh. This entails downtime,

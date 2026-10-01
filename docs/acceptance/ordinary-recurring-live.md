@@ -1,5 +1,13 @@
 # Ordinary recurring live acceptance
 
+Fresh HTTP candidates use [HTTP subscription live qualification](http-subscription-live.md)
+and [ADR-0026](../adr/0026-http-subscription.md). This document retains the
+HTTPS policies' meaning. Its non-certificate safeguards remain applicable;
+certificate-replacement and trusted-subscription-TLS requirements do not apply
+to a fresh HTTP candidate. Existing HTTPS source preparations still use their
+unchanged certificate and renewal contract.
+
+
 This is the `mvp-recurring-live-v1` procedure approved in
 [ADR-0025](../adr/0025-ordinary-recurring-live-acceptance.md): five ordinary MVP
 journeys plus three packaged upgrade/recovery checks. **No live pass is recorded

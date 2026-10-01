@@ -13,6 +13,8 @@ import sys
 
 POLICY = "mvp-live-v1"
 RECURRING_POLICY = "mvp-recurring-live-v1"
+HTTP_POLICY = "mvp-http-live-v1"
+HTTP_RECURRING_POLICY = "mvp-http-recurring-live-v1"
 SCENARIOS = {
     "mvp-install": (
         "packaged-install reviewed-setup outside-proxy-traffic "
@@ -40,15 +42,21 @@ SCENARIOS = {
     ).split(),
 }
 ORDER = list(SCENARIOS)
+HTTP_SCENARIOS = {key: list(checks) for key, checks in SCENARIOS.items() if key != "mvp-renewal"}
+HTTP_SCENARIOS["mvp-subscription"][0] = "outside-authenticated-http"
+HTTP_SCENARIOS["mvp-subscription"] += ["no-certificate-or-renewal-resources", "http-exposure-disclosed"]
+HTTP_SCENARIOS["mvp-serving"] = ("serving-restart-preserves-link current-artifact-after-restart outside-authenticated-http no-certificate-or-renewal-resources proxy-traffic-preserved").split()
+HTTP_ORDER = ["mvp-install", "mvp-subscription", "mvp-credentials", "mvp-serving", "mvp-removal"]
 TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def scenario_order(attempt):
     policy = attempt.get("evidence_policy")
-    if policy == POLICY:
-        return ORDER
-    if policy != RECURRING_POLICY:
+    order = HTTP_ORDER if policy in (HTTP_POLICY, HTTP_RECURRING_POLICY) else ORDER
+    if policy in (POLICY, HTTP_POLICY):
+        return order
+    if policy not in (RECURRING_POLICY, HTTP_RECURRING_POLICY):
         refuse("manifest is outside the ordinary live policies")
     sources = attempt.get("sources")
     support = attempt.get("support", {})
@@ -64,14 +72,15 @@ def scenario_order(attempt):
     if type(identity) is not dict or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", identity.get("tag", "")):
         refuse("recurring source identity differs")
     return [f"source-{identity['tag']}-{suffix}"
-            for suffix in ("precommit", "upgrade", "postcommit")] + ORDER
+            for suffix in ("precommit", "upgrade", "postcommit")] + order
 
 
 def required_checks(attempt, scenario_id):
     if scenario_id not in scenario_order(attempt):
         refuse("unlisted scenario")
-    if scenario_id in SCENARIOS:
-        return SCENARIOS[scenario_id]
+    scenarios = HTTP_SCENARIOS if attempt.get("evidence_policy") in (HTTP_POLICY, HTTP_RECURRING_POLICY) else SCENARIOS
+    if scenario_id in scenarios:
+        return scenarios[scenario_id]
     checks = ("exact-source-and-candidate actual-source-packaged-updater "
               "source-record-schema-proved both-releases-understand-recovery "
               "reviewed-update-confirmation admission-exclusion creation-provenance-preserved "
@@ -80,14 +89,29 @@ def required_checks(attempt, scenario_id):
               "ssh-access-preserved private-files-and-logs-protected "
               "no-helper-or-intermediate-release").split()
     if scenario_id.endswith("-precommit"):
-        return checks + ("observed-precommit-interruption actual-source-packaged-recovery "
-                         "prior-exact-restoration source-installed-record-restored "
-                         "no-transaction-residue").split()
-    if scenario_id.endswith("-postcommit"):
-        return checks + ("observed-postcommit-interruption candidate-forward-runtime-completion "
-                         "candidate-installed-record-proved serving-only-restart "
-                         "no-transaction-residue").split()
-    return checks + "candidate-installed-record-proved serving-only-restart no-transaction-residue".split()
+        checks += ("observed-precommit-interruption actual-source-packaged-recovery "
+                   "prior-exact-restoration source-installed-record-restored "
+                   "no-transaction-residue").split()
+    elif scenario_id.endswith("-postcommit"):
+        checks += ("observed-postcommit-interruption candidate-forward-runtime-completion "
+                   "candidate-installed-record-proved serving-only-restart "
+                   "no-transaction-residue").split()
+    else:
+        checks += "candidate-installed-record-proved serving-only-restart no-transaction-residue".split()
+    if attempt.get("evidence_policy") == HTTP_RECURRING_POLICY:
+        if scenario_id.endswith("-precommit"):
+            checks = ["outside-subscription-transport-preserved" if check == "outside-trusted-https" else check for check in checks]
+        else:
+            replacement = {
+                "no-ownership-migration": "updater-ownership-preserved-until-cleanup",
+                "subscription-link-unchanged": "subscription-address-port-path-token-preserved",
+                "outside-trusted-https": "outside-authenticated-http",
+            }
+            checks = [replacement.get(check, check) for check in checks]
+            checks += ("mandatory-http-handoff-completed retained-certificate-bytes-and-provenance-preserved "
+                       "owned-renewal-and-http80-retired existing-client-profile-refreshed-with-settings-preserved "
+                       "no-migration-ca-operation no-migration-authority-residue").split()
+    return checks
 
 
 class Refusal(ValueError):

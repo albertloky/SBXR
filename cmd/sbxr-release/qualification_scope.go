@@ -131,10 +131,11 @@ func attemptVersion(attempt *v3QualificationAttempt) string {
 
 func attemptScenarios(attempt v3QualificationAttempt) []string {
 	if mvpRecurringAttempt(attempt) {
-		return mvpRecurringScenarios(attempt.Sources)
+		ids := mvpRecurringScenarios(attempt.Sources)
+		return append(ids[:len(ids)-5], ordinaryJourneys(attempt)...)
 	}
 	if mvpLiveAttempt(attempt) {
-		return strings.Fields(softwarelifecycle.MVPLiveScenarios)
+		return ordinaryJourneys(attempt)
 	}
 	ids := requiredV3Scenarios(attempt.Sources)
 	if attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {

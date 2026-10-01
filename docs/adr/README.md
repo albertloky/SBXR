@@ -4,13 +4,17 @@ Read decisions by **scope**, not merely by an `accepted` header. Later explicit
 refinements apply only within their stated scope; this index does not adopt,
 revoke or rewrite a decision. [CONTEXT.md](../../CONTEXT.md) is the shared glossary.
 
-For current product work, begin with ADR-0016 and its selected resolutions.
+For current product work, begin with ADR-0016 and its selected resolutions, then
+[ADR-0026](0026-http-subscription.md) for fresh HTTP subscriptions and preserved
+legacy HTTPS installations.
 For current recurring live qualification, begin with ADR-0025; ADR-0023 defines
 the retained five ordinary journeys. ADR-0024 is only the bounded
 v3.1.81 / 159 exception; ADR-0017 applies only to v3.1.0 / 83. Neither is a
 general publication waiver. See the [acceptance guide](../acceptance/README.md).
 
 ## Current V3 and scoped release decisions
+
+- [0026 — Use HTTP for newly enabled subscriptions](0026-http-subscription.md)
 
 - [0016 — Establish the V3 proxy product and Modules](0016-v3-proxy-product-and-modules.md)
 - [0018 — Permit a clean-install subscription repair release](0018-clean-install-subscription-repair.md)
