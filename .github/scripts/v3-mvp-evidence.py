@@ -4,6 +4,7 @@
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -114,6 +115,12 @@ def required_checks(attempt, scenario_id):
     return checks
 
 
+# The recorder owns one shared timing contract for requests, drafts and assembly.
+sys.dont_write_bytecode = True
+_TIMING_SPEC = importlib.util.spec_from_file_location("mvp_observe_timing", Path(__file__).with_name("mvp-observe.py"))
+TIMING = importlib.util.module_from_spec(_TIMING_SPEC)
+_TIMING_SPEC.loader.exec_module(TIMING)
+
 class Refusal(ValueError):
     pass
 
@@ -180,12 +187,12 @@ def assemble(options):
     previous, _ = load(options.previous, "prior scenario prefix", 16 * 1024 * 1024)
     observation, _ = load(options.observation, "operator observation", 64 * 1024)
 
-    exact_object(request, (
-        "deadline_unix", "not_before", "qualification_manifest_sha256",
-        "required_checks", "scenario_id", "scenario_limit_seconds",
-    ), "collector request")
-    exact_object(observation, ("checks", "completed_at", "scenario_id", "started_at"),
-                 "operator observation")
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    TIMING.validate_request(request, now)
+    observation_keys = {"checks", "completed_at", "scenario_id", "started_at"}
+    if "karing_handoffs" in observation:
+        observation_keys.add("karing_handoffs")
+    exact_object(observation, observation_keys, "operator observation")
     if type(previous) is not list:
         refuse("prior scenario prefix is not an array")
     if type(manifest) is not dict or type(manifest.get("v3_attempt")) is not dict:
@@ -202,6 +209,9 @@ def assemble(options):
         refuse("request or observation scenario differs")
     if request.get("qualification_manifest_sha256") != digest(manifest_raw):
         refuse("request manifest digest differs")
+    if (request.get("karing_response_limit_seconds", 0) != attempt.get("karing_response_limit_seconds", 0) or
+            request.get("attended_finish_by", "") != attempt.get("attended_finish_by", "")):
+        refuse("handoff timing differs from the signed declaration")
     expected_limit = 7200 if scenario_id == "mvp-subscription" else 1800
     if (type(request.get("deadline_unix")) is not int or
             type(request.get("scenario_limit_seconds")) is not int or
@@ -211,8 +221,7 @@ def assemble(options):
     request_start = timestamp(request.get("not_before"), "collector start")
     started = timestamp(observation.get("started_at"), "observation start")
     completed = timestamp(observation.get("completed_at"), "observation completion")
-    deadline = dt.datetime.fromtimestamp(request["deadline_unix"], tz=dt.timezone.utc)
-    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    deadline = TIMING.handoff_deadline(request, observation, now)
     if started < request_start or completed < started or completed > deadline or completed > now:
         refuse("observation time is outside the collector request")
 
@@ -271,6 +280,9 @@ def assemble(options):
         "vps_id": attempt["vps_id"],
         "vps_identity_sha256": attempt["vps_identity_sha256"],
     }
+    if "karing_handoffs" in observation:
+        scenario["karing_handoffs"] = observation["karing_handoffs"]
+
     scenarios = previous + [scenario]
     evidence = {
         "attempt_id": attempt["attempt_id"],
@@ -319,7 +331,7 @@ def main():
     options = parser.parse_args()
     try:
         assemble(options)
-    except (KeyError, IndexError, OSError, Refusal) as error:
+    except (KeyError, IndexError, OSError, Refusal, TIMING.Refusal, TypeError, OverflowError) as error:
         print(f"MVP evidence refused: {error}", file=sys.stderr)
         return 1
     return 0

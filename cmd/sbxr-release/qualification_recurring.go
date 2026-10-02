@@ -93,6 +93,13 @@ type v3EvidenceReference struct {
 	SHA256 string        `json:"sha256"`
 }
 
+type v3KaringHandoff struct {
+	NotifiedAt  string `json:"notified_at"`
+	Phase       string `json:"phase"`
+	PreparedAt  string `json:"prepared_at"`
+	RespondedAt string `json:"responded_at"`
+}
+
 type v3ScenarioEvidence struct {
 	ActualResult        string                  `json:"actual_result"`
 	AttemptID           string                  `json:"attempt_id"`
@@ -103,6 +110,7 @@ type v3ScenarioEvidence struct {
 	ExpectedResult      string                  `json:"expected_result"`
 	FinalState          string                  `json:"final_state"`
 	InitialState        string                  `json:"initial_state"`
+	KaringHandoffs      []v3KaringHandoff       `json:"karing_handoffs,omitempty"`
 	LinkID              string                  `json:"link_id"`
 	OperationID         string                  `json:"operation_id"`
 	PackagesAfter       v3QualificationPackages `json:"packages_after"`
@@ -241,7 +249,8 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 		if scenario.ScenarioID == "karing-final" || ordinaryLiveAttempt(*attempt) && scenario.ScenarioID == "mvp-subscription" {
 			limit = 2 * time.Hour
 		}
-		if !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started) > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-"+attemptVersion(attempt) || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
+		paused, handoffOK := validKaringHandoffs(scenario, *attempt, started, completed, limit)
+		if !handoffOK || !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started)-paused > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-"+attemptVersion(attempt) || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
 			return false
 		}
 		operations[scenario.OperationID] = true
@@ -542,6 +551,9 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 			body.WriteString("Incoming source upgrades: Not applicable\nTwo-release update/recovery: Not applicable\n")
 		}
 	}
+	if attempt.KaringResponseLimitSeconds == 3600 {
+		body.WriteString("Karing response window: 3600 seconds after prepared-link notification\nTechnical timing: excludes only recorded attended response waits\n")
+	}
 	for _, asset := range release.Assets {
 		body.WriteString("Asset: " + asset.Name + " " + strconv.FormatInt(asset.Size, 10) + " " + asset.SHA256 + "\n")
 	}
@@ -595,32 +607,34 @@ type v3QualificationSource struct {
 }
 
 type v3QualificationAttempt struct {
-	AfterSnapRefresh       v3QualificationPackages                   `json:"after_snap_refresh"`
-	AttemptID              string                                    `json:"attempt_id"`
-	AutomatedOnlyScenarios []string                                  `json:"automated_only_scenarios,omitempty"`
-	Baseline               *qualificationRelease                     `json:"baseline,omitempty"`
-	CandidateIndex         string                                    `json:"candidate_index,omitempty"`
-	EvidencePolicy         string                                    `json:"evidence_policy,omitempty"`
-	KaringLatestCheckedAt  string                                    `json:"karing_latest_checked_at"`
-	KaringLimitSeconds     int                                       `json:"karing_limit_seconds"`
-	LateConfirmationReview *softwarelifecycle.LateConfirmationReview `json:"late_confirmation_review,omitempty"`
-	MacRunnerID            string                                    `json:"mac_runner_id"`
-	MacOSVersion           string                                    `json:"macos_version"`
-	OutsideRunnerID        string                                    `json:"outside_runner_id"`
-	OwnerException         string                                    `json:"owner_exception,omitempty"`
-	Packages               v3QualificationPackages                   `json:"packages"`
-	ProxyPackage           v3PackageIdentity                         `json:"proxy_package"`
-	RequiredScenarios      []string                                  `json:"required_scenarios"`
-	RunAttempt             int                                       `json:"run_attempt"`
-	Runner                 acceptanceVPSRunner                       `json:"runner"`
-	ScenarioLimitSeconds   int                                       `json:"scenario_limit_seconds"`
-	Schema                 string                                    `json:"schema"`
-	Sources                []v3QualificationSource                   `json:"sources"`
-	StartedAt              string                                    `json:"started_at"`
-	Support                *v3ReleaseSupport                         `json:"support,omitempty"`
-	ValidationLimitSeconds int                                       `json:"validation_limit_seconds"`
-	VPSID                  string                                    `json:"vps_id"`
-	VPSIdentitySHA256      string                                    `json:"vps_identity_sha256"`
+	AfterSnapRefresh           v3QualificationPackages                   `json:"after_snap_refresh"`
+	AttemptID                  string                                    `json:"attempt_id"`
+	AttendedFinishBy           string                                    `json:"attended_finish_by,omitempty"`
+	AutomatedOnlyScenarios     []string                                  `json:"automated_only_scenarios,omitempty"`
+	Baseline                   *qualificationRelease                     `json:"baseline,omitempty"`
+	CandidateIndex             string                                    `json:"candidate_index,omitempty"`
+	EvidencePolicy             string                                    `json:"evidence_policy,omitempty"`
+	KaringLatestCheckedAt      string                                    `json:"karing_latest_checked_at"`
+	KaringLimitSeconds         int                                       `json:"karing_limit_seconds"`
+	KaringResponseLimitSeconds int                                       `json:"karing_response_limit_seconds,omitempty"`
+	LateConfirmationReview     *softwarelifecycle.LateConfirmationReview `json:"late_confirmation_review,omitempty"`
+	MacRunnerID                string                                    `json:"mac_runner_id"`
+	MacOSVersion               string                                    `json:"macos_version"`
+	OutsideRunnerID            string                                    `json:"outside_runner_id"`
+	OwnerException             string                                    `json:"owner_exception,omitempty"`
+	Packages                   v3QualificationPackages                   `json:"packages"`
+	ProxyPackage               v3PackageIdentity                         `json:"proxy_package"`
+	RequiredScenarios          []string                                  `json:"required_scenarios"`
+	RunAttempt                 int                                       `json:"run_attempt"`
+	Runner                     acceptanceVPSRunner                       `json:"runner"`
+	ScenarioLimitSeconds       int                                       `json:"scenario_limit_seconds"`
+	Schema                     string                                    `json:"schema"`
+	Sources                    []v3QualificationSource                   `json:"sources"`
+	StartedAt                  string                                    `json:"started_at"`
+	Support                    *v3ReleaseSupport                         `json:"support,omitempty"`
+	ValidationLimitSeconds     int                                       `json:"validation_limit_seconds"`
+	VPSID                      string                                    `json:"vps_id"`
+	VPSIdentitySHA256          string                                    `json:"vps_identity_sha256"`
 }
 
 func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts, workflow qualificationWorkflow) bool {
@@ -644,7 +658,7 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 	started, ok := qualificationTime(attempt.StartedAt)
 	checked, checkedOK := qualificationTime(attempt.KaringLatestCheckedAt)
 	mvp := ordinaryLiveAttempt(attempt)
-	if !ok || !checkedOK || started.Before(checked) || !mvp && started.Sub(checked) > 5*time.Minute ||
+	if !validKaringResponseDeclaration(attempt) || !ok || !checkedOK || started.Before(checked) || !mvp && started.Sub(checked) > 5*time.Minute ||
 		(attempt.Schema != "sbxr-v3-qualification-attempt-v2" && attempt.Schema != "sbxr-v3-qualification-attempt-v3") || attempt.RunAttempt < 1 ||
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||

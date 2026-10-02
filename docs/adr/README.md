@@ -15,6 +15,7 @@ general publication waiver. See the [acceptance guide](../acceptance/README.md).
 ## Current V3 and scoped release decisions
 
 - [0026 — Use HTTP for newly enabled subscriptions](0026-http-subscription.md)
+- [0027 — Attended Karing response timing](0027-attended-karing-response-window.md)
 
 - [0016 — Establish the V3 proxy product and Modules](0016-v3-proxy-product-and-modules.md)
 - [0018 — Permit a clean-install subscription repair release](0018-clean-install-subscription-repair.md)

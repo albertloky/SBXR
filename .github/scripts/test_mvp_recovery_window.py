@@ -84,7 +84,7 @@ class RecoveryFiles(unittest.TestCase):
             expected = {'qualification_manifest_sha256': 'e' * 64}
             with patch.object(o, 'Path', side_effect=path):
                 self.path, self.write, self.wanted, self.request = path, write, wanted, request
-                self.checkpoint, self.request_path = checkpoint, request_path
+                self.checkpoint, self.request_path, self.expected = checkpoint, request_path, expected
                 self.observe = lambda: o.recovery_observation(phase, expected, wanted, 900, request_path)
                 yield root
 
@@ -98,6 +98,27 @@ class RecoveryFiles(unittest.TestCase):
                     self.assertTrue(os.path.samefile(self.path('/usr/local/bin/sbxr'), self.path('/usr/local/bin/.sbxr-update-prior')))
                     with self.assertRaisesRegex(o.Refused, 'unsafe-file:'):
                         o.protected_file(self.path('/usr/local/bin/sbxr'))
+
+    def test_completed_handoff_allows_recovery_but_pending_handoff_refuses(self):
+        with self.fixture('recovery-postcommit'):
+            now=int(time.time());stamp=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
+            self.request.update(not_before=stamp(now-2100),deadline_unix=now-300,karing_response_limit_seconds=3600,
+                                attended_finish_by=stamp(now+7200))
+            self.write(self.request_path,json.dumps(self.request).encode())
+            source=Path(__file__).parent
+            driver=self.write('/root/sbxr-mvp-log-parent/v3-menu-session.py',(source/'v3-menu-session.py').read_bytes())
+            self.expected['operator_sha256']={driver.name:sha(driver.read_bytes())}
+            clock=self.write('/root/clock.py',(source/'mvp-observe.py').read_bytes())
+            draft={'request_sha256':sha(self.request_path.read_bytes()),'observation':{
+                'scenario_id':self.request['scenario_id'],'started_at':self.request['not_before'],'completed_at':None,
+                'checks':[{'check':'fixture-only','observed_at':None,'result':None}],
+                'karing_handoffs':[{'phase':'source-profile-import','prepared_at':stamp(now-1700),'notified_at':stamp(now-1500),'responded_at':stamp(now-120)}]}}
+            draft_path=self.write('/root/draft.json',json.dumps(draft).encode())
+            with patch.dict(os.environ,SBXR_QUALIFICATION_CLOCK=str(clock),SBXR_QUALIFICATION_CLOCK_SHA256=sha(clock.read_bytes()),SBXR_QUALIFICATION_DRAFT=str(draft_path)):
+                self.assertEqual(self.observe()['checkpoint'],'Committed')
+                draft['observation']['karing_handoffs'][0]['responded_at']=None
+                self.write(draft_path,json.dumps(draft).encode())
+                with self.assertRaisesRegex(o.Refused,'recovery-request-window'):self.observe()
 
     def test_exact_link_relationship_not_simply_count_two(self):
         for shape in ('copy', 'two-separate-pairs', 'extra-alias'):

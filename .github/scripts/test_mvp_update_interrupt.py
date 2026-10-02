@@ -85,6 +85,7 @@ def run(fixture):
             ('precommit', 'short-request', True), ('precommit', 'wrong-source', True),
             ('precommit', 'existing-transcript', True),
             ('precommit', 'future-request', True),
+            ('postcommit', 'completed-handoff', True), ('postcommit', 'pending-handoff', True),
         ]
         for number, (boundary, mode, wrapped) in enumerate(cases):
             case = root / str(number)
@@ -123,6 +124,20 @@ def run(fixture):
                          'required_checks': ['fixture-only']}
                 write(case / 'request.json', json.dumps(value).encode())
                 env['SBXR_QUALIFICATION_REQUEST'] = str(case / 'request.json')
+            if mode in ('completed-handoff', 'pending-handoff'):
+                now=int(time.time());stamp=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
+                request={'scenario_id':'source-v3.1.81-postcommit','not_before':stamp(now-2100),'deadline_unix':now-300,
+                         'scenario_limit_seconds':1800,'qualification_manifest_sha256':'a'*64,'required_checks':['fixture-only'],
+                         'karing_response_limit_seconds':3600,'attended_finish_by':stamp(now+7200)}
+                write(case/'request.json',json.dumps(request).encode())
+                draft={'request_sha256':digest((case/'request.json').read_bytes()),'observation':{
+                    'scenario_id':request['scenario_id'],'started_at':request['not_before'],'completed_at':None,
+                    'checks':[{'check':'fixture-only','observed_at':None,'result':None}],
+                    'karing_handoffs':[{'phase':'source-profile-import','prepared_at':stamp(now-1700),'notified_at':stamp(now-1500),
+                                         'responded_at':None if mode=='pending-handoff' else stamp(now-120)}]}}
+                write(case/'draft.json',json.dumps(draft).encode());clock=(SOURCE/'mvp-observe.py').read_bytes();write(case/'clock.py',clock)
+                env.update(SBXR_QUALIFICATION_REQUEST=str(case/'request.json'),SBXR_QUALIFICATION_DRAFT=str(case/'draft.json'),
+                           SBXR_QUALIFICATION_CLOCK=str(case/'clock.py'),SBXR_QUALIFICATION_CLOCK_SHA256=digest(clock),SBXR_INTERRUPT_MODE='normal')
             if mode == 'wrong-source':
                 expected['prior_executable_sha256'] = '0'*64
                 (case / 'expected.json').write_text(json.dumps(expected))
@@ -140,7 +155,7 @@ def run(fixture):
                     assert active.poll() is None, 'accepted visibility without directory fsync'
                 active.send_signal(signal.SIGTERM)
             output, error = active.communicate(timeout=40)
-            succeeds = mode in ('normal', 'startup-thread-exit')
+            succeeds = mode in ('normal', 'startup-thread-exit', 'completed-handoff')
             assert active.returncode == (0 if succeeds else 1), (number, output, error, (case / 'transcript').read_bytes())
             active = None
             ids = [int(p.stem) for p in case.glob('*.child')]
@@ -154,7 +169,7 @@ def run(fixture):
             if (case / 'product.pid').exists():
                 ids.append(int((case / 'product.pid').read_text()))
             assert all(process(pid) is None for pid in ids), (number, ids)
-            if mode in ('expired-request', 'wrong-request', 'wrong-source', 'existing-transcript', 'future-request'):
+            if mode in ('expired-request', 'wrong-request', 'wrong-source', 'existing-transcript', 'future-request', 'pending-handoff'):
                 assert not (case / 'product.pid').exists(), 'refused input launched product'
             if (case / 'transcript').exists():
                 assert stat.S_IMODE((case / 'transcript').stat().st_mode) == 0o600
@@ -226,7 +241,7 @@ def run(fixture):
         SHARED.rmdir()
         assert identity(Path('/var/log')) == baseline
         shutil.rmtree(root)
-    print('UPDATE_INTERRUPT_FIXTURE_PASSED count=21; not packaged/live evidence', flush=True)
+    print('UPDATE_INTERRUPT_FIXTURE_PASSED count=23; not packaged/live evidence', flush=True)
 
 
 if __name__ == '__main__':

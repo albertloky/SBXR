@@ -18,7 +18,7 @@ import tempfile
 import time
 
 
-CASE_TOTAL = 25
+CASE_TOTAL = 28
 CONFIG = '{"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2080}],"outbounds":[{"type":"vless","uuid":"11111111-1111-4111-8111-111111111111"}]}'
 
 
@@ -362,6 +362,32 @@ LogLevel ERROR
         if (b"Replace subscription certificate? [y/N]" not in result.stdout or
                 b"Code: PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED" not in result.stdout):
             raise Refused("replacement-menu-ssh-boundary")
+
+        # Three actual SSH cases for a prepared/notified attended response.
+        clock=work/'clock.py';write(clock,(source/'mvp-observe.py').read_bytes())
+        draft=Path('/root/mvp-observation-draft.json')
+        stamp=lambda t:time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(t))
+        now=int(time.time())
+        timed=dict(scenario_id='source-v3.1.81-upgrade',not_before=stamp(now-2100),deadline_unix=now-300,
+                   scenario_limit_seconds=1800,qualification_manifest_sha256='a'*64,required_checks=['fixture-only'],
+                   karing_response_limit_seconds=3600,attended_finish_by=stamp(now+7200))
+        write(request,json.dumps(timed))
+        handoff={'request_sha256':hashlib.sha256(request.read_bytes()).hexdigest(),'observation':{
+            'scenario_id':timed['scenario_id'],'started_at':timed['not_before'],'completed_at':None,
+            'checks':[{'check':'fixture-only','observed_at':None,'result':None}],
+            'karing_handoffs':[{'phase':'http-profile-refresh','prepared_at':stamp(now-1700),'notified_at':stamp(now-1500),'responded_at':stamp(now-120)}]}}
+        for variant in ('completed','pending','wrong-clock'):
+            handoff['observation']['karing_handoffs'][0]['responded_at']=None if variant=='pending' else stamp(now-120)
+            write(draft,json.dumps(handoff))
+            wanted='0'*64 if variant=='wrong-clock' else hashlib.sha256(clock.read_bytes()).hexdigest()
+            cmd=(f"cd {foreign} && SBXR_EXECUTABLE={product} SBXR_QUALIFICATION_REQUEST={request} "
+                 f"SBXR_QUALIFICATION_CLOCK={clock} SBXR_QUALIFICATION_CLOCK_SHA256={wanted} SBXR_QUALIFICATION_DRAFT={draft} "
+                 f"/usr/bin/bash {staged} remote-outside-disclose v3.fixture 1 deadbeef 1")
+            result=remote(base,cmd,ok=variant=='completed')
+            if result.stdout != ((CONFIG+'\n').encode() if variant=='completed' else b''):
+                raise Refused('attended-menu-ssh-'+variant)
+        draft.unlink();clock.unlink()
+        write(request,json.dumps({'deadline_unix':int(time.time())+30}))
 
         historical = (f"cd {foreign} && SBXR_EXECUTABLE={product} "
                       f"SBXR_QUALIFICATION_REQUEST={request} /usr/bin/bash -s "

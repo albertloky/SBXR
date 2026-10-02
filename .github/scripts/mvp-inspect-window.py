@@ -8,6 +8,7 @@ import argparse
 import base64
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -118,7 +119,8 @@ def recovery_observation(phase, expected, wanted, window_seconds, request_path):
     request = json.loads(raw_request, object_pairs_hook=exact_object)
     require(type(request) is dict and set(request) == {
         "deadline_unix", "not_before", "qualification_manifest_sha256", "required_checks",
-        "scenario_id", "scenario_limit_seconds"}, "recovery-request-fields")
+        "scenario_id", "scenario_limit_seconds"} | ({"karing_response_limit_seconds", "attended_finish_by"}
+        if "karing_response_limit_seconds" in request else set()), "recovery-request-fields")
     bound_manifest = expected.get("qualification_manifest_sha256")
     require(type(bound_manifest) is str and re.fullmatch(r"[0-9a-f]{64}", bound_manifest)
             and request["qualification_manifest_sha256"] == bound_manifest, "recovery-request-manifest")
@@ -130,10 +132,23 @@ def recovery_observation(phase, expected, wanted, window_seconds, request_path):
             and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", request["not_before"]),
             "recovery-request-start")
     start = dt.datetime.strptime(request["not_before"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+    deadline = request["deadline_unix"]
+    if "karing_response_limit_seconds" in request:
+        driver = Path("/root/sbxr-mvp-log-parent/v3-menu-session.py")
+        protected_file(driver, 0o600)
+        require(digest(driver) == expected["operator_sha256"][driver.name], "recovery-clock-driver")
+        sys.dont_write_bytecode = True
+        spec = importlib.util.spec_from_file_location("recovery_menu_clock", driver)
+        menu = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(menu)
+        try:
+            deadline = menu.qualification_deadline(request_path)
+        except menu.ProtocolError:
+            raise Refused("recovery-request-window") from None
     require(type(request["deadline_unix"]) is int and type(request["scenario_limit_seconds"]) is int
             and request["scenario_limit_seconds"] == 1800
             and 0 < request["deadline_unix"] - start <= 1800
-            and start <= time.time() and time.time() + window_seconds <= request["deadline_unix"],
+            and start <= time.time() and time.time() + window_seconds <= deadline,
             "recovery-request-window")
     for directory in ("/var/lib/sbxr", "/usr/local/bin"):
         info = metadata(Path(directory))
@@ -191,7 +206,7 @@ def recovery_observation(phase, expected, wanted, window_seconds, request_path):
             and pair[1]["sequence"] > pair[0]["sequence"], "recovery-release-route")
     require(all(file_identity(os.lstat(p)) == identity for p, identity in identities.items())
             and not any(os.path.lexists(p) for p in absent), "recovery-files-changed")
-    require(time.time() + window_seconds <= request["deadline_unix"], "recovery-request-window")
+    require(time.time() + window_seconds <= deadline, "recovery-request-window")
     return {"checkpoint": checkpoint, "update_record_sha256": hashlib.sha256(raw_record).hexdigest(),
             "request_sha256": hashlib.sha256(raw_request).hexdigest(), "scenario_id": request["scenario_id"],
             "qualification_manifest_sha256": bound_manifest, "bound_material_verified": True}

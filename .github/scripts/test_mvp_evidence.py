@@ -231,6 +231,38 @@ class MVPEvidenceTest(unittest.TestCase):
         self.assertEqual(supplied["required_checks"], MVP.SCENARIOS["mvp-subscription"])
         self.assertEqual(supplied["scenario_limit_seconds"], 7200)
 
+    def test_declared_response_wait_is_bound_to_manifest_and_original_budget(self):
+        stamp=lambda t:t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        attempt=self.manifest["v3_attempt"]
+        attempt.update(evidence_policy=MVP.HTTP_POLICY,karing_response_limit_seconds=3600,
+                       attended_finish_by=stamp(self.now+dt.timedelta(hours=3)))
+        attempt["required_scenarios"]=MVP.scenario_order(attempt)
+        self.write("manifest.json",self.manifest)
+        self.write("previous.json",[{"scenario_id":"mvp-install"},{"scenario_id":"mvp-subscription"}])
+        request,observation=self.scenario_files("mvp-credentials")
+        req=json.loads(request.read_bytes());obs=json.loads(observation.read_bytes())
+        req.update(not_before=stamp(self.now-dt.timedelta(minutes=80)),deadline_unix=int(self.now.timestamp())-50*60,
+                   karing_response_limit_seconds=3600,attended_finish_by=attempt["attended_finish_by"])
+        obs.update(started_at=req["not_before"],karing_handoffs=[{
+            "phase":"credential-refresh","prepared_at":stamp(self.now-dt.timedelta(minutes=79)),
+            "notified_at":stamp(self.now-dt.timedelta(minutes=59)),"responded_at":obs["completed_at"]}])
+        self.write("request.json",req);self.write("observation.json",obs)
+        result=subprocess.run(self.command(request,observation),capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        facts=json.loads((self.root/"facts.json").read_bytes())
+        self.assertEqual(facts["detailed_evidence"]["scenarios"][-1]["karing_handoffs"],obs["karing_handoffs"])
+        for name,change in [
+            ("late",lambda r,o:o["karing_handoffs"][0].update(responded_at=stamp(self.now+dt.timedelta(minutes=2)))),
+            ("pending",lambda r,o:o["karing_handoffs"][0].update(responded_at=None)),
+            ("unsigned",lambda r,o:r.update(karing_response_limit_seconds=3601)),
+            ("technical-overrun",lambda r,o:o["karing_handoffs"][0].update(responded_at=stamp(self.now-dt.timedelta(minutes=20)))),
+        ]:
+            r=json.loads(json.dumps(req));o=json.loads(json.dumps(obs));change(r,o)
+            self.write("request.json",r);self.write("observation.json",o)
+            result=subprocess.run(self.command(request,observation,name+".json"),capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0,result.stderr)
+            self.assertFalse((self.root/(name+".json")).exists())
+
     def test_pretty_observation_and_nonmonotonic_check_times_are_accepted(self):
         request, observation = self.scenario_files()
         value = json.loads(observation.read_bytes())

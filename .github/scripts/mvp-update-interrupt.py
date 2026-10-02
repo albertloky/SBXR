@@ -304,13 +304,20 @@ def main():
         return
     args = parser.parse_args()
     require(0 < args.timeout <= 1800, 'timeout-invalid')
+    driver = WINDOW / 'v3-menu-session.py' if args.protected_log_parent else Path(__file__).with_name('v3-menu-session.py')
+    if args.protected_log_parent:
+        private_read(driver, limit=65536)
+    spec = importlib.util.spec_from_file_location('menu', driver)
+    menu = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(menu)
     deadline = time.monotonic() + args.timeout
     request_path = os.environ.get('SBXR_QUALIFICATION_REQUEST')
     if request_path:
         request = json.loads(private_read(request_path, limit=65536), object_pairs_hook=exact_object)
         require(set(request) == {'scenario_id', 'not_before', 'deadline_unix',
                                  'scenario_limit_seconds', 'qualification_manifest_sha256',
-                                 'required_checks'}, 'request-fields')
+                                 'required_checks'} | ({'karing_response_limit_seconds', 'attended_finish_by'}
+                                 if 'karing_response_limit_seconds' in request else set()), 'request-fields')
         require(re.fullmatch(r'source-v[0-9]+\.[0-9]+\.[0-9]+-' + args.boundary,
                              request.get('scenario_id', '')), 'request-scenario')
         require(type(request.get('deadline_unix')) is int, 'request-deadline')
@@ -320,15 +327,9 @@ def main():
             tzinfo=datetime.timezone.utc).timestamp()
         require(start <= time.time() and request['scenario_limit_seconds'] == 1800 and
                 0 <= request['deadline_unix'] - start <= 1800, 'request-window')
-        deadline = min(deadline, time.monotonic() + request['deadline_unix'] - time.time())
+        deadline = min(deadline, time.monotonic() + menu.qualification_deadline(request_path) - time.time())
     require(time.monotonic() < deadline, 'request-expired')
     initial_proof(expected(args.expectation))
-    driver = WINDOW / 'v3-menu-session.py' if args.protected_log_parent else Path(__file__).with_name('v3-menu-session.py')
-    if args.protected_log_parent:
-        private_read(driver, limit=65536)
-    spec = importlib.util.spec_from_file_location('menu', driver)
-    menu = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(menu)
     libc = ctypes.CDLL(None, use_errno=True)
     require(libc.prctl(36, 1, 0, 0, 0) == 0, 'subreaper-unavailable')
     cancelled = []

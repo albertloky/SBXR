@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
@@ -57,6 +58,10 @@ func mvpRecurringQualificationFixture(t *testing.T, binary string) (string, []by
 }
 
 func mvpRecurringQualificationFixtureFor(t *testing.T, binary string, httpSubscription bool) (string, []byte, map[string]any) {
+	return mvpRecurringQualificationFixtureWithHandoff(t, binary, httpSubscription, false)
+}
+
+func mvpRecurringQualificationFixtureWithHandoff(t *testing.T, binary string, httpSubscription, handoff bool) (string, []byte, map[string]any) {
 	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
@@ -80,6 +85,12 @@ func mvpRecurringQualificationFixtureFor(t *testing.T, binary string, httpSubscr
 	if httpSubscription {
 		attempt["evidence_policy"] = "mvp-http-recurring-live-v1"
 		attempt["required_scenarios"] = strings.Fields("source-v3.1.81-precommit source-v3.1.81-upgrade source-v3.1.81-postcommit mvp-install mvp-subscription mvp-credentials mvp-serving mvp-removal")
+	}
+	if handoff {
+		now := time.Now().UTC().Truncate(time.Second)
+		attempt["started_at"] = now.Format(time.RFC3339)
+		attempt["karing_response_limit_seconds"] = 3600
+		attempt["attended_finish_by"] = now.Add(5 * time.Hour).Format(time.RFC3339)
 	}
 	attempt["after_snap_refresh"] = attempt["packages"]
 	var assets []softwarelifecycle.LatestAssetProof

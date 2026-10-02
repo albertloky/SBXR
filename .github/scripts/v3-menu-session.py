@@ -3,11 +3,13 @@
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import re
 import select
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -374,18 +376,48 @@ class MenuSession:
             time.sleep(0.01)
 
 
+def qualification_deadline(path):
+    """Keep legacy callers unchanged; opted-in operations use reviewed clock bytes."""
+    with open(path, "rb") as stream:
+        document = json.loads(stream.read())
+    deadline = document.get("deadline_unix")
+    if type(deadline) is not int:
+        raise ProtocolError("request-deadline")
+    if "karing_response_limit_seconds" not in document:
+        return deadline
+    clock = os.environ.get("SBXR_QUALIFICATION_CLOCK", "")
+    wanted = os.environ.get("SBXR_QUALIFICATION_CLOCK_SHA256", "")
+    draft = os.environ.get("SBXR_QUALIFICATION_DRAFT", "")
+    if not os.path.isabs(clock) or not os.path.isabs(draft) or not re.fullmatch(r"[0-9a-f]{64}", wanted):
+        raise ProtocolError("request-clock-identity")
+    try:
+        fd = os.open(clock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+                    stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise ProtocolError("request-clock-file")
+            body = stream.read(65537)
+        if len(body) > 65536 or hashlib.sha256(body).hexdigest() != wanted:
+            raise ProtocolError("request-clock-identity")
+        # Execute the verified bytes, avoiding a second path lookup after hash.
+        result = subprocess.run([sys.executable, "-B", "-", "operation-deadline", "--request", path,
+                                 "--draft", draft], input=body, capture_output=True, timeout=10)
+        if result.returncode or not re.fullmatch(rb"[0-9]+\n", result.stdout):
+            raise ProtocolError("request-clock-refused")
+        return int(result.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        raise ProtocolError("request-clock-unavailable") from None
+
+
 def drive(args, cancelled=None):
-    remaining = float(args.timeout)
+    deadline = time.monotonic() + float(args.timeout)
     request = os.environ.get("SBXR_QUALIFICATION_REQUEST")
     if request:
-        document = json.loads(open(request, "rb").read())
-        request_deadline = document.get("deadline_unix")
-        if type(request_deadline) is not int:
-            raise ProtocolError("request-deadline")
-        remaining = min(remaining, request_deadline - time.time())
-    if remaining <= 0:
+        request_deadline = qualification_deadline(request)
+        deadline = min(deadline, time.monotonic() + request_deadline - time.time())
+    if time.monotonic() >= deadline:
         raise ProtocolError("deadline-before-start")
-    deadline = time.monotonic() + remaining
     session = MenuSession(args.executable, sys.stdout.buffer, deadline, cancelled,
                           protected_wrapper=args.protected_wrapper)
     try:

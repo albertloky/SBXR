@@ -89,7 +89,7 @@ upgrade. No historical observation qualifies changed bytes.
 
 Apply the non-certificate prerequisites, operator/outside/Karing attendance,
 temporary qualification transport and protected-log-parent procedure, source
-staging/trust checks, 30-minute scenarios, two-hour subscription journey,
+staging/trust checks, 30-minute technical scenarios, two-hour subscription journey,
 five-minute submission/validation, no-prefix-publication rule, stop/burn handling
 and actual safety/final cleanup from
 [ordinary recurring acceptance](ordinary-recurring-live.md). Qualification
@@ -107,3 +107,69 @@ Bearer-token protection prevents unauthenticated retrieval at the server.
 Plain HTTP still lets a network observer steal the link and proxy UUID or alter
 the downloaded configuration. No claim of secret containment on the network is
 made. Preserve protections for local files, logs and retained evidence.
+
+## Attended Karing response windows
+
+For a future attempt, explicitly declare `karing_response_limit_seconds: 3600`
+and `attended_finish_by` (an actual RFC3339 UTC attendance cutoff) in the
+unsigned declaration and verify both in the signed manifest. This opt-in is
+limited to ordinary HTTP MVP qualification. An omitted field preserves the old
+request, observation and deadline contract exactly. It cannot extend or qualify
+an expired attempt, including r02 / v3.1.86.
+
+The unchanged 30-minute technical budget (two hours for `mvp-subscription`)
+counts preparation, automated checks and submission preparation. Only the
+actual interval waiting for an attended Karing response pauses that budget.
+Each eligible handoff gives the Owner a full hour after the link is ready and
+readiness has actually been communicated. A copied clipboard link alone does
+not start the response clock. The five-minute validation/submission limits,
+signed attendance cutoff and six-hour transport/job ceilings remain. Refuse a
+handoff if its full response hour cannot fit; arrange a future session before
+another approved attempt rather than extending the current session.
+
+Prepare the exact callback and final observation commands before asking for
+input. Coordinate the main assistant's visible readiness message and actual UTC
+notification timestamp with the operator. Record that timestamp promptly (within
+five minutes and while the technical request remains active); never substitute
+the link-preparation time or invent an earlier notification. The self-contained
+recorder can still be streamed through the existing SSH path. For menu/update/
+recovery operations after a completed wait, also stage its exact reviewed bytes
+as a root-owned `0600`, one-link file in the separately inventoried update-control
+directory (keep the protected-menu directory's four-file inventory unchanged).
+Pass `SBXR_QUALIFICATION_CLOCK` as that absolute path,
+`SBXR_QUALIFICATION_CLOCK_SHA256` as the reviewed checkout's digest, and
+`SBXR_QUALIFICATION_DRAFT` as the current absolute draft path. All maintained
+menu, interruption and recovery drivers verify those bytes and call
+`operation-deadline`. It refuses pending/expired/sealed handoffs before a product
+process starts. Inventory and remove the additional staged recorder during
+owned operator cleanup. Private callers must use this computed deadline, not
+read the original `deadline_unix` as the post-response deadline.
+
+Record the readiness event with:
+
+```sh
+python3 mvp-observe.py ready --request request.json --draft draft.json \
+  --phase http-profile-refresh --prepared-at "$actual_prepared_at" \
+  --notified-at "$actual_user_notification_at"
+```
+
+Allowed phases are `source-profile-import` and `http-profile-refresh` for the
+source upgrade/postcommit journeys; `profile-import` and `profile-refresh` for
+`mvp-subscription`; `credential-refresh` and `rotated-link-refresh` for
+`mvp-credentials`; and `test-profile-removal` for `mvp-removal`. They are each
+single-use within their scenario and cannot overlap. Keep secret links and
+credentials out of the timing records and visible readiness message.
+
+On an actual attended response, invoke `responded` immediately, then record the
+required observed checks and seal/submit the complete scenario. `responded`
+records the actual current time and does not mark any check passed. Defer extra
+callback reports and diagnostics until this handoff is recorded. A pending or
+late response cannot be sealed, replayed, or backdated. The collector reads only
+private, request-bound timing/check facts and uses the same recorder calculation;
+the Go validator independently verifies those waits and the original technical
+budget. Retire a consumed draft before the next collector request as usual.
+
+This is a future tooling/procedure change, not Karing acceptance or publication.
+Before another live attempt, validate the changed collector/SSH boundary with an
+isolated Linux fixture, refresh all existing prerequisites and obtain approval
+for the exact new signed declaration and candidate.

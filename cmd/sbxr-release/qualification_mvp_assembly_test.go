@@ -26,7 +26,15 @@ func TestHTTPRecurringRecorderAndAssemblerProduceEightValidatorAcceptedPrefixes(
 	testMVPAssembler(t, true, true)
 }
 
+func TestHTTPRecurringAttendedRecorderAndAssemblerProduceEightAcceptedPrefixes(t *testing.T) {
+	testMVPAssemblerWithHandoff(t, true, true, true)
+}
+
 func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
+	testMVPAssemblerWithHandoff(t, recurring, httpSubscription, false)
+}
+
+func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, handoff bool) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
@@ -34,7 +42,7 @@ func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
 	var boundary string
 	var manifest []byte
 	if recurring {
-		boundary, manifest, _ = mvpRecurringQualificationFixtureFor(t, binary, httpSubscription)
+		boundary, manifest, _ = mvpRecurringQualificationFixtureWithHandoff(t, binary, httpSubscription, handoff)
 	} else {
 		boundary, manifest, _ = mvpQualificationFixtureWithTransport(t, binary, false, httpSubscription)
 	}
@@ -68,6 +76,10 @@ func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
 			"qualification_manifest_sha256": sha256String(string(manifest)),
 			"required_checks":               expectedChecks, "scenario_id": id, "scenario_limit_seconds": limit,
 		}
+		if handoff {
+			request["karing_response_limit_seconds"] = 3600
+			request["attended_finish_by"] = manifestValue["v3_attempt"].(map[string]any)["attended_finish_by"]
+		}
 		checks := make([]any, 0, len(expectedChecks))
 		for _, check := range expectedChecks {
 			checks = append(checks, map[string]any{"check": check, "observed_at": stamp, "result": "observed"})
@@ -89,6 +101,11 @@ func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
 				}
 			}
 			record("start")
+			if handoff && len(karingHandoffPhases(id)) > 0 {
+				notified := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+				record("ready", "--phase", karingHandoffPhases(id)[0], "--prepared-at", notified, "--notified-at", notified)
+				record("responded")
+			}
 			for _, check := range expectedChecks {
 				record("observe", "--check", check)
 			}

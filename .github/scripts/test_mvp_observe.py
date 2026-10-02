@@ -95,6 +95,104 @@ class ObserveTest(unittest.TestCase):
         self.call("start", ok=False)
         self.assertFalse(self.draft.exists())
 
+    def enable_handoff(self, elapsed=0):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        self.value.update(scenario_id="source-v3.1.81-upgrade", not_before=(now-dt.timedelta(seconds=elapsed)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          deadline_unix=int(now.timestamp())+1800-elapsed,
+                          karing_response_limit_seconds=3600,
+                          attended_finish_by=(now+dt.timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        self.save_request()
+        return now
+
+    def ready(self, now, **kw):
+        stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return self.call("ready", "--phase", "http-profile-refresh", "--prepared-at", stamp(now-dt.timedelta(minutes=19)),
+                         "--notified-at", stamp(now), **kw)
+
+    def test_hour_starts_at_actual_notification_not_preparation(self):
+        now = self.enable_handoff(elapsed=1200)
+        self.call("start")
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        self.ready(now)
+        status = json.loads(self.call("status").stdout)
+        self.assertEqual(status["deadline"], (now+dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        self.assertGreaterEqual(status["seconds_remaining"],3597)
+        collector = int(self.call("deadline").stdout)
+        self.assertEqual(collector,int(now.timestamp())+3600)
+        self.call("ready", "--phase", "source-profile-import", "--prepared-at", now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "--notified-at", now.strftime("%Y-%m-%dT%H:%M:%SZ"), ok=False)
+        for check in self.value["required_checks"]: self.call("observe","--check",check)
+        self.call("finish","--output",str(self.output),ok=False)
+        self.call("responded")
+        self.call("responded",ok=False)
+        self.call("finish","--output",str(self.output))
+        handoff=json.loads(self.output.read_text())["karing_handoffs"][0]
+        self.assertIsNotNone(handoff["responded_at"])
+
+    def test_undeclared_expired_wrong_phase_and_insufficient_attendance_refuse(self):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        self.call("start")
+        self.ready(now,ok=False)
+        self.draft.unlink()
+        now=self.enable_handoff(elapsed=1801)
+        self.call("start",ok=False)
+        now=self.enable_handoff()
+        self.call("start")
+        self.call("ready","--phase","unrelated-profile","--prepared-at",now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "--notified-at",now.strftime("%Y-%m-%dT%H:%M:%SZ"),ok=False)
+        self.value["attended_finish_by"]=(now+dt.timedelta(minutes=59)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.save_request();self.draft.unlink();self.call("start")
+        self.ready(now,ok=False)
+
+    def test_actual_cli_preserves_technical_budget_while_response_is_pending(self):
+        now=self.enable_handoff(elapsed=80*60)
+        import hashlib
+        stamp=lambda t:t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        notified=now-dt.timedelta(minutes=59)
+        draft={"request_sha256":hashlib.sha256(self.request.read_bytes()).hexdigest(),"observation":{
+            "scenario_id":self.value["scenario_id"],"started_at":self.value["not_before"],"completed_at":None,
+            "checks":[{"check":c,"observed_at":None,"result":None} for c in self.value["required_checks"]],
+            "karing_handoffs":[{"phase":"http-profile-refresh","prepared_at":stamp(now-dt.timedelta(minutes=79)),
+                                 "notified_at":stamp(notified),"responded_at":None}]}}
+        self.draft.write_text(json.dumps(draft));self.draft.chmod(0o600)
+        self.call("responded")
+        status=json.loads(self.call("status").stdout)
+        self.assertGreaterEqual(status["seconds_remaining"],539)
+        self.assertLessEqual(status["seconds_remaining"],543)
+        for check in self.value["required_checks"]:self.call("observe","--check",check)
+        self.call("finish","--output",str(self.output))
+
+    def test_collector_refuses_malformed_draft_before_waiting(self):
+        now=self.enable_handoff();self.call("start")
+        original=self.draft.read_bytes()
+        for change in [lambda d:d.update(unknown=True),
+                       lambda d:d["observation"].update(scenario_id="mvp-subscription"),
+                       lambda d:d["observation"].update(started_at="1970-01-01T00:00:00Z"),
+                       lambda d:d["observation"]["checks"][0].update(result="observed",observed_at="2999-01-01T00:00:00Z")]:
+            draft=json.loads(original);change(draft);self.draft.write_text(json.dumps(draft))
+            self.call("deadline",ok=False)
+        self.draft.write_bytes(original)
+        self.ready(dt.datetime.now(dt.timezone.utc).replace(microsecond=0))
+        self.call("deadline")
+
+    def test_collector_and_recorder_refuse_late_response_and_request_replay(self):
+        now=self.enable_handoff();self.call("start");now=dt.datetime.now(dt.timezone.utc).replace(microsecond=0);self.ready(now)
+        draft=json.loads(self.draft.read_text())
+        earlier=now-dt.timedelta(seconds=3601)
+        self.value["not_before"]=(earlier-dt.timedelta(seconds=100)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.value["deadline_unix"]=int(earlier.timestamp())+1700
+        self.save_request()
+        import hashlib
+        draft["request_sha256"]=hashlib.sha256(self.request.read_bytes()).hexdigest()
+        draft["observation"]["started_at"]=self.value["not_before"]
+        for key in ["prepared_at","notified_at"]:draft["observation"]["karing_handoffs"][0][key]=earlier.strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.draft.write_text(json.dumps(draft))
+        self.call("responded",ok=False)
+        self.assertEqual(int(self.call("deadline").stdout),int(earlier.timestamp())+3600)
+        self.value["qualification_manifest_sha256"]="b"*64;self.save_request()
+        self.call("deadline",ok=False)
+
+
     def test_start_and_finish_never_overwrite_existing_files(self):
         self.call("start")
         original = self.draft.read_bytes()

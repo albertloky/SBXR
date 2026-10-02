@@ -75,7 +75,7 @@ func TestMVPUpdateControlLinuxIntegration(t *testing.T) {
 	command.Cancel = func() error { return command.Process.Signal(os.Interrupt) }
 	command.WaitDelay = 20 * time.Second
 	output, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "UPDATE_INTERRUPT_FIXTURE_PASSED count=21") {
+	if err != nil || !strings.Contains(string(output), "UPDATE_INTERRUPT_FIXTURE_PASSED count=23") {
 		t.Fatalf("real syscall/wrapper fixture: %v\n%s", err, output)
 	}
 }

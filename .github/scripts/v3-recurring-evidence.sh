@@ -98,7 +98,7 @@ stop_attempt() {
       cp "$directory/failure.json" "$directory/failure-decision.json" handoff/failure-evidence/
     fi
   fi
-  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json" "$directory/retained-failure.json" "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json"
+  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json" "$directory/retained-failure.json" "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json" "$directory/mvp-timing-draft.json" "$directory/request.next"
   rmdir "$directory"
   exit "$status"
 }
@@ -119,6 +119,10 @@ while IFS= read -r next_scenario <&3; do
   deadline=$((started + limit))
   required_checks=$(mvp_required_checks "$scenario")
   jq -cnS --arg scenario "$scenario" --arg digest "$digest" --arg checks "$required_checks" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,required_checks:($checks | split(" ")),scenario_id:$scenario,scenario_limit_seconds:$limit}' | tr -d '\n' > "$directory/request.json"
+  if jq -e '.v3_attempt.karing_response_limit_seconds == 3600' "$manifest" >/dev/null; then
+    jq -cS --slurpfile m "$manifest" '. + {karing_response_limit_seconds:3600,attended_finish_by:$m[0].v3_attempt.attended_finish_by}' "$directory/request.json" | tr -d '\n' > "$directory/request.next"
+    mv "$directory/request.next" "$directory/request.json"
+  fi
   "${remote[@]}" 'set -eu; umask 077; test ! -e /root/sbxr-qualification-evidence/result.json; test ! -L /root/sbxr-qualification-evidence/result.json; test ! -L /root/sbxr-qualification-evidence/request.json; cat > /root/sbxr-qualification-evidence/request.json' < "$directory/request.json"
   while ! "${remote[@]}" 'test -f /root/sbxr-qualification-evidence/result.json && test ! -L /root/sbxr-qualification-evidence/result.json'; do
     if "${remote[@]}" 'test -L /root/sbxr-qualification-evidence/result.json'; then reason=evidence-refused; exit 1; fi
@@ -133,7 +137,15 @@ while IFS= read -r next_scenario <&3; do
       submit_result "$1" "$2" "$3" "$manifest" "$directory/mvp-facts.json"
       cleanup_mvp_observation
     fi
-    if test "$(( $(date +%s) - started ))" -gt "$((limit + 300))"; then reason=timeout; exit 1; fi
+    active_deadline=$deadline
+    if jq -e '.karing_response_limit_seconds == 3600' "$directory/request.json" >/dev/null; then
+      # Read only private timing/check facts, never subscription URLs. The
+      # recorder checks request identity and each prepared/notified handoff.
+      "${remote[@]}" 'set -eu; draft=/root/mvp-observation-draft.json; if test -e "$draft" || test -L "$draft"; then test ! -L "$draft"; test "$(stat -c "%a:%u:%h:%F" "$draft")" = "600:0:1:regular file"; test "$(stat -c %s "$draft")" -le 1000000; cat "$draft"; fi' > "$directory/mvp-timing-draft.json"
+      if test ! -s "$directory/mvp-timing-draft.json"; then rm "$directory/mvp-timing-draft.json"; fi
+      active_deadline=$(python3 .github/scripts/mvp-observe.py deadline --request "$directory/request.json" --draft "$directory/mvp-timing-draft.json")
+    fi
+    if test "$(date +%s)" -gt "$((active_deadline + 300))"; then reason=timeout; exit 1; fi
     sleep 2
   done
 

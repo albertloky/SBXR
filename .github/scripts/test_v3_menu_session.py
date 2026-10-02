@@ -1,5 +1,7 @@
 """Focused subprocess tests for the shared same-process menu driver."""
 import ctypes
+import datetime as dt
+import hashlib
 import importlib.util
 import io
 import json
@@ -267,6 +269,37 @@ class MenuSessionDriverTest(unittest.TestCase):
         self.assertNotEqual(result.returncode,0)
         self.assertEqual(result.stderr,"SBXR_MENU_SESSION_REFUSED phase=result-mismatch code=SOFTWARE-LIFECYCLE-CHECK-FAILED\n")
         self.assertEqual(events,[{"selected":"7"}])
+
+    def test_reviewed_response_clock_admits_only_active_completed_handoff(self):
+        for variant in ("completed", "pending", "late", "wrong-clock", "linked-clock", "missing-draft"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);executable=root/"sbxr";request=root/"request.json";draft=root/"draft.json";clock=root/"clock.py"
+                executable.write_text(FIXTURE);executable.chmod(0o700)
+                source=DRIVER.with_name("mvp-observe.py").read_bytes();clock.write_bytes(source);clock.chmod(0o600)
+                now=dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+                stamp=lambda t:t.strftime("%Y-%m-%dT%H:%M:%SZ")
+                document={"scenario_id":"source-v3.1.81-upgrade","not_before":stamp(now-dt.timedelta(minutes=80)),
+                          "deadline_unix":int(now.timestamp())-50*60,"scenario_limit_seconds":1800,
+                          "qualification_manifest_sha256":"a"*64,"required_checks":["menu-status"],
+                          "karing_response_limit_seconds":3600,"attended_finish_by":stamp(now+dt.timedelta(hours=3))}
+                request.write_text(json.dumps(document));request.chmod(0o600)
+                record={"phase":"http-profile-refresh","prepared_at":stamp(now-dt.timedelta(minutes=60)),
+                        "notified_at":stamp(now-dt.timedelta(minutes=59)),"responded_at":stamp(now-dt.timedelta(minutes=1))}
+                if variant=="pending":record["responded_at"]=None
+                if variant=="late":record["notified_at"]=stamp(now-dt.timedelta(minutes=62));record["prepared_at"]=stamp(now-dt.timedelta(minutes=63))
+                draft.write_text(json.dumps({"request_sha256":hashlib.sha256(request.read_bytes()).hexdigest(),"observation":{
+                    "scenario_id":document["scenario_id"],"started_at":document["not_before"],"completed_at":None,
+                    "checks":[{"check":"menu-status","observed_at":None,"result":None}],"karing_handoffs":[record]}}));draft.chmod(0o600)
+                if variant=="missing-draft":draft.unlink()
+                if variant=="linked-clock":
+                    other=root/"original.py";clock.rename(other);clock.symlink_to(other)
+                spec={"label":"Check","kind":"action","expected":"SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"}
+                env=dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec),SBXR_QUALIFICATION_REQUEST=str(request),
+                         SBXR_QUALIFICATION_DRAFT=str(draft),SBXR_QUALIFICATION_CLOCK=str(clock),
+                         SBXR_QUALIFICATION_CLOCK_SHA256="0"*64 if variant=="wrong-clock" else hashlib.sha256(source).hexdigest())
+                result=subprocess.run([sys.executable,str(DRIVER),"action","Check",spec["expected"],"--executable",str(executable),"--timeout","3"],env=env,text=True,capture_output=True,timeout=5)
+                self.assertEqual(result.returncode==0,variant=="completed",result.stderr)
+                self.assertEqual((root/"events.jsonl").exists(),variant=="completed")
 
     def test_expired_request_deadline_refuses_before_product_start(self):
         with tempfile.TemporaryDirectory() as temporary:

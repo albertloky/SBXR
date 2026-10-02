@@ -14,7 +14,7 @@ explicit human observations and does not run the historical V4 protocol.
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
 | Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
-| Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; no product driving or automatic pass |
+| Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
 | Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
 | Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [startup cancellation regression](test_mvp_startup_cleanup.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md); use the driver's `--protected-wrapper` opt-in |

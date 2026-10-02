@@ -182,17 +182,16 @@ def cleanup():
 try:
     if sys.platform != 'linux' or not seconds.isdecimal() or not 0 < int(seconds) <= 1800:
         raise ValueError('invalid interruption timeout or runtime')
-    remaining = float(seconds)
+    deadline = time.monotonic() + float(seconds)
+    spec = importlib.util.spec_from_file_location('sbxr_menu_session', driver_path)
+    driver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(driver)
     if request:
-        document = json.loads(Path(request).read_bytes())
-        deadline = document['deadline_unix']
-        if type(deadline) is not int:
-            raise ValueError('invalid collector deadline')
-        remaining = min(remaining, deadline - time.time())
-    if remaining <= 0:
+        request_deadline = driver.qualification_deadline(request)
+        deadline = min(deadline, time.monotonic() + request_deadline - time.time())
+    if time.monotonic() >= deadline:
         reason = 'deadline-expired-before-start'
         raise TimeoutError(reason)
-    deadline = time.monotonic() + remaining
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
         raise OSError(ctypes.get_errno(), 'subreaper unavailable')
@@ -202,9 +201,6 @@ try:
         raise InterruptedError('controller interrupted')
     descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, 'wb') as capture:
-        spec = importlib.util.spec_from_file_location('sbxr_menu_session', driver_path)
-        driver = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(driver)
         session = driver.MenuSession(executable, capture, deadline,
                                      lambda: received_signal is not None)
         process = session.process
