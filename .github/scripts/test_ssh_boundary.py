@@ -18,7 +18,7 @@ import tempfile
 import time
 
 
-CASE_TOTAL = 28
+CASE_TOTAL = 31
 CONFIG = '{"inbounds":[{"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":2080}],"outbounds":[{"type":"vless","uuid":"11111111-1111-4111-8111-111111111111"}]}'
 
 
@@ -155,6 +155,28 @@ def recorder_handoff(base, source):
         raise Refused('recorder-republished')
     draft.unlink()
     request.unlink()
+
+
+def collector_timing_read(base, source, work):
+    """Exercise the collector's actual stdin-carried reader over real SSH."""
+    text = (source / 'v3-recurring-evidence.sh').read_text()
+    helper = 'read_mvp_timing_draft() {' + text.split('read_mvp_timing_draft() {', 1)[1].split('# Timing transport helpers end.', 1)[0]
+    script = ('set -euo pipefail\numask 077\nremote=(' + shlex.join(base) + ')\n' +
+              'directory=' + shlex.quote(str(work)) + '\n' + helper + '\nread_mvp_timing_draft\n')
+    draft = Path('/root/mvp-observation-draft.json')
+    fetched = work / 'mvp-timing-draft.json'
+    write(draft, b'private timing bytes')
+    run(['bash', '-c', script])
+    if fetched.read_bytes() != draft.read_bytes(): raise Refused('timing-draft-ssh-bytes')
+    draft.unlink()
+    run(['bash', '-c', script])
+    if fetched.exists(): raise Refused('timing-draft-ssh-retirement')
+    foreign = work / 'foreign-timing'; write(foreign, b'foreign sentinel')
+    draft.symlink_to(foreign)
+    run(['bash', '-c', script], ok=False)
+    if foreign.read_bytes() != b'foreign sentinel' or not draft.is_symlink():
+        raise Refused('timing-draft-ssh-unsafe-path')
+    draft.unlink(); foreign.unlink(); fetched.unlink()
 
 
 def candidate_handoff(base, source):
@@ -329,6 +351,7 @@ LogLevel ERROR
         source = root / "source"
         candidate_handoff(base, source)
         recorder_handoff(base, source)
+        collector_timing_read(base, source, work)
         module_bytes = (source / "v3-packaged-live.sh").read_bytes()
         staged = work / "v3-packaged-live.sh"
         driver = work / "v3-menu-session.py"

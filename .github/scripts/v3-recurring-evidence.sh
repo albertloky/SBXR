@@ -81,6 +81,30 @@ cleanup_mvp_observation() {
   fi
 }
 
+# Read one opened inode: the operator may atomically replace or retire its draft
+# during this read. An already-unlinked inode is safe; extra hard links are not.
+read_mvp_timing_draft() {
+  "${remote[@]}" 'python3 - /root/mvp-observation-draft.json' > "$directory/mvp-timing-draft.json" <<'PYTHON'
+import os, stat, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except FileNotFoundError:
+    raise SystemExit(0)
+with os.fdopen(fd, "rb") as stream:
+    info = os.fstat(stream.fileno())
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+            stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink not in (0, 1)):
+        raise SystemExit("Unsafe timing draft")
+    body = stream.read(1000001)
+    if not body or len(body) > 1000000:
+        raise SystemExit("Invalid timing draft size")
+    sys.stdout.buffer.write(body)
+PYTHON
+  if test ! -s "$directory/mvp-timing-draft.json"; then rm "$directory/mvp-timing-draft.json"; fi
+}
+
+# Timing transport helpers end.
+
 stop_attempt() {
   status=$?
   trap - EXIT
@@ -98,7 +122,7 @@ stop_attempt() {
       cp "$directory/failure.json" "$directory/failure-decision.json" handoff/failure-evidence/
     fi
   fi
-  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json" "$directory/retained-failure.json" "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json" "$directory/mvp-timing-draft.json" "$directory/request.next"
+  rm -f "$directory/input.json" "$directory/decision.json" "$directory/failure.json" "$directory/failure-decision.json" "$directory/previous.json" "$directory/request.json" "$directory/final.json" "$directory/retained-failure.json" "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json" "$directory/mvp-timing-draft.json" "$directory/request.next" "$directory/accepted-timing-draft.json"
   rmdir "$directory"
   exit "$status"
 }
@@ -141,8 +165,12 @@ while IFS= read -r next_scenario <&3; do
     if jq -e '.karing_response_limit_seconds == 3600' "$directory/request.json" >/dev/null; then
       # Read only private timing/check facts, never subscription URLs. The
       # recorder checks request identity and each prepared/notified handoff.
-      "${remote[@]}" 'set -eu; draft=/root/mvp-observation-draft.json; if test -e "$draft" || test -L "$draft"; then test ! -L "$draft"; test "$(stat -c "%a:%u:%h:%F" "$draft")" = "600:0:1:regular file"; test "$(stat -c %s "$draft")" -le 1000000; cat "$draft"; fi' > "$directory/mvp-timing-draft.json"
-      if test ! -s "$directory/mvp-timing-draft.json"; then rm "$directory/mvp-timing-draft.json"; fi
+      read_mvp_timing_draft
+      # The previous callback retires its sealed draft after seeing this request.
+      # Ignore only its exact bytes, retained after the preceding Go acceptance.
+      if test -f "$directory/accepted-timing-draft.json" && cmp -s "$directory/accepted-timing-draft.json" "$directory/mvp-timing-draft.json"; then
+        rm "$directory/mvp-timing-draft.json"
+      fi
       active_deadline=$(python3 .github/scripts/mvp-observe.py deadline --request "$directory/request.json" --draft "$directory/mvp-timing-draft.json")
     fi
     if test "$(date +%s)" -gt "$((active_deadline + 300))"; then reason=timeout; exit 1; fi
@@ -172,6 +200,22 @@ while IFS= read -r next_scenario <&3; do
   cp "$directory/input.json" "handoff/v3-scenarios/$index-facts.json"
   cp "$directory/decision.json" "handoff/v3-scenarios/$index-decision.json"
   jq -cS '.detailed_evidence.scenarios' "$directory/input.json" > "$directory/previous.json"
+  # Retain only a sealed draft matching this fully accepted scenario. Neither
+  # unsealed drafts nor changed/replayed bytes can cross the next request.
+  rm -f "$directory/accepted-timing-draft.json"
+  if jq -e '.karing_response_limit_seconds == 3600' "$directory/request.json" >/dev/null; then
+    read_mvp_timing_draft
+    if test -f "$directory/mvp-timing-draft.json"; then
+      python3 .github/scripts/mvp-observe.py deadline --request "$directory/request.json" --draft "$directory/mvp-timing-draft.json" >/dev/null
+      jq -e --arg digest "$(sha256sum "$directory/request.json" | cut -d' ' -f1)" --slurpfile facts "$directory/input.json" '
+        ($facts[0].detailed_evidence.scenarios[-1] | {scenario_id,started_at,completed_at,checks:[.evidence[].record]} +
+          (if has("karing_handoffs") then {karing_handoffs} else {} end)) as $accepted |
+        .request_sha256 == $digest and .observation.completed_at != null and .observation == $accepted
+      ' "$directory/mvp-timing-draft.json" >/dev/null
+      cp "$directory/mvp-timing-draft.json" "$directory/accepted-timing-draft.json"
+    fi
+  fi
+  # Accepted timing retention ends.
   "${remote[@]}" 'rm /root/sbxr-qualification-evidence/result.json'
   rm -f "$directory/mvp-observation.json" "$directory/mvp-facts.json" "$directory/mvp-decision.json"
   reason=unexpected-failure

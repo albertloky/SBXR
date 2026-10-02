@@ -167,7 +167,10 @@ callback reports and diagnostics until this handoff is recorded. A pending or
 late response cannot be sealed, replayed, or backdated. The collector reads only
 private, request-bound timing/check facts and uses the same recorder calculation;
 the Go validator independently verifies those waits and the original technical
-budget. Retire a consumed draft before the next collector request as usual.
+budget. Retire a consumed draft after confirming collector advancement. Until
+then, the collector ignores only the exact sealed draft that matched its immediately
+preceding accepted scenario; altered, unsealed and older replayed drafts still
+refuse. The retained draft never extends the next request's technical deadline.
 
 This is a future tooling/procedure change, not Karing acceptance or publication.
 Before another live attempt, validate the changed collector/SSH boundary with an

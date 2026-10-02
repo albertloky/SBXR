@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,6 +62,8 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 	manifestValue := jsonObject(t, manifest)
 	ids := manifestValue["v3_attempt"].(map[string]any)["required_scenarios"].([]any)
 	var lastFacts map[string]any
+	var firstSealedDraft []byte
+	sharedDraft := filepath.Join(directory, "operator-draft.json")
 
 	for index, rawID := range ids {
 		id := rawID.(string)
@@ -86,6 +89,46 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 		}
 		observation := map[string]any{"checks": checks, "completed_at": stamp, "scenario_id": id, "started_at": stamp}
 		requestPath := write(fmt.Sprintf("request-%d.json", index), []byte(qualificationDocument(t, request)))
+		if handoff {
+			write("request.json", []byte(qualificationDocument(t, request)))
+			collectorTiming(t, directory, sharedDraft, "clock", true)
+			if index > 0 {
+				sealed, err := os.ReadFile(sharedDraft)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Ignoring the exact accepted predecessor must not weaken recorder binding.
+				command := exec.Command("python3", "../../.github/scripts/mvp-observe.py", "status", "--request", requestPath, "--draft", sharedDraft)
+				if output, err := command.CombinedOutput(); err == nil || !strings.Contains(string(output), "draft belongs to another collector request") {
+					t.Fatalf("recorder accepted predecessor: %v %s", err, output)
+				}
+				if err := os.WriteFile(sharedDraft, append(append([]byte(nil), sealed...), '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+				collectorTiming(t, directory, sharedDraft, "clock", false)
+				if index > 1 {
+					if err := os.WriteFile(sharedDraft, firstSealedDraft, 0600); err != nil {
+						t.Fatal(err)
+					}
+					collectorTiming(t, directory, sharedDraft, "clock", false)
+				}
+				if err := os.WriteFile(sharedDraft, sealed, 0600); err != nil {
+					t.Fatal(err)
+				}
+				collectorTiming(t, directory, sharedDraft, "clock", true)
+				// A predecessor cannot rescue an expired next request.
+				expired := jsonObject(t, []byte(qualificationDocument(t, request)))
+				expired["not_before"] = now.Add(-35 * time.Minute).Format(time.RFC3339)
+				expired["deadline_unix"] = now.Add(-6 * time.Minute).Unix()
+				write("request.json", []byte(qualificationDocument(t, expired)))
+				collectorTiming(t, directory, sharedDraft, "clock", false)
+				write("request.json", []byte(qualificationDocument(t, request)))
+				if err := os.Remove(sharedDraft); err != nil {
+					t.Fatal(err)
+				}
+				collectorTiming(t, directory, sharedDraft, "clock", true)
+			}
+		}
 		pretty, err := json.MarshalIndent(observation, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -93,6 +136,9 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 		observationPath := filepath.Join(directory, fmt.Sprintf("observation-%d.json", index))
 		if recurring {
 			draft := filepath.Join(directory, fmt.Sprintf("draft-%d.json", index))
+			if handoff {
+				draft = sharedDraft
+			}
 			record := func(action string, extra ...string) {
 				t.Helper()
 				args := append([]string{"../../.github/scripts/mvp-observe.py", action, "--request", requestPath, "--draft", draft}, extra...)
@@ -129,6 +175,29 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 			t.Fatalf("validator refused %s prefix: %v\n%s", id, err, validated)
 		}
 		lastFacts = jsonObject(t, factsBytes)
+		if handoff {
+			write("input.json", factsBytes)
+			sealed, err := os.ReadFile(sharedDraft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			unsealed := jsonObject(t, sealed)
+			unsealed["observation"].(map[string]any)["completed_at"] = nil
+			if err := os.WriteFile(sharedDraft, []byte(qualificationDocument(t, unsealed)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			collectorTiming(t, directory, sharedDraft, "retain", false)
+			if err := os.WriteFile(sharedDraft, sealed, 0600); err != nil {
+				t.Fatal(err)
+			}
+			collectorTiming(t, directory, sharedDraft, "retain", true)
+			if index == 0 {
+				firstSealedDraft, err = os.ReadFile(sharedDraft)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
 		prefix := qualificationDocument(t, lastFacts["detailed_evidence"].(map[string]any)["scenarios"])
 		if err := os.WriteFile(previousPath, []byte(prefix), 0600); err != nil {
 			t.Fatal(err)
@@ -142,3 +211,46 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 		t.Fatalf("validator refused assembled final result: %v\n%s", err, accepted)
 	}
 }
+
+// Execute the collector's real shell blocks across all eight accepted prefixes.
+// The subprocess peer changes only fixed host paths; clock/retention code and
+// recorder/assembler/Go validation are unchanged. No live evidence is produced.
+func collectorTiming(t *testing.T, directory, draft, action string, accept bool) {
+	t.Helper()
+	raw, err := os.ReadFile("../../.github/scripts/v3-recurring-evidence.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	between := func(start, end string) string {
+		_, rest, ok := strings.Cut(source, start)
+		body, _, done := strings.Cut(rest, end)
+		if !ok || !done {
+			t.Fatalf("collector block absent: %s", start)
+		}
+		return start + body
+	}
+	helpers := between("read_mvp_timing_draft() {", "# Timing transport helpers end.")
+	block := between("    active_deadline=$deadline\n", "    sleep 2\n")
+	if action == "retain" {
+		block = between("  # Retain only a sealed draft", "  # Accepted timing retention ends.")
+	}
+	request, err := os.ReadFile(filepath.Join(directory, "request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := jsonObject(t, request)["deadline_unix"].(float64)
+	script := "set -euo pipefail\numask 077\nremote=(bash -c)\ndirectory=" + shellQuote(directory) + "\ndeadline=" + fmt.Sprintf("%.0f", deadline) + "\n" + helpers + block
+	script = strings.ReplaceAll(script, "/root/mvp-observation-draft.json", draft)
+	if action == "clock" {
+		script += "\ntest \"$active_deadline\" -eq \"$deadline\"\n"
+	}
+	command := exec.Command("bash", "-c", script)
+	command.Dir = "../.."
+	output, err := command.CombinedOutput()
+	if (err == nil) != accept {
+		t.Fatalf("collector %s accepted=%v want %v: %v\n%s", action, err == nil, accept, err, output)
+	}
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }

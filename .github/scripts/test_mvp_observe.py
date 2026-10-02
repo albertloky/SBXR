@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -94,6 +95,44 @@ class ObserveTest(unittest.TestCase):
         self.request.write_text(self.request.read_text().replace('"scenario_id":', '"scenario_id":"duplicate", "scenario_id":'))
         self.call("start", ok=False)
         self.assertFalse(self.draft.exists())
+
+    def test_collector_draft_read_handles_retirement_and_refuses_unsafe_files(self):
+        source = SCRIPT.with_name("v3-recurring-evidence.sh").read_text()
+        helper = "read_mvp_timing_draft() {" + source.split("read_mvp_timing_draft() {", 1)[1].split("# Timing transport helpers end.", 1)[0]
+        helper = helper.replace("/root/mvp-observation-draft.json", str(self.draft))
+        script = ("set -euo pipefail\numask 077\nremote=(bash -c)\ndirectory=" +
+                  shlex.quote(str(self.root)) + "\n" + helper + "\nread_mvp_timing_draft\n")
+        fetched = self.root / "mvp-timing-draft.json"
+        def read(ok=True, env=None):
+            result = subprocess.run(["bash", "-c", script], capture_output=True, timeout=5, env=env)
+            self.assertEqual(result.returncode == 0, ok, result.stderr)
+        read()
+        self.assertFalse(fetched.exists())
+        self.draft.write_bytes(b"original opened inode"); self.draft.chmod(0o600)
+        read(); self.assertEqual(fetched.read_bytes(), self.draft.read_bytes())
+        self.draft.chmod(0o644); read(False); self.draft.chmod(0o600)
+        alias = self.root / "alias"
+        os.link(self.draft, alias); read(False); alias.unlink()
+        self.draft.rename(alias); self.draft.symlink_to(alias); read(False)
+        self.draft.unlink(); alias.rename(self.draft)
+        for body in (b"", b"x" * 1000001):
+            self.draft.write_bytes(body); read(False)
+        self.draft.unlink(); os.mkfifo(self.draft, 0o600); read(False); self.draft.unlink()
+        self.draft.write_bytes(b"retired opened inode"); self.draft.chmod(0o600)
+        hook = self.root / "hook"; hook.mkdir()
+        (hook / "sitecustomize.py").write_text("""import os
+original = os.open
+def opening(path, *args, **kwargs):
+    fd = original(path, *args, **kwargs)
+    if path == os.environ['FIXTURE_DRAFT']:
+        os.unlink(path)
+    return fd
+os.open = opening
+""")
+        read(env=dict(os.environ, PYTHONPATH=str(hook), FIXTURE_DRAFT=str(self.draft)))
+        self.assertFalse(self.draft.exists())
+        self.assertEqual(fetched.read_bytes(), b"retired opened inode")
+        read(); self.assertFalse(fetched.exists())
 
     def enable_handoff(self, elapsed=0):
         now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
