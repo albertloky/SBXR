@@ -23,6 +23,7 @@ func TestGeneratedInstallerAcceptsPackagedSupportIndexes(t *testing.T) {
 		{"schema1", "", 0},
 		{"first", softwarelifecycle.FirstSubscriptionCleanInstall, 0},
 		{"repair", softwarelifecycle.SubscriptionCleanInstallRepair, 0},
+		{"clean install only", softwarelifecycle.SubscriptionCleanInstallOnly, 0},
 		{"recurring", softwarelifecycle.RecurringSubscriptionUpgrade, 1},
 		{"recurring maximum sources", softwarelifecycle.RecurringSubscriptionUpgrade, 32},
 	} {
@@ -87,6 +88,7 @@ func TestGeneratedInstallerRefusesMalformedSupportIndexes(t *testing.T) {
 		{"too many sources", string(source), installerSourceList(t, 33)},
 		{"first scope with source", `recurring-subscription-upgrade`, `first-subscription-clean-install`},
 		{"repair scope with source", `recurring-subscription-upgrade`, `subscription-clean-install-repair`},
+		{"clean install only scope with source", `recurring-subscription-upgrade`, `subscription-clean-install-only`},
 		{"source repository", `"Repository":"albertloky/SBXR"`, `"Repository":"other/SBXR"`},
 		{"source missing repository", `"Repository":"albertloky/SBXR",`, ``},
 		{"source tag", `"Tag":"v1.0.0"`, `"Tag":"latest"`},

@@ -4,15 +4,18 @@ Read decisions by **scope**, not merely by an `accepted` header. Later explicit
 refinements apply only within their stated scope; this index does not adopt,
 revoke or rewrite a decision. [CONTEXT.md](../../CONTEXT.md) is the shared glossary.
 
-For current product work, begin with ADR-0016 and its selected resolutions, then
+For current product and release scope, begin with [ADR-0028](0028-clean-install-only.md).
+For retained product contracts, begin with ADR-0016 and its selected resolutions, then
 [ADR-0026](0026-http-subscription.md) for fresh HTTP subscriptions and preserved
 legacy HTTPS installations.
-For current recurring live qualification, begin with ADR-0025; ADR-0023 defines
+For historical recurring live qualification, use ADR-0025; ADR-0023 defines
 the retained five ordinary journeys. ADR-0024 is only the bounded
 v3.1.81 / 159 exception; ADR-0017 applies only to v3.1.0 / 83. Neither is a
 general publication waiver. See the [acceptance guide](../acceptance/README.md).
 
 ## Current V3 and scoped release decisions
+
+- [0028 — Clean installation only](0028-clean-install-only.md)
 
 - [0026 — Use HTTP for newly enabled subscriptions](0026-http-subscription.md)
 - [0027 — Attended Karing response timing](0027-attended-karing-response-window.md)

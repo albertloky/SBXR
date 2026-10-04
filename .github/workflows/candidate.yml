@@ -119,7 +119,7 @@ jobs:
             preflight_operation='require accepted public-latest outcome'
             jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
             preflight_operation='check V3 declaration scope'
-            jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and (.support.scope == "first-subscription-clean-install" or .support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade")' <<<"$V3_ATTEMPT" >/dev/null
+            jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and (.support.scope == "first-subscription-clean-install" or .support.scope == "subscription-clean-install-repair" or .support.scope == "subscription-clean-install-only" or .support.scope == "recurring-subscription-upgrade")' <<<"$V3_ATTEMPT" >/dev/null
           fi
           preflight_operation='fetch source tags'
           git fetch --force --tags origin
@@ -279,7 +279,7 @@ jobs:
           V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
-          if test "$MODE" = v3 && jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null; then
+          if test "$MODE" = v3 && jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "subscription-clean-install-only" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null; then
             go test -p 1 -timeout 30m ./... -count=1
             go test -race -p 1 -timeout 30m ./... -count=1
             go vet ./...

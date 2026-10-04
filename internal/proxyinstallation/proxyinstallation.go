@@ -620,7 +620,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 	if record.TransportMigrating {
 		review.Status = ChangeInProgress
 		review.LegalActions = []Action{ViewDetailsAction}
-		review.Result = Result{Status: ChangeInProgress, Message: "Finish the recorded subscription HTTP migration by running sudo sbxr again before other changes.", Code: StatusProblemDetected}
+		review.Result = Result{Status: ChangeInProgress, Message: "This clean-install-only release cannot finish the recorded subscription HTTP migration. Use the exact release and recovery procedure that created it; do not edit protected state or install over it.", Code: StatusProblemDetected}
 		review.Details = []string{"Subscription HTTP migration: pending; token, proxy identity and retained certificate authority are preserved."}
 		return review
 	}

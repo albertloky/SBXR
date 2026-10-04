@@ -345,8 +345,8 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
       resources=${resources%]}',"/etc/systemd/system/sbxr-subscription-firewall.service root:root 0644 one-link sha256:'"$firewall_sha"'","iptables filter INPUT '"$ip"'/32 tcp/8443 comment=sbxr-subscription exact-owned"]'
       provenance_count=$((provenance_count + 2))
     else
-      snapd=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"snapd_created":\(true\|false\).*/\1/p'); [ "$snapd" = true ] && snapd=created || snapd=reused
-      certbot=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"certbot_created":\(true\|false\).*/\1/p'); [ "$certbot" = true ] && certbot=created || certbot=reused
+      snapd=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -nE 's/.*"snapd_created":(true|false).*/\1/p'); [ "$snapd" = true ] && snapd=created || snapd=reused
+      certbot=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -nE 's/.*"certbot_created":(true|false).*/\1/p'); [ "$certbot" = true ] && certbot=created || certbot=reused
       resources=${resources%]}',"/etc/systemd/system/sbxr-subscription-firewall.service root:root 0644 one-link sha256:'"$firewall_sha"'","iptables filter INPUT '"$ip"'/32 tcp/80 comment=sbxr-subscription exact-owned","iptables filter INPUT '"$ip"'/32 tcp/8443 comment=sbxr-subscription exact-owned","snapd dependency '"$snapd"'","official Certbot snap dependency '"$certbot"'"]'
       provenance_count=$((provenance_count + 5))
     fi
@@ -373,8 +373,8 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
       case "$name" in cert) hash=$retired_cert_hash ;; chain) hash=$retired_chain_hash ;; fullchain) hash=$retired_fullchain_hash ;; privkey) hash=$retired_privkey_hash; mode=0600 ;; esac
       resources=$resources',"/etc/letsencrypt/archive/sbxr-subscription/'"$name$retired_generation"'.pem root:root '"$mode"' one-link '"$hash"'","/etc/letsencrypt/live/sbxr-subscription/'"$name"'.pem root:root symlink ../../archive/sbxr-subscription/'"$name$retired_generation"'.pem"'
     done
-    retired_snapd=$(printf '%s' "$retirement" | "$ROOT/usr/bin/sed" -n 's/.*"snapd_created":\(true\|false\).*/\1/p'); [ "$retired_snapd" = true ] && retired_snapd=created || retired_snapd=reused
-    retired_certbot=$(printf '%s' "$retirement" | "$ROOT/usr/bin/sed" -n 's/.*"certbot_created":\(true\|false\).*/\1/p'); [ "$retired_certbot" = true ] && retired_certbot=created || retired_certbot=reused
+    retired_snapd=$(printf '%s' "$retirement" | "$ROOT/usr/bin/sed" -nE 's/.*"snapd_created":(true|false).*/\1/p'); [ "$retired_snapd" = true ] && retired_snapd=created || retired_snapd=reused
+    retired_certbot=$(printf '%s' "$retirement" | "$ROOT/usr/bin/sed" -nE 's/.*"certbot_created":(true|false).*/\1/p'); [ "$retired_certbot" = true ] && retired_certbot=created || retired_certbot=reused
     resources=$resources',"snapd dependency '"$retired_snapd"'","official Certbot snap dependency '"$retired_certbot"'"]'
     provenance_count=$((provenance_count + 20))
     if printf '%s' "$retirement" | "$ROOT/usr/bin/grep" -Fq '"recorder_directory_created":true'; then
@@ -466,7 +466,7 @@ index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","co
 # Match the canonical ReleaseIdentity encoding and ReleaseSupport.valid contract:
 # clean-install scopes have no sources; recurring support has 1..32 unique sources.
 subscription_source_pattern='\{"Repository":"{{.Repository}}","Tag":"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)","Commit":"[0-9a-f]{40}","IndexSHA256":"[0-9a-f]{64}"\}'
-subscription_support_pattern='\{"scope":("(first-subscription-clean-install|subscription-clean-install-repair)","sources":\[\]|"recurring-subscription-upgrade","sources":\['"$subscription_source_pattern"'(,'"$subscription_source_pattern"'){0,31}\]),"contract":"sbxr-subscription-update-v1"\}'
+subscription_support_pattern='\{"scope":("(first-subscription-clean-install|subscription-clean-install-repair|subscription-clean-install-only)","sources":\[\]|"recurring-subscription-upgrade","sources":\['"$subscription_source_pattern"'(,'"$subscription_source_pattern"'){0,31}\]),"contract":"sbxr-subscription-update-v1"\}'
 subscription_index_pattern='^\{"schema":2,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\],"support":'"$subscription_support_pattern"'\}$'
 single_line "$index" && { "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || "$ROOT/usr/bin/grep" -Eqx "$subscription_index_pattern" "$index"; } || release_refused
 if "$ROOT/usr/bin/grep" -Fq '"scope":"recurring-subscription-upgrade"' "$index"; then

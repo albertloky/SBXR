@@ -1,6 +1,6 @@
 # SBXR
 
-SBXR is a single-owner proxy product for one Ubuntu Server. Software Lifecycle installs and updates the executable; Proxy Installation owns the installed V3 proxy journey.
+SBXR is a single-owner proxy product for one Ubuntu Server. Software Lifecycle installs the executable and retains historical transaction recovery; Proxy Installation owns the installed V3 proxy journey.
 
 ## Language
 
@@ -8,7 +8,7 @@ SBXR is a single-owner proxy product for one Ubuntu Server. Software Lifecycle i
 The one person who exclusively controls one SBXR installation.
 
 ### Software Lifecycle
-The Module that owns installed-software status, qualified stable release discovery, update, rollback, forward completion, and recovery.
+The Module that owns installed-software status, qualified stable release discovery and historical update transaction rollback, forward completion, and recovery. The current product refuses new Update operations.
 
 ### Proxy Installation
 The review-first V3 journey that adds and manages SBXR proxy capability after Software Lifecycle has installed the executable and safely completes removal of the whole installation.
@@ -50,7 +50,7 @@ The Owner-disclosable bearer credential that authorizes read-only retrieval of t
 The non-secret identity of one Subscription Link Credential generation, used to correlate secret-safe status, diagnostics, transitions, and acceptance evidence.
 
 ### Subscription Link
-The authenticated capability URL that carries the Subscription Link Credential and returns the current Subscription Artifact. New subscriptions and completed migrations use HTTP. A legacy updater transaction preserves HTTPS through cleanup, then its mandatory root handoff changes only the scheme while keeping the address, port, path and token. The link otherwise remains stable until explicit rotation or Complete removal.
+The authenticated capability URL that carries the Subscription Link Credential and returns the current Subscription Artifact. New subscriptions use HTTP. The link remains stable until explicit rotation or Complete removal. The current clean-install-only product does not automatically migrate legacy HTTPS authority.
 
 ### Subscription Artifact
 The secret-bearing representation of exactly one current Proxy Profile returned through the Subscription Link for Karing import and refresh. It owns the imported proxy-node fields but not Karing's profile settings, DNS, routing, TUN, or selector behavior.
@@ -103,7 +103,9 @@ The single stable-publication gate that binds unchanged release bytes to the aut
 ### MVP Live Acceptance
 The `mvp-live-v1` clean-install Release Qualification scope: five normal product journeys for installation, subscription/Karing, credential rotation, supported certificate renewal, and restart/removal. It requires real packaged-host, outside-traffic, trusted-HTTPS, and Karing evidence, while leaving forced interruption, contention, and historical V4 evidence protocol work to their applicable regression or historical scopes.
 
-`mvp-http-live-v1` and `mvp-http-recurring-live-v1` use HTTP for fresh subscriptions and replace certificate renewal with serving restart proof; historical HTTPS policies retain their meanings. See ADR-0026.
+The current `subscription-clean-install-only` support scope declares `sources: []` and uses `mvp-http-live-v1` for the five HTTP journeys, with no incoming update or migration support. See ADR-0028.
+
+`mvp-http-live-v1` and the retained `mvp-http-recurring-live-v1` use HTTP for fresh subscriptions and replace certificate renewal with serving restart proof; historical HTTPS policies retain their meanings. See ADR-0026.
 
 `mvp-recurring-live-v1` retains these five journeys and adds normal packaged
 update, precommit rollback and postcommit forward recovery from one exact

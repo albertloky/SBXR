@@ -166,7 +166,7 @@ func TestSourceChecksTheCandidateFailureStateBoundQualification(t *testing.T) {
 	if outcome != softwarelifecycle.LatestReleaseAccepted || got.Sequence != 17 {
 		t.Fatalf("CheckLatest() = %#v, %v", got, outcome)
 	}
-	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.SubscriptionCleanInstallRepair, softwarelifecycle.RecurringSubscriptionUpgrade} {
+	for _, scope := range []string{softwarelifecycle.FirstSubscriptionCleanInstall, softwarelifecycle.SubscriptionCleanInstallRepair, softwarelifecycle.SubscriptionCleanInstallOnly, softwarelifecycle.RecurringSubscriptionUpgrade} {
 		t.Run("signed "+scope, func(t *testing.T) {
 			support := softwarelifecycle.ReleaseSupport{Scope: scope, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
 			wireSources := []any{}

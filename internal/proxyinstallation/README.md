@@ -45,13 +45,13 @@ restart recovery, refusal, and cleanup.
 Fresh Enable subscription uses HTTP on fixed TCP 8443 with the existing bearer
 credential and artifact contract. Its explicit HTTP authority owns no certificate,
 Certbot dependency, renewal writer or TCP 80 firewall contribution. Legacy HTTPS
-records remain byte-compatible during updater transaction verification. Once
-transaction cleanup is complete, the root handoff in
-[subscription_transport.go](subscription_transport.go) migrates to HTTP with exact
-token/UUID/configuration and certificate/provenance preservation. It retires only
-owned renewal/TCP 80, keeps `https_retirement` cleanup authority, and journals a
-forward retry. Private roles do not migrate. Reviewed Complete removal owns final
-retained-resource cleanup. See [ADR-0026](../../docs/adr/0026-http-subscription.md).
+records and retired-resource authority retain their historical repair/removal
+meaning. [ADR-0028](../../docs/adr/0028-clean-install-only.md) disables automatic
+root-start and lifecycle-completion migration in the current product. The private
+historical migration implementation in
+[subscription_transport.go](subscription_transport.go) remains covered by its
+existing regressions; its presence is not a supported incoming path. Reviewed
+Complete removal still owns exact retained-resource cleanup.
 
 The certificate-specific behavior below applies to legacy HTTPS records.
 

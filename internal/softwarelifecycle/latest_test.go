@@ -30,6 +30,7 @@ func TestSubscriptionIndexBindsScopeSourcesAndContract(t *testing.T) {
 	for _, support := range []ReleaseSupport{
 		{Scope: FirstSubscriptionCleanInstall, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract},
 		{Scope: SubscriptionCleanInstallRepair, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract},
+		{Scope: SubscriptionCleanInstallOnly, Sources: []ReleaseIdentity{}, Contract: SubscriptionUpdateContract},
 		{Scope: RecurringSubscriptionUpgrade, Sources: []ReleaseIdentity{source}, Contract: SubscriptionUpdateContract},
 	} {
 		body, err := BuildSubscriptionReleaseIndex("v3.0.23", strings.Repeat("d", 40), 23, assets, support)
@@ -48,6 +49,9 @@ func TestSubscriptionIndexBindsScopeSourcesAndContract(t *testing.T) {
 		{Scope: RecurringSubscriptionUpgrade, Sources: []ReleaseIdentity{source, source}, Contract: SubscriptionUpdateContract},
 		{Scope: FirstSubscriptionCleanInstall, Contract: SubscriptionUpdateContract},
 		{Scope: FirstSubscriptionCleanInstall, Sources: []ReleaseIdentity{}, Contract: "unknown"},
+		{Scope: SubscriptionCleanInstallOnly, Sources: []ReleaseIdentity{source}, Contract: SubscriptionUpdateContract},
+		{Scope: SubscriptionCleanInstallOnly, Contract: SubscriptionUpdateContract},
+		{Scope: SubscriptionCleanInstallOnly, Sources: []ReleaseIdentity{}, Contract: "unknown"},
 		{Scope: SubscriptionCleanInstallRepair, Sources: []ReleaseIdentity{source}, Contract: SubscriptionUpdateContract},
 		{Scope: SubscriptionCleanInstallRepair, Contract: SubscriptionUpdateContract},
 		{Scope: SubscriptionCleanInstallRepair, Sources: []ReleaseIdentity{}, Contract: "unknown"},

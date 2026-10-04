@@ -22,13 +22,8 @@ type httpMigrationHost interface {
 	DiscardHTTPMigrationPublication([]byte, []byte) bool
 }
 
-// CompleteHTTPSubscriptionHandoff runs only on a public root CLI launch. The
-// frozen source updater must first finish its exact HTTPS transaction; private
-// sandboxed serving/renewal roles never invoke this writer.
-func CompleteHTTPSubscriptionHandoff(ctx context.Context, lifecycle softwarelifecycle.Interface) (string, bool) {
-	return completeHTTPSubscriptionHandoff(ctx, lifecycle, hostadapter.New())
-}
-
+// Retained historical migration machinery has no current production entrypoint.
+// Clean-install-only releases do not initiate or automatically resume migration.
 func completeHTTPSubscriptionHandoff(ctx context.Context, lifecycle softwarelifecycle.Interface, host httpMigrationHost) (string, bool) {
 	body, err := host.ReadOwnership(hostSetupSpec.OwnershipPath)
 	if errors.Is(err, os.ErrNotExist) {

@@ -13,12 +13,7 @@ import (
 // SoftwareUpdateRuntime supplies private collaboration to the existing
 // Software Lifecycle transaction; it creates no Proxy Installation Action.
 func SoftwareUpdateRuntime() softwarelifecycle.UpdateRuntime {
-	host := hostadapter.New()
-	runtime := softwareUpdateRuntime(host)
-	runtime.AfterComplete = func(ctx context.Context, installed softwarelifecycle.ReleaseIdentity, lock *softwarelifecycle.MutationLockAuthority) (string, bool) {
-		return migrateLegacyHTTPSubscription(ctx, host, installed, lock)
-	}
-	return runtime
+	return softwareUpdateRuntime(hostadapter.New())
 }
 
 type softwareUpdateHost interface {

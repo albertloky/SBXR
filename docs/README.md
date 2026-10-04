@@ -20,11 +20,11 @@ Its [bounded Owner exception](adr/0024-r24-late-confirmation-supplement.md)
 reuses prior live evidence; it is not a fresh live pass or a general waiver.
 Refresh remote release state before a future release operation.
 
-For a fresh HTTP candidate, use [HTTP live acceptance](acceptance/http-subscription-live.md).
-The retained HTTPS policy uses [recurring live acceptance](acceptance/ordinary-recurring-live.md):
-five normal journeys plus the exact source's packaged update and both recovery
-directions. The approved initial route is v3.1.81 to the next candidate; the
-procedure does not assert that it has already passed live.
+Current releases are [clean installation only](adr/0028-clean-install-only.md),
+with no incoming sources and the five [HTTP live journeys](acceptance/http-subscription-live.md).
+Historical HTTPS and recurring policies retain their meanings; they do not add
+source update/recovery journeys to the current scope. Local implementation and
+regressions do not assert a packaged live pass.
 
 ## Repository layout
 

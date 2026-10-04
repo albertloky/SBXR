@@ -11,8 +11,10 @@ Recover(context.Context, ProgressReporter) Result
 
 The Module owns installed-state proof, GitHub's qualified Latest release, Release Sequence ordering, the mutation lock, two-checkpoint update, rollback, forward completion, and recovery. The V3 numbered terminal menu calls Proxy Installation for proxy Actions and Software Lifecycle for Check/Update/Recover.
 
-Production construction uses `NewInstalledWithUpdateRuntime`: updates require
-Proxy Installation admission plus runtime exclusion and completion checks.
+Production construction uses `NewInstalledWithUpdateRuntime` in clean-install-only
+mode: Check does not offer Update and Update refuses before candidate preparation
+or replacement. Recover retains existing proved transaction directions and runtime
+completion, without automatically starting legacy HTTPS migration.
 Tests use the private `newInstalledInterface` seam for controlled filesystem and
 release-source evidence.
 
@@ -33,7 +35,25 @@ entry points and tests, and the [current operator procedure](../../docs/acceptan
 for live qualification. [The historical Installer-Updater release procedure](../../docs/acceptance/historical/installer-updater-release.md)
 documents the historical Installer-Updater release-pair procedure.
 
-## Subscription update contract (#355)
+## Current clean-install-only scope
+
+[ADR-0028](../../docs/adr/0028-clean-install-only.md) declares
+`subscription-clean-install-only`, contract `sbxr-subscription-update-v1`, and
+`sources: []`. Its `mvp-http-live-v1` Acceptance Record proves only the five HTTP
+journeys. Existing installations use their exact release's reviewed Complete
+removal and recovery before fresh installation, with downtime, new credentials
+and new client setup. Install-over-existing-state refusal and unchanged old-updater
+refusal must be proved before recommending Latest.
+
+There is no background software updater. The historical transaction machinery,
+repair authority readers and exact removal-finisher restoration remain for their
+existing recovery meanings. Automatic root-start and lifecycle-completion legacy
+migration are disabled in production. Local tests do not qualify a live release.
+
+## Retained subscription update contract (#355)
+
+The following describes historical update/recurring records, not current incoming
+support or permission to start a new update.
 
 [ADR-0025](../../docs/adr/0025-ordinary-recurring-live-acceptance.md) adds the
 `mvp-recurring-live-v1` qualification profile for one exact then-current stable
@@ -49,8 +69,7 @@ no operation to the Interface. Empty input and `n` cancel. Changed release or
 recovery facts require a new review. Unproved recovery direction permits no effect.
 
 Release-index schema 1 retains its historical interpretation. Schema 2 adds one
-required `support` object, after `assets`. The repository index builder currently
-emits the first subscription scope:
+required `support` object, after `assets`. The original first subscription scope is:
 
 ```json
 {"scope":"first-subscription-clean-install","sources":[],"contract":"sbxr-subscription-update-v1"}

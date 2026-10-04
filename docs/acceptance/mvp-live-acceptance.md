@@ -1,11 +1,10 @@
 # MVP live acceptance
 
-Fresh HTTP candidates use [HTTP subscription live qualification](http-subscription-live.md)
-and [ADR-0026](../adr/0026-http-subscription.md). This document retains the
-HTTPS policies' meaning. Its non-certificate safeguards remain applicable;
-certificate-replacement and trusted-subscription-TLS requirements do not apply
-to a fresh HTTP candidate. Existing HTTPS source preparations still use their
-unchanged certificate and renewal contract.
+Current clean-install-only candidates use [HTTP subscription live qualification](http-subscription-live.md)
+and [ADR-0028](../adr/0028-clean-install-only.md), with empty incoming sources and
+no subscription CA operations. This document retains the historical HTTPS and
+recurring policies' meanings. Only its applicable non-certificate safeguards
+carry over; it does not add source journeys to the current scope.
 
 
 For future recurring releases use [ordinary recurring acceptance](ordinary-recurring-live.md)

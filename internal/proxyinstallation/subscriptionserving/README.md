@@ -9,8 +9,9 @@ shutdown. HTTP exposes tokens/configuration to interception and tampering.
 
 `Prepare` and the TLS-specific contract below are retained for existing HTTPS
 Ownership Records while frozen updater transactions verify normal TLS and
-unchanged authority. The root handoff migrates only after transaction cleanup;
-this private runtime never writes transport authority. Retired certificates are
+unchanged authority. The current clean-install-only product disables the automatic
+root handoff; this private runtime never writes transport authority. See
+[ADR-0028](../../../docs/adr/0028-clean-install-only.md). Retired certificates are
 kept solely for cleanup and are not loaded by HTTP. Fresh enablement never calls
 Certbot. See [ADR-0026](../../../docs/adr/0026-http-subscription.md).
 

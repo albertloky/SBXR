@@ -179,9 +179,12 @@ func (module installedInterface) RemoveCompleteRemovalInstalledRecord(ctx contex
 }
 
 type installedInterface struct {
-	local  localInspector
-	latest LatestReleaseSource
+	local            localInspector
+	latest           LatestReleaseSource
+	cleanInstallOnly bool
 }
+
+const cleanInstallOnlyCorrection = "This SBXR release supports clean installation only. Use reviewed Complete removal, finish any interrupted removal with its exact release, then install and set up fresh. This causes downtime, new proxy credentials, and new client setup. Do not install over remaining authority or resources."
 
 // localInspector is the private Adapter seam behind the Owner-facing Interface.
 type localInspector interface {
@@ -253,6 +256,10 @@ func (module installedInterface) Check(ctx context.Context, progress ProgressRep
 			return base
 		}
 		if latest.Identity != installed.identity && latest.Sequence > installed.sequence {
+			if module.cleanInstallOnly {
+				base.Code, base.Message = CheckReleaseRefused, cleanInstallOnlyCorrection
+				return base
+			}
 			inspector, _ := module.local.(filesystemInspector)
 			if !supportedUpdate(latest, installed.identity, inspector.requireSupport) {
 				base.Code, base.Message = CheckReleaseRefused, CleanInstallCorrection
@@ -270,6 +277,13 @@ func (module installedInterface) Check(ctx context.Context, progress ProgressRep
 }
 
 func (module installedInterface) Update(ctx context.Context, progress ProgressReporter) Result {
+	if module.cleanInstallOnly {
+		status := module.Status(ctx)
+		if status.State != Ready {
+			return updateResult(status.State, status.Installed, UpdateNotReady, "SBXR is not ready. Finish the existing change or its proved recovery before Complete removal.")
+		}
+		return updateResult(status.State, status.Installed, UpdateReleaseRefused, cleanInstallOnlyCorrection)
+	}
 	if updater, ok := module.local.(interface {
 		update(context.Context, LatestReleaseSource, ProgressReporter) Result
 	}); ok {

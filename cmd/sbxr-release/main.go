@@ -255,7 +255,7 @@ func buildReleaseIndexFile(options indexOptions) error {
 		digest := sha256.Sum256(body)
 		assets = append(assets, softwarelifecycle.LatestAssetProof{Name: name, Size: int64(len(body)), SHA256: hex.EncodeToString(digest[:])})
 	}
-	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.FirstSubscriptionCleanInstall, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
+	support := softwarelifecycle.ReleaseSupport{Scope: softwarelifecycle.SubscriptionCleanInstallOnly, Sources: []softwarelifecycle.ReleaseIdentity{}, Contract: softwarelifecycle.SubscriptionUpdateContract}
 	if options.support != "" {
 		encoded, err := os.ReadFile(options.support)
 		var declaration v3ReleaseSupport

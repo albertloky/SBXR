@@ -14,6 +14,7 @@ const (
 	OwnerExceptionSecrets             = "Automated scans passed; live capture coverage not proved"
 	FirstSubscriptionCleanInstall     = "first-subscription-clean-install"
 	SubscriptionCleanInstallRepair    = "subscription-clean-install-repair"
+	SubscriptionCleanInstallOnly      = "subscription-clean-install-only"
 	RecurringSubscriptionUpgrade      = "recurring-subscription-upgrade"
 	RepairEvidencePolicy              = "repair-issuance-bounded-v1"
 	RepairLifecycleEvidencePolicy     = "repair-issuance-bounded-v2"
@@ -53,7 +54,7 @@ func (support *ReleaseSupport) valid() bool {
 	if support == nil || support.Contract != SubscriptionUpdateContract || support.Sources == nil || len(support.Sources) > 32 {
 		return false
 	}
-	if support.Scope == FirstSubscriptionCleanInstall || support.Scope == SubscriptionCleanInstallRepair {
+	if support.Scope == FirstSubscriptionCleanInstall || support.Scope == SubscriptionCleanInstallRepair || support.Scope == SubscriptionCleanInstallOnly {
 		return len(support.Sources) == 0
 	}
 	if support.Scope != RecurringSubscriptionUpgrade || len(support.Sources) == 0 {

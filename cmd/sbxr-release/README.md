@@ -17,6 +17,13 @@ declarations and wire formats.
 | Declaration and exception | [qualification_declaration.go](qualification_declaration.go), [qualification_exception.go](qualification_exception.go) | Attempt declarations and the explicit Owner exception. |
 | Late human confirmation | [qualification_late_confirmation.go](qualification_late_confirmation.go) | Exact r24 archival supplement; does not grant release eligibility or emit an Acceptance Record. |
 
+The current scope is `subscription-clean-install-only`, with
+`sbxr-subscription-update-v1`, explicit empty support/attempt sources and
+`mvp-http-live-v1`. The five HTTP journeys produce a clean-install-only Acceptance
+Record; verified public history remains a publication baseline, not an incoming
+source. The historical repair scope's exact baseline is unchanged. See
+[ADR-0028](../../docs/adr/0028-clean-install-only.md).
+
 The current producer is the ordinary collector described in
 [HTTP subscription acceptance](../../docs/acceptance/http-subscription-live.md).
 The HTTPS policies retain their meaning in

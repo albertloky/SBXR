@@ -31,6 +31,10 @@ func mvpQualificationFixtureFor(t *testing.T, binary string, late bool) (string,
 }
 
 func mvpQualificationFixtureWithTransport(t *testing.T, binary string, late, httpSubscription bool) (string, []byte, map[string]any) {
+	return mvpQualificationFixtureForSupport(t, binary, late, httpSubscription, false)
+}
+
+func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSubscription, cleanOnly bool) (string, []byte, map[string]any) {
 	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
@@ -40,8 +44,15 @@ func mvpQualificationFixtureWithTransport(t *testing.T, binary string, late, htt
 		facts.BurnedIdentities = []burnedIdentity{{Commit: softwarelifecycle.LateConfirmationBase, OriginalTag: "v3.1.80", QualificationRunURL: softwarelifecycle.LateConfirmationPriorRun, Reason: "post-sign-qualification-failure", RecordedAt: "2026-09-24T08:14:08Z", ReleaseIndexSHA256: "53001e9785381a75820e0b37e53254ad869652b7f27788477fcb915533c2780b", Sequence: 158}}
 	}
 	source := repairBaselineFixture(t)
+	if cleanOnly {
+		source = cleanInstallOnlyBaselineFixture(t)
+		facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.82", 160
+	}
 	facts.Releases, facts.LatestTag = []observedRelease{source}, &source.Tag
 	facts.Candidate.Support = &v3ReleaseSupport{Contract: softwarelifecycle.SubscriptionUpdateContract, Scope: softwarelifecycle.SubscriptionCleanInstallRepair, Sources: []decisionReleaseIdentity{}}
+	if cleanOnly {
+		facts.Candidate.Support.Scope = softwarelifecycle.SubscriptionCleanInstallOnly
+	}
 	if err := json.Unmarshal([]byte(qualificationDocument(t, scopeHistoryFixture(t, source))), &facts.SubscriptionHistory); err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,8 @@
 # Acceptance documentation
 
 Fresh HTTP subscription candidates follow [HTTP live qualification](http-subscription-live.md)
-under [ADR-0026](../adr/0026-http-subscription.md). Historical HTTPS evidence
+under [ADR-0028](../adr/0028-clean-install-only.md), with HTTP behavior from
+[ADR-0026](../adr/0026-http-subscription.md). Historical HTTPS evidence
 retains its policy and cannot qualify changed HTTP candidate bytes.
 
 
@@ -16,15 +17,15 @@ Refresh remote state before acting; this index is not a readiness receipt.
 
 ## Current procedure
 
-[Ordinary recurring live acceptance](ordinary-recurring-live.md) is the approved
-`mvp-recurring-live-v1` procedure: five normal journeys plus three actual packaged
-source upgrade/recovery checks. The first route is v3.1.81 to the next release.
-Read [ADR-0025](../adr/0025-ordinary-recurring-live-acceptance.md) and the procedure's
-pre-dispatch gates; approval of scope is not a live pass or host authorization.
+[HTTP live qualification](http-subscription-live.md) is the current procedure:
+`subscription-clean-install-only`, empty incoming sources and `mvp-http-live-v1`.
+Retain install, subscription/Karing, credential rotation, serving restart and
+removal. No source setup or subscription certificate issuance is needed.
 
-[MVP live acceptance](mvp-live-acceptance.md) retains the clean-install
-procedure for `mvp-live-v1`. It defines the five normal journeys and the explicit
-operator observation handoff. Use it with [ADR-0023](../adr/0023-mvp-live-acceptance.md).
+[Ordinary recurring live acceptance](ordinary-recurring-live.md) and
+[MVP live acceptance](mvp-live-acceptance.md) retain the historical recurring and
+HTTPS repair policies. Their source and certificate requirements do not expand
+the current scope. Approval of scope is not a live pass or host authorization.
 
 [Temporary MVP log-parent windows](mvp-protected-log-parent-2026-09-19.md)
 records the bounded operator plan for the existing protected-parent prerequisite

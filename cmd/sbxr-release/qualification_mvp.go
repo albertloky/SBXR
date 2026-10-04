@@ -9,7 +9,13 @@ import (
 // A policy identifier distinguishes the reduced scope from historical attempts;
 // it adds no evidence envelope, prerequisite or product behavior.
 func mvpLiveAttempt(attempt v3QualificationAttempt) bool {
-	return attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.MVPLiveEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy)
+	if attempt.Support == nil {
+		return false
+	}
+	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly {
+		return attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy
+	}
+	return attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair && (attempt.EvidencePolicy == softwarelifecycle.MVPLiveEvidencePolicy || attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy)
 }
 
 func mvpRecurringAttempt(attempt v3QualificationAttempt) bool {

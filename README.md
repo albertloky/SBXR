@@ -1,12 +1,12 @@
 # SBXR
 
-SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs and updates the `sbxr` executable. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
+SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs the `sbxr` executable and retains recovery for existing durable transactions. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 
 The source implements setup and removal, subscription enablement and link
-rotation, Client Identity rotation, and recovery. Newly enabled subscriptions use HTTP; managed certificate renewal remains only for compatible legacy HTTPS installations.
+rotation, Client Identity rotation, and recovery. Newly enabled subscriptions use HTTP. The current release direction is clean installation only; existing installations use their exact release for reviewed removal and removal recovery.
 Implementation and automated tests do not establish release acceptance. Use
 [ADR-0016](docs/adr/0016-v3-proxy-product-and-modules.md) for the product contract
-and the [current MVP live acceptance procedure](docs/acceptance/mvp-live-acceptance.md)
+and the [current HTTP live acceptance procedure](docs/acceptance/http-subscription-live.md)
 for live qualification.
 
 For development, start with the [code map](docs/agents/code-map.md). It links
@@ -36,7 +36,7 @@ Use the permanent Pasteable Install Command:
 curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash
 ```
 
-The command supports only the fixed host contract above. It authenticates and verifies the complete candidate before it changes either owned path. A current valid installation is a no-op. A higher-sequence local installation is not downgraded. A proved historical full-product executable from `v1.0.0` through `v1.0.15` is refused unchanged.
+This command selects the published Latest, not unpublished checkout changes. The command supports only the fixed host contract above. It authenticates and verifies the complete candidate before it changes either owned path. A current valid installation is a no-op. A higher-sequence local installation is not downgraded. A proved historical full-product executable from `v1.0.0` through `v1.0.15` is refused unchanged.
 
 ## Numbered menu
 
@@ -48,8 +48,9 @@ sudo sbxr
 
 Every screen shows fresh proxy, subscription, and Software Lifecycle status.
 The same menu lists legal Proxy Installation Actions plus `Check`, `Update`, and
-`Recover`. Numbers follow the currently legal proxy Actions. `Update` shows the
-exact target; `Recover` shows the proved direction. Only `y` approves effects.
+`Recover`. Update is unsupported in this clean-install-only product and refuses
+without replacement. Recover retains proved transaction recovery; it does not
+start legacy transport migration. Only `y` approves a supported action's effects.
 Empty input or `n` cancels. Changed facts require a fresh review.
 
 ## Subscription transport
@@ -61,31 +62,24 @@ HTTP exposes the link and downloaded proxy credentials to interception and
 permits tampering; the confirmation plan discloses this risk. The VLESS/REALITY
 proxy on TCP 443 and software signature/attestation checks remain unchanged.
 
-Supported HTTPS upgrades finish with a mandatory HTTP migration that preserves
-the token, proxy identity/configuration, client settings and certificate bytes
-and cleanup provenance. The URL scheme changes; use confirmed View details,
-edit the existing Karing profile URL and refresh. Owned renewal and TCP 80 retire;
-shared CA infrastructure remains. With the frozen v3.1.81 updater, exit its old
-menu after Update/committed Recover finishes and launch the newly installed
-`sudo sbxr` once. The handoff resumes forward after interruption. See
-[ADR-0026](docs/adr/0026-http-subscription.md). Published release bytes are unchanged.
+Automatic legacy HTTPS migration is disabled. Historical HTTPS repair and
+cleanup authority remain available to their exact-release recovery paths; they
+are not incoming-upgrade support. See [ADR-0028](docs/adr/0028-clean-install-only.md).
 
-## Update and recovery safety
+## Clean installation and recovery
 
-The first subscription release supports clean installation only. No incoming
-update from `v3.0.21` or earlier is supported. Use the old release's reviewed
-Complete removal, finish an interrupted removal through its exact-release route,
-then install and set up fresh. Expect downtime, new proxy credentials, and new
-client setup. Installation refuses remaining authority or resources.
+Release support is `subscription-clean-install-only`, with an explicit empty
+incoming source list. To replace an existing installation, use that release's
+reviewed Complete removal, finish an interrupted removal through its exact-release
+route, then install and set up fresh. This entails downtime, new proxy credentials
+and new client setup. The installer refuses remaining authority or resources and
+retains exact removal-finisher restoration. An already absent host needs no old
+source installation or removal.
 
-Future recurring updates require explicit qualified source support. They preserve
-Ownership Record bytes, creating provenance, proxy configuration, and both
-credentials. Before `Committed`, recovery restores the exact prior release.
-After `Committed`, it retains the candidate and finishes Subscription Serving
-runtime verification before clearing the Update Record. New lifecycle code then
-performs the mandatory HTTP handoff with historical cleanup authority retained.
-It does not restart sing-box. See [Software Lifecycle](internal/softwarelifecycle/README.md) for the
-versioned support and transaction contracts.
+There is no background software updater. Explicit Update refuses in the current
+product. Existing transaction rollback/forward completion, installation recovery,
+proxy/subscription operation recovery and Complete removal keep their original
+proved directions. Local regression tests do not establish a live release.
 
 ## Releases and qualification
 
@@ -103,14 +97,16 @@ the live packaged Ubuntu Server 24.04 `amd64` journeys for the candidate's
 declared scope, including required outside-network and actual Karing evidence.
 Each Release Identity gets its own public Acceptance Record.
 
-The retained HTTPS clean-install MVP scope is
-[`mvp-live-v1`](docs/adr/0023-mvp-live-acceptance.md):
-[`mvp-install`](docs/acceptance/mvp-live-acceptance.md), `mvp-subscription`,
-`mvp-credentials`, `mvp-renewal`, and `mvp-removal`. Use the [MVP live
-acceptance procedure](docs/acceptance/mvp-live-acceptance.md). It retains normal
-artifact trust, outside traffic, trusted HTTPS, and Karing import/refresh. It
-does not establish incoming-upgrade behavior, natural timer firing, or naturally
-due client auto-refresh.
+The current scope uses `mvp-http-live-v1`: `mvp-install`, `mvp-subscription`,
+`mvp-credentials`, `mvp-serving`, and `mvp-removal`, in that order. See the
+[HTTP live procedure](docs/acceptance/http-subscription-live.md). It requires no
+source setup, source update/recovery journey or subscription certificate issuance.
+Applicable recovery regressions remain ordinary tests. Historical repair and
+HTTPS/recurring policies retain their original interpretation.
+
+Before recommending Latest, prove refusal by the unchanged old updater and the
+installer over existing state. Without that proof, keep the candidate non-Latest;
+passing the five journeys alone cannot establish update compatibility.
 
 The former [V4 operator producer](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator),
 its [25-scenario procedure](docs/acceptance/historical/v4-operator-procedures.md), and its
@@ -133,8 +129,3 @@ was performed. The failed v3.1.80 qualification remains burned.
 ## Historical full-product releases
 
 Releases `v1.0.0` through `v1.0.15` remain public, immutable, unsupported history. Their final source is preserved by annotated tag `archive/full-product-v1.0.15` at commit `14fdf0a3decb6c653f9669438bf40221813b9d7d`. They are not installation, update, migration, recovery, compatibility, or qualification inputs for the Installer-Updater.
-
-Fresh HTTP candidates use [HTTP live qualification](docs/acceptance/http-subscription-live.md),
-with explicit HTTP evidence and serving-restart proof in place of certificate
-replacement. All remaining native, signature, source update/recovery, outside
-traffic, Karing, revocation, deadline, cleanup and publication gates remain.

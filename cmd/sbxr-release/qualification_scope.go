@@ -92,6 +92,10 @@ func validSubscriptionHistory(history *v3ReleaseHistory, scope string, baseline 
 			}
 		}
 		return true
+	case softwarelifecycle.SubscriptionCleanInstallOnly:
+		// The verified current baseline orders the new release; it is not an
+		// incoming update source or a reuse of the historical repair exception.
+		return true
 	case softwarelifecycle.RecurringSubscriptionUpgrade:
 		return subscriptionRelease(source)
 	case softwarelifecycle.SubscriptionCleanInstallRepair:
@@ -113,7 +117,7 @@ func validSubscriptionHistory(history *v3ReleaseHistory, scope string, baseline 
 }
 
 func cleanInstallScope(scope string) bool {
-	return scope == softwarelifecycle.FirstSubscriptionCleanInstall || scope == softwarelifecycle.SubscriptionCleanInstallRepair
+	return scope == softwarelifecycle.FirstSubscriptionCleanInstall || scope == softwarelifecycle.SubscriptionCleanInstallRepair || scope == softwarelifecycle.SubscriptionCleanInstallOnly
 }
 
 func historyBaseline(history *v3ReleaseHistory) qualificationRelease {
@@ -158,6 +162,9 @@ func attemptScenarios(attempt v3QualificationAttempt) []string {
 func validAttemptSupport(attempt v3QualificationAttempt) bool {
 	if attempt.Support == nil || !validSupportDeclaration(*attempt.Support) || attempt.Sources == nil || len(attempt.Support.Sources) != len(attempt.Sources) || !slices.Equal(attempt.RequiredScenarios, attemptScenarios(attempt)) {
 		return false
+	}
+	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly {
+		return attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy && len(attempt.Sources) == 0 && attempt.AutomatedOnlyScenarios == nil && attempt.OwnerException == "" && attempt.LateConfirmationReview == nil
 	}
 	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		if mvpLiveAttempt(attempt) {

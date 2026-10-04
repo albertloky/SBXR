@@ -138,7 +138,7 @@ func TestHistoricalDeclarationDispatchIsRetiredBeforeGitHub(t *testing.T) {
 }
 
 func TestMVPDeclarationDispatchReachesWorkflow(t *testing.T) {
-	for _, policy := range []string{"mvp-live-v1", "mvp-recurring-live-v1"} {
+	for _, policy := range []string{"mvp-live-v1", "mvp-recurring-live-v1", "mvp-http-live-v1", "mvp-http-recurring-live-v1"} {
 		t.Run(policy, func(t *testing.T) { testMVPDeclarationDispatch(t, policy) })
 	}
 }

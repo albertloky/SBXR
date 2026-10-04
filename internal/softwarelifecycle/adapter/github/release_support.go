@@ -37,7 +37,7 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	latency := release.Support != nil && release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair
 	policy, policyOK := uniqueRecordValue(body, "Evidence policy: ")
 	latency = latency && policyOK && slices.Contains([]string{softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy}, policy)
-	mvp := scope == softwarelifecycle.SubscriptionCleanInstallRepair && policyOK && (policy == softwarelifecycle.MVPLiveEvidencePolicy || policy == softwarelifecycle.MVPHTTPEvidencePolicy)
+	mvp := policyOK && (scope == softwarelifecycle.SubscriptionCleanInstallRepair && (policy == softwarelifecycle.MVPLiveEvidencePolicy || policy == softwarelifecycle.MVPHTTPEvidencePolicy) || scope == softwarelifecycle.SubscriptionCleanInstallOnly && policy == softwarelifecycle.MVPHTTPEvidencePolicy)
 	if !mvp && (hasRecordLine("Live acceptance coverage: ") || hasMVPScenario()) {
 		return false
 	}
@@ -70,6 +70,15 @@ func qualifiedReleaseSupport(body string, release softwarelifecycle.LatestReleas
 	}
 	automatedOnly, automatedOnlyOK := uniqueRecordValue(body, "Automated-only scenarios (not live): ")
 	automatedResult, automatedResultOK := uniqueRecordValue(body, "Automated-only result: ")
+	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly {
+		for _, prefix := range []string{"Incoming source upgrades: ", "Two-release update/recovery: "} {
+			value, ok := uniqueRecordValue(body, prefix)
+			if !ok || value != "Not applicable" {
+				return false
+			}
+		}
+		return release.Support.Contract == softwarelifecycle.SubscriptionUpdateContract && release.Support.Sources != nil && len(release.Support.Sources) == 0 && mvp && code == "RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION" && qualifiedMVPScenarios(body) && !hasRecordLine("Owner exception: ") && !hasRecordLine("Automated-only scenarios (not live): ") && !hasRecordLine("Automated-only result: ") && !hasRecordLine("Automated-only checks (not live): ")
+	}
 	if release.Support.Scope == softwarelifecycle.SubscriptionCleanInstallRepair {
 		if !policyOK || !slices.Contains([]string{softwarelifecycle.RepairEvidencePolicy, softwarelifecycle.RepairLifecycleEvidencePolicy, softwarelifecycle.RepairKaringLatencyEvidencePolicy, softwarelifecycle.RepairTwoIssuanceEvidencePolicy, softwarelifecycle.MVPLiveEvidencePolicy, softwarelifecycle.MVPHTTPEvidencePolicy}, policy) {
 			return false

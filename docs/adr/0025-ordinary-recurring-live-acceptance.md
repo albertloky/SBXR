@@ -4,6 +4,10 @@ status: accepted
 
 # Ordinary recurring live acceptance and an exact packaged upgrade route
 
+Current releases follow [ADR-0028](0028-clean-install-only.md): no incoming
+upgrade support or automatic legacy migration. The contracts below retain their
+historical scope and do not add source journeys to current qualification.
+
 On 2026-09-25 the Owner requested repeatable ordinary live acceptance and a
 proven upgrade path, selected **v3.1.81 to the next release only** for the first
 route, and approved retaining the five ordinary MVP journeys plus three live

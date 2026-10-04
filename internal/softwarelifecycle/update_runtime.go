@@ -12,9 +12,8 @@ import (
 type UpdateRuntime struct {
 	Acquire  func(context.Context, []byte, ReleaseIdentity, *UpdateTarget, *MutationLockAuthority) (func(), bool)
 	Complete func(context.Context, []byte, ReleaseIdentity, *MutationLockAuthority) bool
-	// AfterComplete runs under whole-host authority after update.json is gone
-	// and runtime exclusions have been released. Frozen updaters lack this hook;
-	// the target's first public root CLI launch supplies the same handoff.
+	// AfterComplete retains the historical transaction callback seam. Current
+	// clean-install-only production construction disables automatic handoffs.
 	AfterComplete func(context.Context, ReleaseIdentity, *MutationLockAuthority) (string, bool)
 }
 
@@ -35,7 +34,10 @@ func (inspector filesystemInspector) afterRuntime(ctx context.Context, root *os.
 }
 
 func NewInstalledWithUpdateRuntime(latest LatestReleaseSource, admission UpdateAdmission, runtime UpdateRuntime) Interface {
-	return newInstalledInterface(filesystemInspector{root: "/", uid: 0, requireSupport: true, updateAdmission: admission, updateRuntime: &runtime}, latest)
+	// Recovery still uses the exact existing Update Record and runtime contract.
+	// It must not initiate a new transport migration after that record is gone.
+	runtime.AfterComplete = nil
+	return installedInterface{local: filesystemInspector{root: "/", uid: 0, requireSupport: true, updateAdmission: admission, updateRuntime: &runtime}, latest: latest, cleanInstallOnly: true}
 }
 
 func updateOwnership(root *os.Root) ([]byte, error) {

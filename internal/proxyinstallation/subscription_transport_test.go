@@ -219,6 +219,23 @@ func TestHTTPHandoffPreservesExistingLegacyRecoveryMenu(t *testing.T) {
 	}
 }
 
+func TestCleanInstallMenuDoesNotResumePendingTransportMigration(t *testing.T) {
+	h := migrationInstallation(t)
+	h.ownership = ownershipBytes(migrationSelectedRecord(t, h))
+	before := bytes.Clone(h.ownership)
+	operations := len(h.operations)
+	installation := newInstalledInterface(readyLifecycle{}, h, acceptedSingBox{})
+	for _, action := range []Action{StatusAction, ViewDetailsAction, CompleteRemovalAction, FinishSubscriptionChangeAction} {
+		review := installation.Review(t.Context(), action)
+		if review.Prepared != nil || review.Result.Code != StatusProblemDetected || !strings.Contains(review.Result.Message, "exact release and recovery procedure") || strings.Contains(review.Result.Message, "running sudo sbxr again") {
+			t.Fatalf("pending historical migration review = %+v", review)
+		}
+	}
+	if h.migrations != 0 || !bytes.Equal(before, h.ownership) || len(h.operations) != operations {
+		t.Fatal("clean-install menu changed historical migration authority or resources")
+	}
+}
+
 func TestHTTPSRetirementStrictAuthorityAndUpdateCapability(t *testing.T) {
 	h := migrationInstallation(t)
 	r := migrationSelectedRecord(t, h)

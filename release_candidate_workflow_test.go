@@ -45,6 +45,7 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 		verifierStatus, wantStatus                  int
 	}{
 		{"accepted", accepted, "", "completed", "accepted", 0, 0},
+		{"clean-install-only", accepted, "", "completed", "accepted", 0, 0},
 		{"refused", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
 		{"unavailable", unavailable, "require accepted public-latest outcome", "completed", "unavailable", 0, 1},
 		{"execution-failed", "", "execute verify-public-latest", "did not complete", "empty", 42, 42},
@@ -92,6 +93,8 @@ exit "$VERIFIER_STATUS"
 			}
 			attempt, mode := declaration, "v3"
 			switch fixture.name {
+			case "clean-install-only":
+				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-repair", "subscription-clean-install-only")
 			case "declaration-missing":
 				attempt = ""
 			case "declaration-noncanonical":
@@ -223,7 +226,7 @@ func TestSubscriptionAutomatedEvidenceRunsBeforeNativeAssets(t *testing.T) {
 	build := workflow[strings.Index(workflow, "  build:"):strings.Index(workflow, "  drafts:")]
 	assets := strings.Index(build, "mkdir -m 0700 release evidence")
 	for _, required := range []string{
-		`test "$MODE" = v3 && jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null`,
+		`test "$MODE" = v3 && jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "subscription-clean-install-only" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null`,
 		"go test -p 1 -timeout 30m ./... -count=1",
 		"go test -race -p 1 -timeout 30m ./... -count=1",
 		"go vet ./...", "go mod verify",
@@ -235,7 +238,7 @@ func TestSubscriptionAutomatedEvidenceRunsBeforeNativeAssets(t *testing.T) {
 	}
 	start := strings.Index(build, `if test "$MODE" = v3`)
 	checks := build[start:assets]
-	for _, scope := range []string{"subscription-clean-install-repair", "recurring-subscription-upgrade", "unknown"} {
+	for _, scope := range []string{"subscription-clean-install-repair", "subscription-clean-install-only", "recurring-subscription-upgrade", "unknown"} {
 		for _, mode := range []string{"v3", "legacy"} {
 			command := exec.Command("bash", "-c", "set -euo pipefail\ngo() { printf '%s\\n' \"$*\"; }\n"+checks)
 			command.Env = append(os.Environ(), "MODE="+mode, `V3_ATTEMPT={"support":{"scope":"`+scope+`"}}`)

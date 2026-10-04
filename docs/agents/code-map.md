@@ -11,7 +11,8 @@ behind these paths.
 `cmd/sbxr` selects the platform entry point and private runtime roles. Normal
 zero-argument execution reaches the numbered menu in the Proxy Installation
 terminal adapter. That menu calls `Review`/`Execute` for proxy actions and
-Software Lifecycle for `Check`/`Update`/`Recover`.
+Software Lifecycle for `Check`/`Update`/`Recover`. The current clean-install-only
+production constructor refuses new Update; historical transaction recovery remains.
 
 | Task | Start here | Follow into / focused tests |
 |---|---|---|
@@ -58,7 +59,7 @@ deadline failure, inspect the driver and operator wrapper.
 | Read-only MVP package/window observations | [mvp-inspect-window.py](../../.github/scripts/mvp-inspect-window.py), [documented SSH caller](../acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22) | Adjacent `test_mvp_inspect_window.py`, `test_mvp_recovery_window.py`, opt-in `test_mvp_inspect_window_linux.py` / `test_mvp_window_recovery_linux.py` and root `v3_mvp_window_test.go`; real pinned DEB/dpkg/SSH and diagnostic lifecycle fixtures in a marked disposable amd64 VM |
 | Temporary MVP log-parent prerequisite | [mvp-protected-menu.sh](../../.github/scripts/mvp-protected-menu.sh), [operator plan](../acceptance/mvp-protected-log-parent-2026-09-19.md) | Adjacent `test_mvp_protected_menu.py` and [isolated systemd/TLS test](../../internal/proxyinstallation/protected_log_parent_linux_test.go); uses the reviewed wrapper and [startup cancellation regression](../../.github/scripts/test_mvp_startup_cleanup.py) |
 | Retired V4 producer source | [V4 tree at commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator) | Historical readers/validators remain in `cmd/sbxr-release`; do not restore or run the producer for MVP work |
-| Current ordinary live procedure | [Recurring acceptance](../acceptance/ordinary-recurring-live.md), [ADR-0025](../adr/0025-ordinary-recurring-live-acceptance.md) | Five normal MVP journeys plus the exact source's update, rollback and forward recovery; the old clean-install policy retains its meaning |
+| Current ordinary live procedure | [HTTP acceptance](../acceptance/http-subscription-live.md), [ADR-0028](../adr/0028-clean-install-only.md) | Five HTTP journeys, explicit empty incoming sources; retained recovery regressions |
 | Find a historical V4 scenario or its controls | [Retired Operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md) | [V4 scenario procedures](../acceptance/historical/v4-operator-procedures.md) |
 | Historical V4 evidence timing or assembly | [Retired assembly source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/assemble-evidence.py), [retired timing source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/evidence-timing.py) | [Assembly guide](../acceptance/historical/evidence-assembly.md) |
 

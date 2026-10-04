@@ -4,6 +4,10 @@ status: accepted
 
 # Use HTTP for subscriptions and migrate legacy HTTPS
 
+Current releases follow [ADR-0028](0028-clean-install-only.md): no incoming
+upgrade support or automatic legacy migration. The contracts below retain their
+historical scope and do not add source journeys to current qualification.
+
 On 2026-10-01 the Owner explicitly approved changing the HTTPS subscription
 feature to HTTP after being informed that HTTP exposes subscription credentials
 and downloaded proxy credentials to interception and permits response tampering.
