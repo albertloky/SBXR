@@ -13,6 +13,15 @@ facts, request/hash chain, actual observations and validation/submission deadlin
 The baseline is release-order evidence, not a source to install. Historical repair
 scope keeps its original baseline/history restriction.
 
+Only v3.1.90/168 may use the approved
+[live89 operator-recording correction](../adr/0029-live89-operator-recording-correction.md).
+Its signed `live89_correction_review` and dedicated correction-result stage bind
+the exact accepted v3.1.89 archive, unchanged product/build source and identical
+unstamped executable payloads. It records reused evidence with the original
+failed workflow and burn intact, performs no new live journey and requires fresh
+native qualification, attestations and separate stable-publication approval.
+It is distinct from an Owner exception; all other candidates use this procedure.
+
 Use exactly these five journeys in order:
 
 1. `mvp-install`: prove owned absence, then clean packaged candidate install/setup

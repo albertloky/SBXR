@@ -5,6 +5,9 @@ refinements apply only within their stated scope; this index does not adopt,
 revoke or rewrite a decision. [CONTEXT.md](../../CONTEXT.md) is the shared glossary.
 
 For current product and release scope, begin with [ADR-0028](0028-clean-install-only.md).
+The [live89 operator-recording correction](0029-live89-operator-recording-correction.md)
+applies only to fresh v3.1.90/168 with unchanged product source and executable
+payloads; it preserves the failed v3.1.89 run and burn.
 For retained product contracts, begin with ADR-0016 and its selected resolutions, then
 [ADR-0026](0026-http-subscription.md) for fresh HTTP subscriptions and preserved
 legacy HTTPS installations.
@@ -16,6 +19,7 @@ general publication waiver. See the [acceptance guide](../acceptance/README.md).
 ## Current V3 and scoped release decisions
 
 - [0028 — Clean installation only](0028-clean-install-only.md)
+- [0029 — Correct live89 operator recording for one fresh target](0029-live89-operator-recording-correction.md)
 
 - [0026 — Use HTTP for newly enabled subscriptions](0026-http-subscription.md)
 - [0027 — Attended Karing response timing](0027-attended-karing-response-window.md)

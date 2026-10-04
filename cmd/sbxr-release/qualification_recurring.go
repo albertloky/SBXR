@@ -171,6 +171,9 @@ type v3RecurringAcceptanceRecord struct {
 
 func evaluateV3Result(document []byte) (acceptanceVPSResultDecision, error) {
 	var stage qualificationEnvelope
+	if json.Unmarshal(document, &stage) == nil && stage.Stage == live89CorrectionStage {
+		return evaluateLive89Correction(document)
+	}
 	if json.Unmarshal(document, &stage) == nil && stage.Stage == "owner-exception-result" {
 		return evaluateOwnerException(document)
 	}
@@ -232,6 +235,11 @@ func recurringSecret(document []byte) bool {
 
 func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualificationManifest, complete bool) bool {
 	evidence, attempt := facts.DetailedEvidence, manifest.V3Attempt
+	if attempt != nil && attempt.Live89CorrectionReview != nil {
+		// This declaration imports exact archival facts; it cannot fabricate a
+		// fresh ordinary scenario stream or use the live collector.
+		return false
+	}
 	encoded, err := marshalCanonical(evidence)
 	observed, observedOK := qualificationTime(facts.ObservedAt)
 	evaluated, evaluatedOK := qualificationTime(facts.EvaluationTime)
@@ -618,6 +626,7 @@ type v3QualificationAttempt struct {
 	KaringLimitSeconds         int                                       `json:"karing_limit_seconds"`
 	KaringResponseLimitSeconds int                                       `json:"karing_response_limit_seconds,omitempty"`
 	LateConfirmationReview     *softwarelifecycle.LateConfirmationReview `json:"late_confirmation_review,omitempty"`
+	Live89CorrectionReview     *live89CorrectionReview                   `json:"live89_correction_review,omitempty"`
 	MacRunnerID                string                                    `json:"mac_runner_id"`
 	MacOSVersion               string                                    `json:"macos_version"`
 	OutsideRunnerID            string                                    `json:"outside_runner_id"`
@@ -644,6 +653,12 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 // validV3AttemptDeclaredFields is shared by unsigned preparation and signing.
 // Signing separately binds the workflow identity and candidate release index.
 func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qualificationFacts) bool {
+	if attempt.Live89CorrectionReview != nil && (!attempt.Live89CorrectionReview.valid(preflight.Commit) || preflight.Candidate.BTag != live89CorrectionTag || preflight.Candidate.BSequence != live89CorrectionSequence || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.Support == nil || attempt.Support.Scope != softwarelifecycle.SubscriptionCleanInstallOnly || attempt.OwnerException != "" || attempt.LateConfirmationReview != nil || attempt.KaringResponseLimitSeconds != 0) {
+		return false
+	}
+	if attempt.Live89CorrectionReview != nil && !slices.Contains(preflight.BurnedIdentities, live89OriginalBurn()) {
+		return false
+	}
 	profile, exceptionOK := softwarelifecycle.QualificationException(preflight.Candidate.BTag, preflight.Candidate.BSequence, supportPointer(attempt.Support))
 	if attempt.OwnerException != "" && (!exceptionOK || attempt.OwnerException != profile.ID || attempt.Schema != "sbxr-v3-qualification-attempt-v3") {
 		return false

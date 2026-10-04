@@ -10,10 +10,22 @@ The producer retains `mvp-http-recurring-live-v1` and the historical HTTPS
 and [MVP live acceptance](../../docs/acceptance/mvp-live-acceptance.md); it records
 explicit human observations and does not run the historical V4 protocol.
 
+The approved [live89 recording correction](../../docs/adr/0029-live89-operator-recording-correction.md)
+is a separate one-target path for fresh v3.1.90/168. Its source review works from
+committed Git inputs, requires exact preservation of `cmd/sbxr`, `internal`,
+`go.mod`, `go.sum` and the bootstrap template, and binds the policy diff and
+approved archive into `live89_correction_review`. Fresh native builds must match
+both archived unstamped executable payloads. Candidate preparation and the
+correction-result job reproduce the review; the latter retains the exact archive
+with explicit provenance rather than driving a new live session. Original failed
+live89 history and its burn remain intact. This path has no `owner_exception` and
+retains ordinary native, signing, attestation, failure and publication gates.
+
 | Area | Entry points |
 |---|---|
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
+| One-target live89 recording correction | `live89-correction-review.py`, `test_live89_correction_review.py`; exact committed-source review and fresh archive payload verification under [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
 | Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |

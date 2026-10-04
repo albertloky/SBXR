@@ -258,7 +258,7 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 			return refused()
 		}
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
-	case v3PackagedLiveResultStage, "owner-exception-result":
+	case v3PackagedLiveResultStage, "owner-exception-result", live89CorrectionStage:
 		var acceptanceFacts struct {
 			QualificationBoundaryFacts json.RawMessage `json:"qualification_boundary_facts"`
 		}

@@ -16,6 +16,7 @@ declarations and wire formats.
 | Ordinary live evidence | [qualification_mvp.go](qualification_mvp.go) | The five policy-specific HTTPS/HTTP journeys and exact-source packaged update/recovery checks. |
 | Declaration and exception | [qualification_declaration.go](qualification_declaration.go), [qualification_exception.go](qualification_exception.go) | Attempt declarations and the explicit Owner exception. |
 | Late human confirmation | [qualification_late_confirmation.go](qualification_late_confirmation.go) | Exact r24 archival supplement; does not grant release eligibility or emit an Acceptance Record. |
+| live89 operator-recording correction | [qualification_live89_correction.go](qualification_live89_correction.go) | Accepted prior HTTP evidence for only fresh v3.1.90/168, with unchanged product source/payloads and preserved original failure/burn. |
 
 The current scope is `subscription-clean-install-only`, with
 `sbxr-subscription-update-v1`, explicit empty support/attempt sources and
@@ -62,3 +63,29 @@ supplement and matching historical package/host/client declarations. It emits an
 explicit reuse record, not fresh live scenarios. Normal native qualification,
 attestations, burns and separate publication approval still apply. Public readers
 and stable finalization understand the same bounded profile.
+
+## Approved live89 operator-recording correction
+
+Stage `live89-evidence-correction-result` is restricted to fresh v3.1.90/168.
+Its signed `live89_correction_review` binds the tested live89 base, approved
+archive, unchanged installed source/build tree, policy diff and exact fresh
+target. The workflow independently reproduces the source review and proves both
+unstamped executable payload digests in fresh native builds. The stage checks
+the complete closed set of pinned archival contents and the new signed boundary;
+it does not accept caller-supplied replacement pins or an Owner exception.
+
+The approved inputs are retained in `testdata/live89-correction.json`.
+`.github/scripts/live89-correction-review.py` reproduces the exact Git source
+review; its `payload ARCHIVE` mode verifies the fresh archive's canonical
+identity trailer and its pinned unstamped payload. The target must be the
+reviewed committed source, rather than the current dirty working tree.
+
+The resulting ordinary clean HTTP Acceptance Record retains the four original
+scenario references and a fifth reference to the approved correction bundle.
+Explicit provenance discloses reused live89 evidence, the original failed
+workflow/burn, actual timestamps and null callback, and no fresh live run. New
+release identity stamps and asset/index/installer metadata differ. Installed
+product and public readers remain unchanged; fresh native checks, attestations,
+normal failure/burn handling and separate stable-publication approval remain.
+See [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) for the
+exact applicability and audit boundary.

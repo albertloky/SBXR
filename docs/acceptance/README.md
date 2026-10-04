@@ -22,6 +22,13 @@ Refresh remote state before acting; this index is not a readiness receipt.
 Retain install, subscription/Karing, credential rotation, serving restart and
 removal. No source setup or subscription certificate issuance is needed.
 
+[The live89 operator-recording correction](../adr/0029-live89-operator-recording-correction.md)
+is restricted to fresh v3.1.90/168. It reuses the accepted five HTTP journeys with
+unchanged product source and executable payloads, preserves the original failed
+workflow/burn and null cleanup callback, and requires fresh automated qualification
+and separate publication approval. It does not schedule another live attempt or
+change the ordinary procedure for other candidates.
+
 [Ordinary recurring live acceptance](ordinary-recurring-live.md) and
 [MVP live acceptance](mvp-live-acceptance.md) retain the historical recurring and
 HTTPS repair policies. Their source and certificate requirements do not expand

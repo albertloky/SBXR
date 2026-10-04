@@ -175,6 +175,11 @@ jobs:
             python3 .github/scripts/late-confirmation-review.py "$GITHUB_SHA" > late-confirmation-review.json
             jq -e --slurpfile review late-confirmation-review.json '.late_confirmation_review == $review[0]' <<<"$V3_ATTEMPT" >/dev/null
           fi
+          if test "$MODE" = v3 && jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
+            preflight_operation='verify exact live89 correction applicability'
+            python3 .github/scripts/live89-correction-review.py "$GITHUB_SHA" > live89-correction-review.json
+            jq -e --slurpfile review live89-correction-review.json '.live89_correction_review == $review[0]' <<<"$V3_ATTEMPT" >/dev/null
+          fi
           preflight_operation='execute candidate preflight qualification'
           go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json
           if test "$MODE" = v3; then
@@ -288,6 +293,9 @@ jobs:
           mkdir -m 0700 release evidence
           for target in amd64 arm64; do
             go run ./cmd/sbxr-release -tag "$TAG" -commit "$GITHUB_SHA" -sequence "$SEQUENCE" -architecture "$target" -output "release/sbxr-linux-$target.tar.gz"
+            if test "$MODE" = v3 && jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
+              python3 .github/scripts/live89-correction-review.py payload "release/sbxr-linux-$target.tar.gz" > "evidence/live89-$target-payload.json"
+            fi
           done
           amd64_sha256="$(tar -xOzf release/sbxr-linux-amd64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
           arm64_sha256="$(tar -xOzf release/sbxr-linux-arm64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
@@ -549,6 +557,8 @@ jobs:
       ACCEPTANCE_VPS_SSH_PRIVATE_KEY: ${{ secrets.ACCEPTANCE_VPS_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: go.mod
@@ -557,6 +567,7 @@ jobs:
         with:
           name: qualification-boundary-input
       - name: Verify Acceptance VPS readiness before signing
+        if: ${{ !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
         run: |
           set -euo pipefail
           test -n "$ACCEPTANCE_VPS_HOST"
@@ -586,15 +597,25 @@ jobs:
             # Recheck Latest after builds and approval, not just at preflight.
             go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
             jq -e --slurpfile current current-source-verification.json '.latest_tag == $current[0].release_identity.tag and $current[0].outcome == "accepted" and any(.releases[]; .tag == $current[0].release_identity.tag and .commit == $current[0].release_identity.commit and .index.sha256 == $current[0].release_identity.release_index_sha256)' candidate-preflight-facts.json >/dev/null
-            gh api repos/KaringX/karing/releases/latest > karing-latest.json || { printf '%s\n' 'Official Karing metadata lookup failed.' >&2; exit 1; }
-            jq -e --argjson attempt "$V3_ATTEMPT" '.draft == false and .prerelease == false and (.tag_name | ltrimstr("v")) == $attempt.packages.karing.version and any(.assets[]; .size == $attempt.packages.karing.size and .digest == ("sha256:" + $attempt.packages.karing.sha256))' karing-latest.json >/dev/null
+            if ! jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
+              gh api repos/KaringX/karing/releases/latest > karing-latest.json || { printf '%s\n' 'Official Karing metadata lookup failed.' >&2; exit 1; }
+              jq -e --argjson attempt "$V3_ATTEMPT" '.draft == false and .prerelease == false and (.tag_name | ltrimstr("v")) == $attempt.packages.karing.version and any(.assets[]; .size == $attempt.packages.karing.size and .digest == ("sha256:" + $attempt.packages.karing.sha256))' karing-latest.json >/dev/null
+            fi
             baseline="$(jq -cS '.subscription_history as $h | $h.releases[] | select(.tag == $h.public_latest.release_identity.tag) | {assets:[.assets[] | {name,sha256:.digest,size}],commit,release_id:.id,release_identity:$h.public_latest.release_identity,sequence:.sequence,tag}' candidate-preflight-facts.json)"
             # Draft reads require push authority. Reuse the authenticated bytes
             # already checked by the draft decision chain; retain read-only signing.
             candidate_index="downloaded/$(jq -r '.[0].tag' drafts.json)/release-index.json"
             test "$(sha256sum "$candidate_index" | cut -d' ' -f1)" = "$(jq -r '.[0].release_identity.release_index_sha256' drafts.json)"
             now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            jq -cS --argjson attempt "$V3_ATTEMPT" --arg now "$now" --arg id "run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" --argjson run_attempt "$GITHUB_RUN_ATTEMPT" --argjson baseline "$baseline" --rawfile candidate_index "$candidate_index" '. + {v3_attempt:($attempt + {attempt_id:$id,baseline:$baseline,candidate_index:$candidate_index,run_attempt:$run_attempt,started_at:$now,karing_latest_checked_at:$now})}' qualification-boundary-facts.json | tr -d '\n' > qualification-boundary-facts.next
+            karing_latest_checked_at="$now"
+            if jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
+              # The accepted correction binds the archived Karing package/check,
+              # without claiming a fresh client observation or Latest lookup.
+              karing_latest_checked_at="$(jq -r .karing_latest_checked_at <<<"$V3_ATTEMPT")"
+              python3 .github/scripts/live89-correction-review.py "$GITHUB_SHA" > live89-correction-review.json
+              jq -e --slurpfile review live89-correction-review.json '.live89_correction_review == $review[0]' <<<"$V3_ATTEMPT" >/dev/null
+            fi
+            jq -cS --argjson attempt "$V3_ATTEMPT" --arg now "$now" --arg karing_latest_checked_at "$karing_latest_checked_at" --arg id "run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT" --argjson run_attempt "$GITHUB_RUN_ATTEMPT" --argjson baseline "$baseline" --rawfile candidate_index "$candidate_index" '. + {v3_attempt:($attempt + {attempt_id:$id,baseline:$baseline,candidate_index:$candidate_index,run_attempt:$run_attempt,started_at:$now,karing_latest_checked_at:$karing_latest_checked_at})}' qualification-boundary-facts.json | tr -d '\n' > qualification-boundary-facts.next
             mv qualification-boundary-facts.next qualification-boundary-facts.json
           fi
           go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json
@@ -615,7 +636,7 @@ jobs:
           subject-path: qualification-manifest.json
 
   acceptance-vps:
-    if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception }}
+    if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
     needs: [preflight, sign]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -1057,9 +1078,68 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  live89-correction:
+    if: ${{ fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
+    needs: [preflight, sign]
+    runs-on: ubuntu-24.04
+    environment: acceptance-vps
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-qualification-manifest
+      - name: Verify and record the exact accepted live89 correction
+        run: |
+          set -euo pipefail
+          gh attestation verify qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null
+          python3 .github/scripts/live89-correction-review.py "$GITHUB_SHA" > live89-correction-review.json
+          jq -e --slurpfile review live89-correction-review.json '.v3_attempt.live89_correction_review == $review[0]' qualification-manifest.json >/dev/null
+          jq -cnS --slurpfile boundary qualification-boundary-facts.json --slurpfile manifest qualification-manifest.json --slurpfile archived cmd/sbxr-release/testdata/live89-correction.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{schema:"sbxr-release-qualification-facts-v1",stage:"live89-evidence-correction-result",qualification_boundary_facts:$boundary[0],qualification_manifest:$manifest[0],qualification_manifest_attested:true,observed_at:$observed_at,archived_evidence:$archived[0].evidence}' | tr -d '\n' > acceptance-vps-result-facts.json
+          go run ./cmd/sbxr-release qualification < acceptance-vps-result-facts.json > acceptance-vps-result-decision.json
+          target_tag="$(jq -r '.releases[0].tag' qualification-manifest.json)"
+          facts_sha256="$(sha256sum acceptance-vps-result-facts.json | cut -d' ' -f1)"
+          prior_decision_sha256="$(sha256sum qualification-manifest.json | cut -d' ' -f1)"
+          jq -e --arg tag "$target_tag" --arg facts "$facts_sha256" --arg prior "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "live89-evidence-correction-result" and .outcome == "accepted" and .facts_sha256 == $facts and .prior_decision_sha256 == $prior and (.records | length) == 1 and .records[0].tag == $tag and (.records[0].body | contains("RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION"))' acceptance-vps-result-decision.json >/dev/null
+          mkdir -m 0700 acceptance-records rechecked
+          jq -jr '.records[0].body' acceptance-vps-result-decision.json > "acceptance-records/$target_tag.md"
+          jq -cS '.releases[0]' qualification-manifest.json > expected-release.json
+          .github/scripts/recheck-qualified-release.sh expected-release.json rechecked release.json
+          jq -e '.draft == true and .prerelease == false' release.json >/dev/null
+          for architecture in amd64 arm64; do
+            python3 .github/scripts/live89-correction-review.py payload "rechecked/sbxr-linux-$architecture.tar.gz" > "live89-$architecture-payload.json"
+          done
+          secret_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|vless://|https://[^ /"[:space:]]+:8443/'
+          if grep -aERq "$secret_pattern" acceptance-records acceptance-vps-result-facts.json acceptance-vps-result-decision.json; then exit 1; elif test $? -ne 1; then exit 1; fi
+          gh release edit "$target_tag" --draft --notes-file "acceptance-records/$target_tag.md"
+          cat "acceptance-records/$target_tag.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installer-updater-acceptance-${{ github.run_id }}
+          path: |
+            acceptance-records/
+            acceptance-vps-result-facts.json
+            acceptance-vps-result-decision.json
+            live89-correction-review.json
+            live89-*-payload.json
+            cmd/sbxr-release/testdata/live89-correction.json
+          if-no-files-found: error
+          retention-days: 90
+
   cleanup-unqualified:
-    if: always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'
-    needs: [preflight, drafts, sign, acceptance-vps, owner-exception]
+    if: always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success'
+    needs: [preflight, drafts, sign, acceptance-vps, owner-exception, live89-correction]
     runs-on: ubuntu-24.04
     permissions:
       actions: read

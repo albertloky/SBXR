@@ -35,7 +35,7 @@ func TestLateConfirmationWorkflowBinding(t *testing.T) {
 		t.Fatal("preflight and result must independently reproduce source review")
 	}
 	// Existing job partition keeps the exception out of VPS/CA/Karing execution.
-	if !strings.Contains(workflow, `if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception }}`) {
+	if !strings.Contains(workflow, `if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}`) {
 		t.Fatal("exception would run live journey")
 	}
 	data, err = os.ReadFile(".github/workflows/stable.yml")

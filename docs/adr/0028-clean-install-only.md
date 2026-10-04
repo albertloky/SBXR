@@ -45,3 +45,15 @@ installer over existing state. Without that proof, retain a non-Latest candidate
 No local check is a packaged live pass or permission to build, sign, upload,
 install, publish, commit, push or tag a new candidate. Changed source requires a
 new reviewed candidate commit and new qualification evidence.
+
+## Bounded live89 recording correction
+
+[ADR-0029](0029-live89-operator-recording-correction.md) permits only
+v3.1.90/168 to reuse the Owner-accepted v3.1.89/167 HTTP evidence after the
+operator's erroneous cleanup interpretation. Its signed `live89_correction_review`
+requires unchanged installed source/build inputs and identical unstamped
+executable payloads, plus the exact approved archive. It has no `owner_exception`
+and changes no incoming-source policy. Original failure/burn history, fresh native
+qualification, attestations and separate publication approval remain required.
+This one-target correction does not relax ordinary live qualification for other
+releases or admit changed product source.

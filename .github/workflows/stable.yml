@@ -71,6 +71,10 @@ jobs:
 
           manifest=verified/qualification-manifest.json
           git fetch --force --tags origin
+          if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
+            python3 .github/scripts/live89-correction-review.py "$run_sha" > verified/live89-correction-review.json
+            jq -e --slurpfile review verified/live89-correction-review.json '.v3_attempt.live89_correction_review == $review[0]' "$manifest" >/dev/null
+          fi
           for tag in $(git tag --list 'release-burned/*'); do git tag -l --format='%(contents)' "$tag"; done | jq -s 'sort_by(.original_tag)' > verified/burned.json
           printf '[]' > verified/releases.json
           mkdir -m 0700 verified/release verified/records
@@ -95,6 +99,11 @@ jobs:
             mv verified/releases.next verified/releases.json
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
             go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
+            if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
+              for architecture in amd64 arm64; do
+                python3 .github/scripts/live89-correction-review.py payload "$directory/sbxr-linux-$architecture.tar.gz" > "$directory/live89-$architecture-payload.json"
+              done
+            fi
           done
           latest_tag=null
           latest_release_id=null
@@ -324,6 +333,9 @@ jobs:
             go run ./cmd/sbxr-release qualification < stable-v3-finalization-facts.json > stable-v3-finalization-decision.json
             facts_sha256="$(sha256sum stable-v3-finalization-facts.json | cut -d' ' -f1)"
             live_result=Passed
+            if jq -e '.v3_attempt.live89_correction_review != null' verified/qualification-manifest.json >/dev/null; then
+              printf '%s\n' 'Prior v3.1.89 live evidence accepted by recording correction; no fresh live run. Original failed workflow and burn preserved.' >> "$GITHUB_STEP_SUMMARY"
+            fi
             if test "$(jq -r '.v3_attempt.owner_exception // ""' verified/qualification-manifest.json)" = owner-approved-v3.1.0-sequence-83; then live_result='Not performed; waived by Owner for this release'; fi
             if test "$(jq -r '.v3_attempt.owner_exception // ""' verified/qualification-manifest.json)" = owner-approved-r24-late-confirmation-2026-09-24; then live_result='Prior v3.1.80 live evidence reused by Owner exception; no fresh live run'; fi
             jq -e --arg live "$live_result" --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-v3-finalization" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and .public_verification == "Passed" and .v3_packaged_live == $live and .complete_removal == $live and (.actions | length) == 0' stable-v3-finalization-decision.json >/dev/null

@@ -108,6 +108,8 @@ func runQualification(input io.Reader, output io.Writer) error {
 		decision, err = evaluateOwnerException(document)
 	case lateConfirmationStage:
 		decision, err = evaluateLateConfirmation(document)
+	case live89CorrectionStage:
+		decision, err = evaluateLive89Correction(document)
 	case stablePreflightStage:
 		var facts stablePreflightFacts
 		if !decodeCanonical(document, &facts) {
