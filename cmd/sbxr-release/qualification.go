@@ -25,6 +25,7 @@ const (
 	stablePreflightStage               = "stable-preflight"
 	stablePublicationStage             = "stable-publication"
 	stablePublicationVerificationStage = "stable-publication-verification"
+	stablePublicationRecordStage       = "stable-publication-record-verification"
 	stableV3FinalizationStage          = "stable-v3-finalization"
 	stableNoUpdateStage                = "stable-no-update"
 	stableFailureStage                 = "stable-failure-finalization"
@@ -128,6 +129,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return errors.New("qualification facts refused")
 		}
 		decision, err = evaluateStablePublicationVerification(facts, document)
+	case stablePublicationRecordStage:
+		var facts stablePublicationRecordFacts
+		if !decodeCanonical(document, &facts) {
+			return errors.New("qualification facts refused")
+		}
+		decision, err = evaluateStablePublicationRecord(facts, document)
 	case stableV3FinalizationStage:
 		var facts stableV3FinalizationFacts
 		if !decodeCanonical(document, &facts) {

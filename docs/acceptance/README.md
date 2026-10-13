@@ -74,5 +74,5 @@ The following paths deliberately remain here rather than being moved for tidines
 | [v3-packaged-live.md](v3-packaged-live.md) | Versioned historical contracts and workflow checklist digest input |
 | [Source-upgrade investigation](344-packaged-source-upgrade-investigation.md) | Linked by the unchanged packaged checklist; historical negative evidence |
 | [Snapshot recovery runbook](v3.1.75-snapshot-recovery-runbook.md) | Exact one-time maintenance procedure exercised by a regression test |
-| [MVP procedure](mvp-live-acceptance.md), [log-parent plan](mvp-protected-log-parent-2026-09-19.md) | Current procedure and executable handoffs consumed by tests |
+| [Retained MVP procedure](mvp-live-acceptance.md), [log-parent plan](mvp-protected-log-parent-2026-09-19.md) | Historical HTTPS procedure and executable handoffs consumed by tests |
 | [Late-confirmation decision](late-confirmation-exception-2026-09-24.md) | Exact exception context linked by ADR-0024 |

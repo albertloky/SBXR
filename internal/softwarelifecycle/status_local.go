@@ -33,10 +33,6 @@ type filesystemInspector struct {
 	updateAdmission        UpdateAdmission
 }
 
-func newLocalInspector(root string, uid uint32) localInspector {
-	return filesystemInspector{root: root, uid: uid}
-}
-
 func (inspector filesystemInspector) inspect(ctx context.Context) localInspection {
 	if ctx.Err() != nil {
 		return localInspection{}

@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+func newLocalInspector(root string, uid uint32) localInspector {
+	return filesystemInspector{root: root, uid: uid}
+}
+
 func TestStatusUsesVerifiedProductionFileAndLockFacts(t *testing.T) {
 	root := t.TempDir()
 	evidence := installedEvidence(t, ReleaseIdentity{Repository: Repository, Tag: "v2.0.0", Commit: strings.Repeat("a", 40), IndexSHA256: strings.Repeat("b", 64)}, 17, AMD64)

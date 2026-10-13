@@ -5,7 +5,6 @@ at its actual rename syscall. External ipify/snap fixtures live in the Go test.
 """
 import ctypes
 import errno
-import fcntl
 import hashlib
 import json
 import os

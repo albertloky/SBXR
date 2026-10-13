@@ -91,10 +91,10 @@ if __name__ == '__main__':
     try:
         if len(sys.argv) == 2:
             result = review(sys.argv[1])
-        elif len(sys.argv) == 3 and sys.argv[1] == 'payload':
-            result = payload(sys.argv[2], git('rev-parse', 'HEAD').decode().strip())
+        elif len(sys.argv) == 4 and sys.argv[1] == 'payload':
+            result = payload(sys.argv[2], sys.argv[3])
         else:
-            raise ValueError('usage: live89-correction-review.py FULL_COMMIT | payload ARCHIVE')
+            raise ValueError('usage: live89-correction-review.py FULL_COMMIT | payload ARCHIVE FULL_COMMIT')
         print(json.dumps(result, sort_keys=True, separators=(',', ':')), end='')
     except (ValueError, OSError, tarfile.TarError, subprocess.CalledProcessError) as error:
         sys.exit(f'Live89 correction applicability refused: {error}')

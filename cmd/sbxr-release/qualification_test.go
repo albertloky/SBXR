@@ -360,6 +360,7 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 		"observation": map[string]any{"assets": observedAssets, "attestation": nil, "body": action["body"], "commit": action["commit"], "downloads": action["assets"], "draft": true, "immutable": false, "latest_install_sha256": "", "latest_release_id": 7, "prerelease": false, "public_verification": nil, "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]},
 		"observed_at": "2026-08-27T01:01:00Z", "preflight_decision": jsonValue(t, string(stableDecision)), "preflight_facts": stableFacts, "prior_decision_sha256": sha256String(string(stableDecision)), "prior_verification_decision": nil, "prior_verification_facts": nil, "schema": qualificationFactsSchema, "stage": "stable-publication",
 	}
+	bindPublicationApprovalFixture(t, publicationFacts)
 	if publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts)); publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
 		t.Fatalf("V3 stable publication = %s, %v", publicationDecision, publicationErr)
 	}
@@ -1241,6 +1242,7 @@ func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testi
 				"prior_decision_sha256": priorDecisionSHA256, "prior_verification_decision": priorVerificationDecision, "prior_verification_facts": priorVerificationFacts,
 				"schema": qualificationFactsSchema, "stage": "stable-publication",
 			}
+			bindPublicationApprovalFixture(t, publicationFacts)
 			publicationDocument := qualificationDocument(t, publicationFacts)
 			publicationDecision, err := runQualificationCommand(binary, publicationDocument)
 			if err != nil {

@@ -56,6 +56,62 @@ class ProtocolError(Exception):
         self.code = code
 
 
+class DarwinSiginfo(ctypes.Structure):
+    _fields_ = [("si_signo", ctypes.c_int), ("si_errno", ctypes.c_int),
+                ("si_code", ctypes.c_int), ("si_pid", ctypes.c_int),
+                ("si_uid", ctypes.c_uint), ("si_status", ctypes.c_int),
+                ("si_addr", ctypes.c_void_p), ("si_value", ctypes.c_void_p),
+                ("si_band", ctypes.c_long), ("pad", ctypes.c_ulong * 7)]
+
+
+def child_exited(pid):
+    """Observe our waitable child without releasing its PID identity."""
+    if hasattr(os, "waitid"):
+        return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+    if sys.platform == "darwin":
+        # Some macOS Python builds omit os.waitid; the native ABI supplies it.
+        waitid = ctypes.CDLL(None, use_errno=True).waitid
+        waitid.argtypes = [ctypes.c_int, ctypes.c_uint,
+                           ctypes.POINTER(DarwinSiginfo), ctypes.c_int]
+        waitid.restype = ctypes.c_int
+        info = DarwinSiginfo()
+        if waitid(1, pid, ctypes.byref(info), os.WEXITED | os.WNOHANG | os.WNOWAIT) < 0:  # P_PID
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        return info.si_pid == pid
+    return False
+
+
+def darwin_lone_exited_child(process, deadline):
+    """Prove EPERM came from a group containing only our unreaped zombie."""
+    if sys.platform != "darwin" or process.returncode is not None:
+        return False
+    try:
+        while not child_exited(process.pid):
+            # proc_find can stop finding an exiting child before waitid sees
+            # SZOMB. Wait without reaping only through that proved transition.
+            try:
+                os.getpgid(process.pid)
+            except ProcessLookupError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                time.sleep(min(0.01, remaining))
+            else:
+                return False
+        listpids = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True).proc_listpids
+        listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32,
+                            ctypes.c_void_p, ctypes.c_int]
+        listpids.restype = ctypes.c_int
+        # Two slots suffice to refuse any group with another member; a full
+        # buffer is never accepted as proof of a lone child.
+        pids = (ctypes.c_int * 2)()
+        size = listpids(2, process.pid, pids, ctypes.sizeof(pids))  # PROC_PGRP_ONLY
+        return size == ctypes.sizeof(ctypes.c_int) and pids[0] == process.pid
+    except (OSError, AttributeError):
+        return False
+
+
 def kill_adopted_children():
     """Signal only this dedicated controller's children, binding PID identity."""
     own = os.getpid()
@@ -170,11 +226,8 @@ class MenuSession:
             stderr=subprocess.DEVNULL, bufsize=0, start_new_session=True,
         )
         def owner_exited():
-            if not hasattr(os, "waitid"):
-                return False
             try:
-                return os.waitid(os.P_PID, self.process.pid,
-                                 os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+                return child_exited(self.process.pid)
             except ChildProcessError:
                 return True
         self.stream = LineStream(self.process.stdout, sink, self.cancelled, owner_exited)
@@ -295,7 +348,7 @@ class MenuSession:
                 raise ProtocolError("result-mismatch")
 
     def finish(self):
-        if not hasattr(os, "waitid"):
+        if not hasattr(os, "waitid") and sys.platform != "darwin":
             remaining = max(0.01, self.deadline - time.monotonic())
             try:
                 code = self.process.wait(timeout=remaining)
@@ -315,8 +368,7 @@ class MenuSession:
                 raise InterruptedError("menu session interrupted")
             if time.monotonic() >= self.deadline:
                 raise ProtocolError("exit-deadline")
-            if os.waitid(os.P_PID, self.process.pid,
-                         os.WEXITED | os.WNOHANG | os.WNOWAIT):
+            if self.stream.owner_exited():
                 break
             time.sleep(0.01)
         code = self.stop()
@@ -326,6 +378,12 @@ class MenuSession:
     def stop(self):
         if self.cleaned:
             return self.returncode
+        if self.process.returncode is not None:
+            raise ProtocolError("process-ownership")
+        try:
+            child_exited(self.process.pid)
+        except ChildProcessError as error:
+            raise ProtocolError("process-ownership") from error
         # Do not poll/reap the leader before signaling: its unreaped PID keeps
         # the owned process-group identity from being recycled.
         if self.protected_wrapper:
@@ -348,12 +406,19 @@ class MenuSession:
                 if self.stream.owner_exited():
                     break
                 time.sleep(0.01)
+        cleanup_deadline = time.monotonic() + 5
         try:
             os.killpg(self.process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # Darwin excludes zombies from group signalling and reports EPERM
+            # if no signalable member remains. Never ignore a live/unknown group.
+            if not darwin_lone_exited_child(self.process, cleanup_deadline):
+                raise
         try:
-            code = self.process.wait(timeout=5)
+            remaining = max(0, cleanup_deadline - time.monotonic()) if sys.platform == "darwin" else 5
+            code = self.process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             raise ProtocolError("process-cleanup")
         if not sys.platform.startswith("linux"):

@@ -33,6 +33,31 @@ with the retained [five-journey procedure](../../docs/acceptance/mvp-live-accept
 Historical V4 producer code is retired; its records remain readable through the
 current validators and the source can be retrieved from commit `0859e96`.
 
+## Publication eligibility after main drift
+
+Stable preflight validates the existing exact qualification chain before treating
+main drift as `pending-review`. Its `review-stable-release` actions retain the
+candidate/assets and authorize only review. The optional `main_review` binds
+`candidate_commit`, `reviewed_main`, `divergence_sha256`, `security_assessment`
+and the evidence-applicability `rationale`. The helper
+`.github/scripts/release-main-review.py` reproduces the committed divergence.
+
+The workflow's `reviewed_main`, `security_assessment` and `divergence_rationale`
+inputs prepare the review; its separate protected `stable-publication` approval
+binds the stable-preflight facts/decision in the existing `approval.decision_chain`.
+Publication facts carry fresh `remote_main`. Only `no-security-fixes-missing` for
+the exact reviewed main can advance a divergent candidate. Further main drift or
+stale approval returns `pending-review` with no publication actions. The workflow
+also rechecks main immediately before each publication request and skips burn and
+finalization on a review pause. Actual failures and abandonment keep their burn
+handling. Current publication and propagation verification always require fresh
+main and bound approval. Historical accepted publication records use the explicit
+`stable-publication-record-verification` stage, which takes canonical
+`publication_verification_facts` and `publication_verification_decision`, returns
+`accepted-record` with no actions, and cannot authorize publication or propagation.
+Omitting current fields does not select that route. Acceptance Records and public
+readers are unchanged. See [ADR-0030](../../docs/adr/0030-reviewed-release-main-divergence.md).
+
 ## Approved r24 supplement
 
 The `qualification` JSON interface also accepts stage
@@ -76,7 +101,7 @@ it does not accept caller-supplied replacement pins or an Owner exception.
 
 The approved inputs are retained in `testdata/live89-correction.json`.
 `.github/scripts/live89-correction-review.py` reproduces the exact Git source
-review; its `payload ARCHIVE` mode verifies the fresh archive's canonical
+review; its `payload ARCHIVE FULL_COMMIT` mode verifies the fresh archive's canonical
 identity trailer and its pinned unstamped payload. The target must be the
 reviewed committed source, rather than the current dirty working tree.
 

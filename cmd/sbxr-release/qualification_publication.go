@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -49,6 +50,7 @@ type stablePreflightFacts struct {
 	ChecklistSHA256     string                     `json:"checklist_sha256"`
 	LatestReleaseID     *int64                     `json:"latest_release_id"`
 	LatestTag           *string                    `json:"latest_tag"`
+	MainReview          *stableMainReview          `json:"main_review,omitempty"`
 	ManifestAttested    bool                       `json:"manifest_attested"`
 	ObservedAt          string                     `json:"observed_at"`
 	Releases            []stableReleaseObservation `json:"releases"`
@@ -57,6 +59,14 @@ type stablePreflightFacts struct {
 	SignedManifest      json.RawMessage            `json:"signed_manifest"`
 	Stage               string                     `json:"stage"`
 	SubscriptionHistory *v3ReleaseHistory          `json:"subscription_history,omitempty"`
+}
+
+type stableMainReview struct {
+	CandidateCommit    string `json:"candidate_commit"`
+	DivergenceSHA256   string `json:"divergence_sha256"`
+	Rationale          string `json:"rationale"`
+	ReviewedMain       string `json:"reviewed_main"`
+	SecurityAssessment string `json:"security_assessment"`
 }
 
 type publishStableReleaseAction struct {
@@ -122,6 +132,7 @@ type stablePublicationFacts struct {
 	PriorDecisionSHA256       string                       `json:"prior_decision_sha256"`
 	PriorVerificationDecision json.RawMessage              `json:"prior_verification_decision"`
 	PriorVerificationFacts    json.RawMessage              `json:"prior_verification_facts"`
+	RemoteMain                string                       `json:"remote_main,omitempty"`
 	Schema                    string                       `json:"schema"`
 	Stage                     string                       `json:"stage"`
 	SubscriptionHistory       *v3ReleaseHistory            `json:"subscription_history,omitempty"`
@@ -156,6 +167,13 @@ type stablePublicationVerificationDecision struct {
 	PriorDecisionSHA256 string            `json:"prior_decision_sha256"`
 	Schema              string            `json:"schema"`
 	Stage               string            `json:"stage"`
+}
+
+type stablePublicationRecordFacts struct {
+	PublicationVerificationDecision json.RawMessage `json:"publication_verification_decision"`
+	PublicationVerificationFacts    json.RawMessage `json:"publication_verification_facts"`
+	Schema                          string          `json:"schema"`
+	Stage                           string          `json:"stage"`
 }
 
 type stableV3FinalizationFacts struct {
@@ -280,7 +298,10 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	}
 	manifest, err := evaluateQualificationBoundary(boundaryFacts)
 	manifestBytes, manifestBytesErr := marshalCanonical(manifest)
-	if err != nil || manifestBytesErr != nil || !bytes.Equal(facts.SignedManifest, manifestBytes) || facts.ChecklistSHA256 != manifest.AcceptanceVPSChecklistSHA256 || facts.RemoteMain != manifest.Workflow.Commit || facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) {
+	if err != nil || manifestBytesErr != nil || !bytes.Equal(facts.SignedManifest, manifestBytes) || facts.ChecklistSHA256 != manifest.AcceptanceVPSChecklistSHA256 || facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) {
+		return refused()
+	}
+	if review := facts.MainReview; review != nil && (review.CandidateCommit != manifest.Workflow.Commit || !validCommit(review.ReviewedMain) || !validSHA256(review.DivergenceSHA256) || strings.TrimSpace(review.Rationale) == "" || (review.SecurityAssessment != "unreviewed" && review.SecurityAssessment != "no-security-fixes-missing" && review.SecurityAssessment != "security-fixes-missing")) {
 		return refused()
 	}
 	var verificationFacts candidateDraftVerificationFacts
@@ -357,10 +378,22 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		}
 		actions[index] = publishStableReleaseAction{Assets: release.Assets, Body: recordsByTag[release.Tag], Commit: release.Commit, Draft: false, FactsSHA256: factsSHA256, FailureReason: failureReason, Immutable: true, Latest: true, ObservedAt: facts.ObservedAt, Prerelease: false, PriorDecisionSHA256: priorDecisionSHA256, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "publish-stable-release"}
 	}
-	return stablePublicationDecision{Actions: actions, FactsSHA256: factsSHA256, Outcome: "actions-required", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePreflightStage}, nil
+	outcome := "actions-required"
+	if facts.RemoteMain != manifest.Workflow.Commit {
+		outcome = "pending-review"
+		for index := range actions {
+			actions[index].Type = "review-stable-release"
+		}
+	}
+	return stablePublicationDecision{Actions: actions, FactsSHA256: factsSHA256, Outcome: outcome, PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePreflightStage}, nil
 }
 
 func evaluateStablePublication(facts stablePublicationFacts, document []byte) (stablePublicationDecision, error) {
+	return replayStablePublication(facts, document, false)
+}
+
+// Record replay is reachable only through the explicit, action-free record verifier.
+func replayStablePublication(facts stablePublicationFacts, document []byte, recordOnly bool) (stablePublicationDecision, error) {
 	refused := func() (stablePublicationDecision, error) {
 		return stablePublicationDecision{}, errors.New("stable publication refused")
 	}
@@ -387,7 +420,7 @@ func evaluateStablePublication(facts stablePublicationFacts, document []byte) (s
 		if !decodeCanonical(facts.PriorVerificationFacts, &priorFacts) {
 			return refused()
 		}
-		prior, err := evaluateStablePublicationVerification(priorFacts, facts.PriorVerificationFacts)
+		prior, err := replayStablePublicationVerification(priorFacts, facts.PriorVerificationFacts, recordOnly)
 		priorBytes, marshalErr := marshalCanonical(prior)
 		var priorPublicationFacts stablePublicationFacts
 		if err != nil || marshalErr != nil || !bytes.Equal(priorBytes, facts.PriorVerificationDecision) || prior.Outcome != "accepted" || !decodeCanonical(priorFacts.PublicationFacts, &priorPublicationFacts) || priorPublicationFacts.ActionIndex != facts.ActionIndex-1 || !bytes.Equal(priorPublicationFacts.PreflightFacts, facts.PreflightFacts) || !bytes.Equal(priorPublicationFacts.PreflightDecision, facts.PreflightDecision) {
@@ -400,7 +433,19 @@ func evaluateStablePublication(facts stablePublicationFacts, document []byte) (s
 	if facts.PriorDecisionSHA256 != priorDecisionSHA256 || !validStablePublicationObservation(facts.Observation, preflight.Actions[facts.ActionIndex], expectedLatestReleaseID, false) {
 		return refused()
 	}
+	legacy := recordOnly && facts.RemoteMain == "" && len(facts.Approval.DecisionChain) == 0 && preflight.Outcome == "actions-required" && preflightFacts.MainReview == nil
+	if !legacy {
+		if !validCommit(facts.RemoteMain) {
+			return refused()
+		}
+		chain := []decisionChainEntry{{DecisionSHA256: documentSHA256(facts.PreflightDecision), FactsSHA256: documentSHA256(facts.PreflightFacts), Outcome: preflight.Outcome, Stage: stablePreflightStage}}
+		review := preflightFacts.MainReview
+		if facts.RemoteMain != preflightFacts.RemoteMain || !reflect.DeepEqual(facts.Approval.DecisionChain, chain) || (preflight.Outcome == "pending-review" && (review == nil || review.ReviewedMain != facts.RemoteMain || review.SecurityAssessment != "no-security-fixes-missing")) {
+			return stablePublicationDecision{Actions: []publishStableReleaseAction{}, FactsSHA256: documentSHA256(document), Outcome: "pending-review", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePublicationStage}, nil
+		}
+	}
 	action := preflight.Actions[facts.ActionIndex]
+	action.Type = "publish-stable-release"
 	action.FactsSHA256 = documentSHA256(document)
 	action.PriorDecisionSHA256 = priorDecisionSHA256
 	action.ObservedAt = facts.ObservedAt
@@ -421,6 +466,10 @@ func verifiedStablePreflight(factsDocument, decisionDocument []byte) (stablePubl
 }
 
 func evaluateStablePublicationVerification(facts stablePublicationVerificationFacts, document []byte) (stablePublicationVerificationDecision, error) {
+	return replayStablePublicationVerification(facts, document, false)
+}
+
+func replayStablePublicationVerification(facts stablePublicationVerificationFacts, document []byte, recordOnly bool) (stablePublicationVerificationDecision, error) {
 	refused := func() (stablePublicationVerificationDecision, error) {
 		return stablePublicationVerificationDecision{}, errors.New("stable publication verification refused")
 	}
@@ -432,7 +481,7 @@ func evaluateStablePublicationVerification(facts stablePublicationVerificationFa
 	if !decodeCanonical(facts.PublicationFacts, &publicationFacts) {
 		return refused()
 	}
-	publication, err := evaluateStablePublication(publicationFacts, facts.PublicationFacts)
+	publication, err := replayStablePublication(publicationFacts, facts.PublicationFacts, recordOnly)
 	publicationBytes, marshalErr := marshalCanonical(publication)
 	if err != nil || marshalErr != nil || !bytes.Equal(publicationBytes, facts.PublicationDecision) || facts.PriorDecisionSHA256 != documentSHA256(facts.PublicationDecision) || len(publication.Actions) != 1 {
 		return refused()
@@ -449,6 +498,9 @@ func evaluateStablePublicationVerification(facts stablePublicationVerificationFa
 		decision.Outcome = "accepted"
 		return decision, nil
 	}
+	if recordOnly {
+		return refused()
+	}
 	if facts.Attempt == 60 || age >= 5*time.Minute {
 		decision.Outcome = "propagation-exhausted"
 		return decision, nil
@@ -459,6 +511,22 @@ func evaluateStablePublicationVerification(facts stablePublicationVerificationFa
 	decision.Outcome = "propagation-pending"
 	decision.Actions = []json.RawMessage{mustJSON(observeStableReleaseAction{Commit: action.Commit, FactsSHA256: decision.FactsSHA256, PriorDecisionSHA256: facts.PriorDecisionSHA256, ReleaseID: action.ReleaseID, ReleaseIdentity: action.ReleaseIdentity, Tag: action.Tag, Type: "observe-stable-release", WaitSeconds: 5})}
 	return decision, nil
+}
+
+func evaluateStablePublicationRecord(facts stablePublicationRecordFacts, document []byte) (stablePublicationVerificationDecision, error) {
+	refused := func() (stablePublicationVerificationDecision, error) {
+		return stablePublicationVerificationDecision{}, errors.New("stable publication record refused")
+	}
+	var recordedFacts stablePublicationVerificationFacts
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationRecordStage || secretBearing(document) || !decodeCanonical(facts.PublicationVerificationFacts, &recordedFacts) {
+		return refused()
+	}
+	recorded, err := replayStablePublicationVerification(recordedFacts, facts.PublicationVerificationFacts, true)
+	canonical, marshalErr := marshalCanonical(recorded)
+	if err != nil || marshalErr != nil || recorded.Outcome != "accepted" || len(recorded.Actions) != 0 || !bytes.Equal(canonical, facts.PublicationVerificationDecision) {
+		return refused()
+	}
+	return stablePublicationVerificationDecision{Actions: []json.RawMessage{}, FactsSHA256: documentSHA256(document), Outcome: "accepted-record", PriorDecisionSHA256: documentSHA256(facts.PublicationVerificationDecision), Schema: qualificationDecisionSchema, Stage: stablePublicationRecordStage}, nil
 }
 
 func evaluateStableV3Finalization(facts stableV3FinalizationFacts, document []byte) (stableV3FinalizationDecision, error) {

@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import struct
 import subprocess
 import tarfile
@@ -113,6 +114,37 @@ class ReviewTest(unittest.TestCase):
                 self.assertEqual(identity['payload_sha256'], self.review.PAYLOADS[architecture])
                 self.assertEqual(identity['tag'], 'v3.1.90')
                 self.assertEqual(identity['sequence'], 168)
+
+    def test_stable_workflow_checks_candidate_payload_after_documentation_main_drift(self):
+        workflow = (SCRIPT.parents[1] / 'workflows/stable.yml').read_text()
+        command = next(line.strip() for line in workflow.splitlines()
+                       if 'live89-correction-review.py payload' in line)
+        archive = self.archive(self.executable()).resolve()
+        self.write('README.md', 'documentation-only newer main\n')
+        self.git('add', 'README.md')
+        self.git('commit', '-qm', 'documentation-only newer main')
+        current_main = self.git('rev-parse', 'HEAD').decode().strip()
+        self.assertNotEqual(current_main, self.target)
+        self.assertEqual(self.review.review(self.target)['target_commit'], self.target)
+        # Exercise the real CLI and workflow invocation with only synthetic pins.
+        source = SCRIPT.read_text()
+        pins = '\n'.join(f'{name} = {getattr(self.review, name)!r}'
+                         for name in ('BASE', 'TREE', 'EVIDENCE', 'PAYLOADS'))
+        self.write('.github/scripts/live89-correction-review.py',
+                   source.replace("\nif __name__ == '__main__':", '\n' + pins + "\nif __name__ == '__main__':"))
+        prefix = ('set -euo pipefail\narchitecture=amd64\n' +
+                  f'directory={shlex.quote(str(archive.parent))}\nrun_sha={self.target}\n')
+        result = subprocess.run(['bash', '-c', prefix + command], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = json.loads(Path('live89-amd64-payload.json').read_text())
+        self.assertEqual(actual['commit'], self.target)
+        self.assertEqual(actual['payload_sha256'], self.review.PAYLOADS['amd64'])
+        for commit in (None, current_main):
+            args = ['python3', '.github/scripts/live89-correction-review.py', 'payload', str(archive)]
+            if commit is not None:
+                args.append(commit)
+            result = subprocess.run(args, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, 'missing/substituted candidate SHA accepted')
 
     def test_changed_payload_refuses_even_with_matching_identity_digest(self):
         self.raw_payload = b'changed executable fixture'

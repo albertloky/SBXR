@@ -18,6 +18,7 @@ general publication waiver. See the [acceptance guide](../acceptance/README.md).
 
 ## Current V3 and scoped release decisions
 
+- [0030 — Review main divergence before publishing an exact candidate](0030-reviewed-release-main-divergence.md)
 - [0028 — Clean installation only](0028-clean-install-only.md)
 - [0029 — Correct live89 operator recording for one fresh target](0029-live89-operator-recording-correction.md)
 

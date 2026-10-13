@@ -531,6 +531,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 		"observation": map[string]any{"assets": observedAssets, "attestation": nil, "body": action["body"], "commit": action["commit"], "downloads": action["assets"], "draft": true, "immutable": false, "latest_install_sha256": "", "latest_release_id": source.ID, "prerelease": false, "public_verification": nil, "release_id": action["release_id"], "release_identity": action["release_identity"], "sequence": action["sequence"], "tag": action["tag"]},
 		"observed_at": "2026-09-02T00:01:00Z", "preflight_decision": jsonValue(t, string(stableDecision)), "preflight_facts": stableFacts, "prior_decision_sha256": sha256String(string(stableDecision)), "prior_verification_decision": nil, "prior_verification_facts": nil, "schema": qualificationFactsSchema, "stage": "stable-publication", "subscription_history": scopeHistoryFixture(t, source),
 	}
+	bindPublicationApprovalFixture(t, publicationFacts)
 	publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts))
 	if publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
 		t.Fatalf("V3 stable publication = %s, %v", publicationDecision, publicationErr)

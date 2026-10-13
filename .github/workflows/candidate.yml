@@ -294,7 +294,7 @@ jobs:
           for target in amd64 arm64; do
             go run ./cmd/sbxr-release -tag "$TAG" -commit "$GITHUB_SHA" -sequence "$SEQUENCE" -architecture "$target" -output "release/sbxr-linux-$target.tar.gz"
             if test "$MODE" = v3 && jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
-              python3 .github/scripts/live89-correction-review.py payload "release/sbxr-linux-$target.tar.gz" > "evidence/live89-$target-payload.json"
+              python3 .github/scripts/live89-correction-review.py payload "release/sbxr-linux-$target.tar.gz" "$GITHUB_SHA" > "evidence/live89-$target-payload.json"
             fi
           done
           amd64_sha256="$(tar -xOzf release/sbxr-linux-amd64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
@@ -1118,7 +1118,7 @@ jobs:
           .github/scripts/recheck-qualified-release.sh expected-release.json rechecked release.json
           jq -e '.draft == true and .prerelease == false' release.json >/dev/null
           for architecture in amd64 arm64; do
-            python3 .github/scripts/live89-correction-review.py payload "rechecked/sbxr-linux-$architecture.tar.gz" > "live89-$architecture-payload.json"
+            python3 .github/scripts/live89-correction-review.py payload "rechecked/sbxr-linux-$architecture.tar.gz" "$GITHUB_SHA" > "live89-$architecture-payload.json"
           done
           secret_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|vless://|https://[^ /"[:space:]]+:8443/'
           if grep -aERq "$secret_pattern" acceptance-records acceptance-vps-result-facts.json acceptance-vps-result-decision.json; then exit 1; elif test $? -ne 1; then exit 1; fi

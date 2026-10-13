@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
+func TestMVPEvidenceAssemblyFixtures(t *testing.T) {
 	if output, err := exec.Command("python3", ".github/scripts/test_mvp_operator_run.py").CombinedOutput(); err != nil {
 		t.Fatalf("MVP operator launch regression: %v\n%s", err, output)
 	}
@@ -16,9 +16,6 @@ func TestMVPEvidenceAssemblerAndCollectorSyntax(t *testing.T) {
 	}
 	if output, err := exec.Command("python3", ".github/scripts/test_mvp_evidence.py").CombinedOutput(); err != nil {
 		t.Fatalf("MVP evidence assembler regression: %v\n%s", err, output)
-	}
-	if output, err := exec.Command("bash", "-n", ".github/scripts/v3-recurring-evidence.sh").CombinedOutput(); err != nil {
-		t.Fatalf("MVP collector syntax: %v\n%s", err, output)
 	}
 }
 

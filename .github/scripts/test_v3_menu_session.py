@@ -1,6 +1,7 @@
 """Focused subprocess tests for the shared same-process menu driver."""
 import ctypes
 import datetime as dt
+import errno
 import hashlib
 import importlib.util
 import io
@@ -131,6 +132,219 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                 finally:
                     session.stop()
                     session.process.stdout.close()
+
+
+class MenuSessionCleanupTest(unittest.TestCase):
+    def session(self, child="import sys; sys.stdin.read()"):
+        session = menu.MenuSession([sys.executable, "-c", child], io.BytesIO(),
+                                   time.monotonic() + 5)
+        self.addCleanup(self.dispose, session)
+        return session
+
+    def dispose(self, session):
+        if session.process.returncode is None:
+            try:
+                os.killpg(session.process.pid, signal.SIGKILL)
+            except PermissionError:
+                # The original macOS defect leaves a lone zombie to reap.
+                session.process.kill()
+            except ProcessLookupError:
+                pass
+            session.process.wait(timeout=5)
+        session.process.stdin.close()
+        session.process.stdout.close()
+
+    def await_exit(self, session):
+        # EOF can precede exit; observe the kernel without reaping the leader.
+        if not hasattr(os, "waitid") and sys.platform != "darwin":
+            self.skipTest("non-reaping exit observation requires Linux or macOS")
+        deadline = time.monotonic() + 3
+        while not menu.child_exited(session.process.pid):
+            self.assertLess(time.monotonic(), deadline, "fixture leader did not exit")
+            time.sleep(.01)
+
+    def test_exited_owned_child_cleanup_preserves_status_and_is_repeatable(self):
+        for operation in ("stop", "finish"):
+            for status in (0, 17):
+                with self.subTest(operation=operation, status=status):
+                    session = self.session("import sys; sys.stdin.read(); sys.exit(" + str(status) + ")")
+                    session.process.stdin.close()
+                    if sys.platform == "darwin":
+                        deadline = time.monotonic() + 3
+                        # Exercise the early exit boundary that preceded EPERM.
+                        while True:
+                            try:
+                                os.getpgid(session.process.pid)
+                            except ProcessLookupError:
+                                break
+                            self.assertLess(time.monotonic(), deadline, "fixture leader did not start exiting")
+                    else:
+                        self.await_exit(session)
+                    if operation == "finish" and status:
+                        with self.assertRaisesRegex(menu.ProtocolError, "process-failed"):
+                            session.finish()
+                    else:
+                        getattr(session, operation)()
+                    self.assertEqual(session.stop(), status)
+                    self.assertEqual(session.process.returncode, status)
+                    with self.assertRaises(ChildProcessError):
+                        os.waitpid(session.process.pid, os.WNOHANG)
+
+    def test_reaped_leader_never_signals_a_potentially_reused_group(self):
+        for reaper in ("popen", "external"):
+            with self.subTest(reaper=reaper):
+                session = self.session()
+                session.process.stdin.close()
+                if reaper == "popen":
+                    self.assertEqual(session.process.wait(timeout=3), 0)
+                else:
+                    self.assertEqual(os.waitpid(session.process.pid, 0)[1], 0)
+                try:
+                    with patch.object(menu.os, "killpg", side_effect=AssertionError("reaped group signalled")):
+                        with self.assertRaisesRegex(menu.ProtocolError, "process-ownership"):
+                            session.stop()
+                finally:
+                    # Mark an externally reaped fixture even after a red assertion,
+                    # so disposal cannot signal a potentially recycled group.
+                    session.process.wait(timeout=3)
+
+    def test_live_child_permission_error_is_preserved(self):
+        session = self.session()
+        denied = PermissionError(errno.EPERM, "fixture signal denial")
+        with patch.object(menu.os, "killpg", side_effect=denied), \
+                patch.object(menu.time, "sleep", side_effect=AssertionError("live denial delayed")):
+            with self.assertRaises(PermissionError) as caught:
+                session.stop()
+        self.assertIs(caught.exception, denied)
+        self.assertFalse(session.cleaned)
+        self.assertIsNone(session.process.returncode)
+        self.assertEqual(session.stop(), -signal.SIGKILL)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin exit transition")
+    def test_unproved_exit_transition_expires_with_original_permission_error(self):
+        session = self.session()
+        denied = PermissionError(errno.EPERM, "fixture signal denial")
+        with patch.object(menu.os, "killpg", side_effect=denied), \
+                patch.object(menu.os, "getpgid", side_effect=ProcessLookupError(errno.ESRCH, "fixture lookup")), \
+                patch.object(menu.time, "monotonic", side_effect=[100, 105]), \
+                patch.object(menu.time, "sleep", side_effect=AssertionError("expired cleanup delayed")):
+            with self.assertRaises(PermissionError) as caught:
+                session.stop()
+        self.assertIs(caught.exception, denied)
+        self.assertFalse(session.cleaned)
+        self.assertIsNone(session.process.returncode)
+        self.assertEqual(session.stop(), -signal.SIGKILL)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin exit transition")
+    def test_reaping_during_exit_observation_preserves_original_permission_error(self):
+        session = self.session()
+        session.process.stdin.close()
+        self.await_exit(session)
+        denied = PermissionError(errno.EPERM, "fixture signal denial")
+        native_exit = menu.child_exited
+        observations = []
+        reaped = []
+        def observe(pid):
+            observations.append(pid)
+            return False if len(observations) == 2 else native_exit(pid)
+        def reap(_):
+            reaped.append(os.waitpid(session.process.pid, 0))
+        try:
+            with patch.object(menu.os, "killpg", side_effect=denied), \
+                    patch.object(menu, "child_exited", side_effect=observe), \
+                    patch.object(menu.time, "sleep", side_effect=reap):
+                with self.assertRaises(PermissionError) as caught:
+                    session.stop()
+            self.assertIs(caught.exception, denied)
+            self.assertFalse(session.cleaned)
+            self.assertEqual(reaped, [(session.process.pid, 0)])
+        finally:
+            if reaped:
+                # Never let disposal signal a PID whose wait ownership was lost.
+                session.process.wait(timeout=3)
+
+    def descendant_session(self):
+        child = ("import os,signal,sys,time\n"
+                 "sys.stdin.read()\n"
+                 "if os.fork() == 0:\n"
+                 " signal.alarm(5)\n"
+                 " print(os.getpid(),flush=True)\n"
+                 " while True: time.sleep(.01)\n"
+                 "os._exit(0)\n")
+        session = self.session(child)
+        session.process.stdin.close()
+        self.assertTrue(select.select([session.process.stdout], [], [], 3)[0])
+        descendant = int(session.process.stdout.readline())
+        self.await_exit(session)
+        return session, descendant
+
+    def assert_descendant_stopped(self, pid):
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                os.getpgid(pid)
+                if sys.platform.startswith("linux"):
+                    # An orphan zombie may await init; it is no longer running.
+                    if Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].startswith("Z "):
+                        return
+            except (ProcessLookupError, FileNotFoundError):
+                return
+            self.assertLess(time.monotonic(), deadline, "fixture descendant still running")
+            time.sleep(.01)
+
+    def test_exited_leader_still_terminates_same_group_descendant(self):
+        for operation in ("stop", "finish"):
+            with self.subTest(operation=operation):
+                session, descendant = self.descendant_session()
+                getattr(session, operation)()
+                self.assertEqual(session.stop(), 0)
+                self.assert_descendant_stopped(descendant)
+
+    def test_exited_owner_with_descendant_holding_pipe_is_reported_promptly(self):
+        session, descendant = self.descendant_session()
+        with self.assertRaisesRegex(menu.ProtocolError, "owner-exited"):
+            session.stream.line(time.monotonic() + 3)
+        self.assertEqual(session.stop(), 0)
+        self.assert_descendant_stopped(descendant)
+
+    def test_exited_leader_does_not_hide_live_descendant_permission_error(self):
+        session, descendant = self.descendant_session()
+        denied = PermissionError(errno.EPERM, "fixture descendant signal denial")
+        with patch.object(menu.os, "killpg", side_effect=denied):
+            with self.assertRaises(PermissionError) as caught:
+                session.stop()
+        self.assertIs(caught.exception, denied)
+        self.assertFalse(session.cleaned)
+        self.assertEqual(os.getpgid(descendant), session.process.pid)
+        self.assertEqual(session.stop(), 0)
+        self.assert_descendant_stopped(descendant)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin group inventory boundary")
+    def test_unproved_group_inventory_preserves_original_permission_error(self):
+        native_cdll = ctypes.CDLL
+        for size, member in ((-1, "leader"), (0, "leader"), (3, "leader"),
+                             (8, "leader"), (4, "other"), (None, "leader")):
+            with self.subTest(size=size, member=member):
+                session = self.session()
+                session.process.stdin.close()
+                self.await_exit(session)
+                denied = PermissionError(errno.EPERM, "fixture signal denial")
+                def listpids(kind, group, buffer, capacity):
+                    if size is None:
+                        raise PermissionError(errno.EPERM, "fixture inventory denial")
+                    buffer[0] = group if member == "leader" else os.getpid()
+                    return size
+                class Library:
+                    proc_listpids = staticmethod(listpids)
+                def library(path, **options):
+                    return Library() if path == "/usr/lib/libproc.dylib" else native_cdll(path, **options)
+                with patch.object(menu.ctypes, "CDLL", side_effect=library), \
+                        patch.object(menu.os, "killpg", side_effect=denied):
+                    with self.assertRaises(PermissionError) as caught:
+                        session.stop()
+                self.assertIs(caught.exception, denied)
+                self.assertFalse(session.cleaned)
+                self.assertEqual(session.stop(), 0)
 
 
 class MenuSessionDriverTest(unittest.TestCase):
