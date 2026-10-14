@@ -884,21 +884,9 @@ func removeBoundIfPresent(root *os.Root, name string, mode os.FileMode, links ui
 }
 
 func removeOneOfIfPresent(root *os.Root, name string, mode os.FileMode, links uint64, limit int64, digests ...string) error {
-	if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
+	_, present, err := readOptionalOneOfBoundFile(root, name, mode, links, limit, digests...)
+	if err != nil || !present {
 		return err
-	}
-	body, err := readRootFile(root, name, mode, links, limit)
-	if err != nil {
-		return err
-	}
-	matched := false
-	for _, digest := range digests {
-		matched = matched || digestBytes(body) == digest
-	}
-	if !matched {
-		return errors.New("bound update material changed")
 	}
 	return root.Remove(name)
 }

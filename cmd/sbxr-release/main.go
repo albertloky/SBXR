@@ -338,11 +338,7 @@ type releaseAssetSpec struct {
 func releaseAssetSpecs(names []string) []releaseAssetSpec {
 	specs := make([]releaseAssetSpec, 0, len(names))
 	for _, name := range names {
-		limit := int64(softwarelifecycle.MaxAssetBytes)
-		if name == "install.sh" || name == "release-index.json" {
-			limit = softwarelifecycle.MaxIndexBytes
-		}
-		specs = append(specs, releaseAssetSpec{name: name, limit: limit})
+		specs = append(specs, releaseAssetSpec{name: name, limit: releaseAssetLimit(name)})
 	}
 	return specs
 }

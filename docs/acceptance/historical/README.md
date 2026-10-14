@@ -2,7 +2,7 @@
 
 These documents describe their named release scopes. They are not the current
 MVP checklist and do not authorize fresh live work. Start current work with
-[MVP live acceptance](../mvp-live-acceptance.md).
+the [acceptance index](../README.md).
 
 | Historical task | Document |
 |---|---|

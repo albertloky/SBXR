@@ -43,15 +43,14 @@ type gatewayManifest struct {
 }
 
 type gatewayAsset struct {
-	name, digest string
-	size         int64
-	file         *os.File
-	identity     fs.FileInfo
+	digest   string
+	size     int64
+	file     *os.File
+	identity fs.FileInfo
 }
 
 type gatewayRelease struct {
 	tag, commit string
-	sequence    uint64
 	assets      map[string]*gatewayAsset
 }
 
@@ -107,10 +106,10 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 			return nil, errors.New("qualification release refused")
 		}
 		names := make([]string, 0, len(release.Assets))
-		bound := gatewayRelease{tag: release.Tag, commit: release.Commit, sequence: release.Sequence, assets: map[string]*gatewayAsset{}}
+		bound := gatewayRelease{tag: release.Tag, commit: release.Commit, assets: map[string]*gatewayAsset{}}
 		for _, asset := range release.Assets {
 			names = append(names, asset.Name)
-			if !validSHA256(asset.SHA256) || asset.Size <= 0 || asset.Size > gatewayAssetLimit(asset.Name) || bound.assets[asset.Name] != nil {
+			if !validSHA256(asset.SHA256) || asset.Size <= 0 || asset.Size > releaseAssetLimit(asset.Name) || bound.assets[asset.Name] != nil {
 				gateway.close()
 				return nil, errors.New("qualification asset refused")
 			}
@@ -128,7 +127,7 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 				gateway.close()
 				return nil, errors.New("qualification asset changed")
 			}
-			bound.assets[asset.Name] = &gatewayAsset{name: asset.Name, digest: asset.SHA256, size: asset.Size, file: file, identity: identity}
+			bound.assets[asset.Name] = &gatewayAsset{digest: asset.SHA256, size: asset.Size, file: file, identity: identity}
 		}
 		slices.Sort(names)
 		if !slices.Equal(names, gatewayAssetNames) || bound.assets["release-index.json"].digest != release.Identity.IndexSHA256 {
@@ -254,7 +253,7 @@ func (gateway *qualificationGateway) serveAsset(response http.ResponseWriter, as
 	_, _ = response.Write(body)
 }
 
-func gatewayAssetLimit(name string) int64 {
+func releaseAssetLimit(name string) int64 {
 	if name == "install.sh" || name == "release-index.json" {
 		return softwarelifecycle.MaxIndexBytes
 	}

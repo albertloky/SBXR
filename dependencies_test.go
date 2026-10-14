@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -69,6 +68,5 @@ func directoryNames(t *testing.T, root string) []string {
 			got = append(got, entry.Name())
 		}
 	}
-	sort.Strings(got)
 	return got
 }

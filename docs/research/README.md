@@ -5,8 +5,8 @@ catalogs. These notes inform implementation and documentation work, but they do
 not change product behavior, acceptance policy, or a release result.
 
 Use the [code map](../agents/code-map.md) for current implementation, and
-[ADR-0023](../adr/0023-mvp-live-acceptance.md) plus the
-[MVP procedure](../acceptance/mvp-live-acceptance.md) for current live scope.
+the [acceptance index](../acceptance/README.md) for current live scope and its
+HTTP procedure under [ADR-0028](../adr/0028-clean-install-only.md).
 Read the notes below only for the relevant background question.
 
 ## Dated codebase snapshots
