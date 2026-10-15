@@ -61,6 +61,15 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "verify-public-release" {
+		flags := flag.NewFlagSet("verify-public-release", flag.ContinueOnError)
+		tag := flags.String("tag", "", "exact immutable public release tag")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 || writePublicReleaseVerification(context.Background(), os.Stdout, githubadapter.New(), *tag) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr public release verification refused")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "qualification" {
 		if len(os.Args) != 2 || runQualification(os.Stdin, os.Stdout) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr release qualification refused")
@@ -163,6 +172,25 @@ func writePublicLatestVerification(ctx context.Context, output io.Writer, source
 		return errors.New("public latest verification refused")
 	}
 	latest, outcome := source.CheckLatest(ctx)
+	return writePublicVerification(output, latest, outcome)
+}
+
+type publicReleaseSource interface {
+	CheckRelease(context.Context, string) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome)
+}
+
+func writePublicReleaseVerification(ctx context.Context, output io.Writer, source publicReleaseSource, tag string) error {
+	if ctx == nil || output == nil || source == nil || !validTag(tag) {
+		return errors.New("public release verification refused")
+	}
+	release, outcome := source.CheckRelease(ctx, tag)
+	if outcome == softwarelifecycle.LatestReleaseAccepted && release.Identity.Tag != tag {
+		return errors.New("public release verification refused")
+	}
+	return writePublicVerification(output, release, outcome)
+}
+
+func writePublicVerification(output io.Writer, latest softwarelifecycle.LatestRelease, outcome softwarelifecycle.LatestReleaseOutcome) error {
 	result := publicLatestVerification{}
 	switch outcome {
 	case softwarelifecycle.LatestReleaseAccepted:

@@ -33,6 +33,20 @@ with the retained [five-journey procedure](../../docs/acceptance/mvp-live-accept
 Historical V4 producer code is retired; its records remain readable through the
 current validators and the source can be retrieved from commit `0859e96`.
 
+## Public release verification
+
+`verify-public-latest` checks canonical Latest through the production GitHub
+Adapter. Repository-only `verify-public-release -tag vX.Y.Z` applies the same
+checks to an exact immutable public stable tag for failure cleanup; it does not
+change installed-software discovery. Both emit the existing `outcome`,
+`release_identity` and `sequence` JSON fields. A refused or unavailable result
+still exits successfully when the result was written, so callers must require
+`outcome: accepted` and the expected full identity and sequence.
+
+[ADR-0031](../../docs/adr/0031-equivalent-native-release-proofs.md)
+permits equivalent native proofs while retaining signature and byte checks.
+This verification policy does not qualify a live release.
+
 ## Publication eligibility after main drift
 
 Stable preflight validates the existing exact qualification chain before treating

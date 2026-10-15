@@ -92,6 +92,16 @@ func (source Source) CheckLatest(ctx context.Context) (softwarelifecycle.LatestR
 	return latest, outcome
 }
 
+// CheckRelease verifies an exact immutable public tag for repository publication
+// cleanup. Installed-software discovery continues to use CheckLatest only.
+func (source Source) CheckRelease(ctx context.Context, tag string) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {
+	if !immutableTagPattern.MatchString(tag) {
+		return softwarelifecycle.LatestRelease{}, softwarelifecycle.LatestReleaseRefused
+	}
+	release, _, outcome := source.publicRelease(ctx, "", tag)
+	return release, outcome
+}
+
 func (source Source) PrepareLatest(ctx context.Context, architecture softwarelifecycle.Architecture) (softwarelifecycle.UpdateCandidate, softwarelifecycle.LatestReleaseOutcome) {
 	name := "sbxr-linux-amd64.tar.gz"
 	if architecture == softwarelifecycle.ARM64 {
@@ -111,16 +121,24 @@ func (source Source) PrepareLatest(ctx context.Context, architecture softwarelif
 }
 
 func (source Source) latest(ctx context.Context, archiveName string) (softwarelifecycle.LatestRelease, []byte, softwarelifecycle.LatestReleaseOutcome) {
+	return source.publicRelease(ctx, archiveName, "")
+}
+
+func (source Source) publicRelease(ctx context.Context, archiveName, tag string) (softwarelifecycle.LatestRelease, []byte, softwarelifecycle.LatestReleaseOutcome) {
 	if source.client == nil || source.verifier == nil || source.baseURL == "" {
 		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
+	endpoint := source.baseURL + "/repos/" + softwarelifecycle.Repository + "/releases/latest"
+	if tag != "" {
+		endpoint = source.baseURL + "/repos/" + softwarelifecycle.Repository + "/releases/tags/" + tag
+	}
 	var release githubRelease
-	if err := source.latestJSON(ctx, source.baseURL+"/repos/"+softwarelifecycle.Repository+"/releases/latest", 1<<20, &release); err != nil {
+	if err := source.latestJSON(ctx, endpoint, 1<<20, &release); err != nil {
 		latest, outcome := latestFailure(err)
 		return latest, nil, outcome
 	}
 	metadata, err := exactLatestAssets(source.baseURL, release.Assets)
-	if err != nil || release.Draft || release.Prerelease || !release.Immutable || !immutableTagPattern.MatchString(release.Tag) || !commitPattern.MatchString(release.TargetCommitish) {
+	if err != nil || release.Draft || release.Prerelease || !release.Immutable || !immutableTagPattern.MatchString(release.Tag) || !commitPattern.MatchString(release.TargetCommitish) || tag != "" && (release.Tag != tag || release.Qualification != nil) {
 		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	recordIndex, recordSequence, qualified := latestAcceptanceRecord(release.Body, release.Tag, release.TargetCommitish, metadata)
@@ -138,22 +156,38 @@ func (source Source) latest(ctx context.Context, archiveName string) (softwareli
 			latest, outcome := latestFailure(err)
 			return latest, nil, outcome
 		}
-		if len(response.Attestations) != 1 || response.Attestations[0].Initiator != "github" {
+		// A full first page cannot prove that a conflicting claim is absent.
+		if len(response.Attestations) == 0 || len(response.Attestations) >= 100 {
 			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 		}
 		bundleCtx, cancelBundle := context.WithTimeout(ctx, 30*time.Second)
-		bundleBody, err := source.bundle(bundleCtx, response.Attestations[0])
+		matched := false
+		for _, attestation := range response.Attestations {
+			if bundleCtx.Err() != nil || attestation.Initiator != "github" {
+				cancelBundle()
+				return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+			}
+			bundleBody, err := source.bundle(bundleCtx, attestation)
+			if err != nil {
+				cancelBundle()
+				latest, outcome := latestFailure(err)
+				return latest, nil, outcome
+			}
+			statementBody, err := source.verifier(bundleBody, "sha1", release.TargetCommitish)
+			if err != nil || bundleCtx.Err() != nil {
+				cancelBundle()
+				return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+			}
+			tag, attested, err := parseReleaseStatement(statementBody, release.TargetCommitish)
+			if err != nil || tag == release.Tag && !sameAssetDigests(metadata, attested) {
+				cancelBundle()
+				return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
+			}
+			matched = matched || tag == release.Tag
+		}
+		expired := bundleCtx.Err() != nil
 		cancelBundle()
-		if err != nil {
-			latest, outcome := latestFailure(err)
-			return latest, nil, outcome
-		}
-		statementBody, err := source.verifier(bundleBody, "sha1", release.TargetCommitish)
-		if err != nil {
-			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
-		}
-		attested, err := parseReleaseStatementWithAssets(statementBody, release.Tag, release.TargetCommitish, 4)
-		if err != nil || !sameAssetDigests(metadata, attested) {
+		if !matched || expired {
 			return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 		}
 	}
@@ -684,34 +718,40 @@ func (p *releasePredicate) UnmarshalJSON(body []byte) error {
 	return nil
 }
 
-func parseReleaseStatementWithAssets(body []byte, tag, commit string, assetCount int) (map[string]string, error) {
+func parseReleaseStatement(body []byte, commit string) (string, map[string]string, error) {
 	if softwarelifecycle.ValidateUniqueJSON(body) != nil {
-		return nil, errors.New("release statement refused")
+		return "", nil, errors.New("release statement refused")
 	}
 	var statement releaseStatement
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&statement) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return nil, errors.New("release statement refused")
+		return "", nil, errors.New("release statement refused")
 	}
+	tag := statement.Predicate.Tag
 	purl := "pkg:github/" + softwarelifecycle.Repository + "@" + tag
 	if statement.Type != "https://in-toto.io/Statement/v1" || statement.PredicateType != "https://in-toto.io/attestation/release/v0.2" ||
 		statement.Predicate.DatabaseID == "" || statement.Predicate.OwnerID == "" || statement.Predicate.PackageID == "" || statement.Predicate.RepositoryID == "" ||
-		statement.Predicate.Repository != softwarelifecycle.Repository || statement.Predicate.Tag != tag || statement.Predicate.PURL != purl || len(statement.Subject) != assetCount+1 {
-		return nil, errors.New("release statement refused")
+		statement.Predicate.Repository != softwarelifecycle.Repository || !immutableTagPattern.MatchString(tag) || statement.Predicate.PURL != purl || len(statement.Subject) != len(latestAssetNames())+1 {
+		return "", nil, errors.New("release statement refused")
 	}
 	release := statement.Subject[0]
 	if release.Name != "" || release.URI != purl || len(release.Digest) != 1 || release.Digest["sha1"] != commit {
-		return nil, errors.New("release statement refused")
+		return "", nil, errors.New("release statement refused")
 	}
 	assets := map[string]string{}
 	for _, subject := range statement.Subject[1:] {
 		if subject.Name == "" || subject.URI != "" || len(subject.Digest) != 1 || !hashPattern.MatchString(subject.Digest["sha256"]) || assets[subject.Name] != "" {
-			return nil, errors.New("release statement refused")
+			return "", nil, errors.New("release statement refused")
 		}
 		assets[subject.Name] = subject.Digest["sha256"]
 	}
-	return assets, nil
+	for _, name := range latestAssetNames() {
+		if assets[name] == "" {
+			return "", nil, errors.New("release statement refused")
+		}
+	}
+	return tag, assets, nil
 }
 
 func sameAssetDigests(metadata map[string]assetMetadata, attested map[string]string) bool {
@@ -729,20 +769,26 @@ func sameAssetDigests(metadata map[string]assetMetadata, attested map[string]str
 func (source Source) latestJSON(ctx context.Context, address string, limit int64, target any) error {
 	requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	body, err := source.get(requestCtx, address, limit, "application/vnd.github+json")
+	body, headers, err := source.getResponse(requestCtx, address, limit, "application/vnd.github+json")
 	if err != nil {
 		return err
 	}
-	if softwarelifecycle.ValidateUniqueJSON(body) != nil || json.Unmarshal(body, target) != nil {
+	// These exact-release reads must be complete; do not follow pagination links.
+	if len(headers.Values("Link")) != 0 || softwarelifecycle.ValidateUniqueJSON(body) != nil || json.Unmarshal(body, target) != nil {
 		return errors.New("GitHub JSON refused")
 	}
 	return nil
 }
 
 func (source Source) get(ctx context.Context, address string, limit int64, accept string) ([]byte, error) {
+	body, _, err := source.getResponse(ctx, address, limit, accept)
+	return body, err
+}
+
+func (source Source) getResponse(ctx context.Context, address string, limit int64, accept string) ([]byte, http.Header, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return nil, errors.New("GitHub request refused")
+		return nil, nil, errors.New("GitHub request refused")
 	}
 	request.Header.Set("Accept", accept)
 	request.Header.Set("X-GitHub-Api-Version", "2026-03-10")
@@ -750,22 +796,22 @@ func (source Source) get(ctx context.Context, address string, limit int64, accep
 	response, err := source.client.Do(request)
 	if err != nil {
 		if errors.Is(err, errRedirectRefused) {
-			return nil, errors.New("GitHub redirect refused")
+			return nil, nil, errors.New("GitHub redirect refused")
 		}
-		return nil, errUnavailable
+		return nil, nil, errUnavailable
 	}
 	defer response.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if readErr != nil || response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
-		return nil, errUnavailable
+		return nil, nil, errUnavailable
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, errors.New("GitHub response refused")
+		return nil, nil, errors.New("GitHub response refused")
 	}
 	if len(body) == 0 || int64(len(body)) > limit {
-		return nil, fmt.Errorf("GitHub response refused")
+		return nil, nil, fmt.Errorf("GitHub response refused")
 	}
-	return body, nil
+	return body, response.Header, nil
 }
 
 var (

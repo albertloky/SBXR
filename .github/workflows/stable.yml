@@ -283,7 +283,7 @@ jobs:
             public_verification=null
             if test "$public" = true; then
               if gh api "repos/$GITHUB_REPOSITORY/attestations/sha1:$commit?predicate_type=release&per_page=100" > "$directory.attestation.json" 2>/dev/null; then
-                attestation="$(jq -cS --arg commit "$commit" '{commit:$commit,count:(.attestations|length),initiator:(if (.attestations|length) == 1 then .attestations[0].initiator else "" end),predicate_type:"release"}' "$directory.attestation.json")"
+                attestation="$(jq -cS --arg commit "$commit" '{commit:$commit,count:(.attestations|length),initiator:(if (.attestations|length) > 0 and all(.attestations[]; .initiator == "github") then "github" else "" end),predicate_type:"release"}' "$directory.attestation.json")"
               fi
               if curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh" -o "$directory.latest-install.sh"; then latest_install_sha256="$(sha256sum "$directory.latest-install.sh" | cut -d' ' -f1)"; fi
               go run ./cmd/sbxr-release verify-public-latest > "$directory.public-verification.json" || return 1
@@ -583,7 +583,7 @@ jobs:
             if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1; then
               .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/rechecked/$tag" failure/release.json
               publicly_verified=false
-              if test "$tag_commit" != null && jq -e '.draft == false and .prerelease == false and (.immutable // false) == true' failure/release.json >/dev/null && gh api "repos/$GITHUB_REPOSITORY/attestations/sha1:$commit?predicate_type=release&per_page=100" --jq 'select((.attestations | length) == 1 and .attestations[0].initiator == "github")' >/dev/null 2>&1; then
+              if test "$tag_commit" != null && jq -e '.draft == false and .prerelease == false and (.immutable // false) == true' failure/release.json >/dev/null && go run ./cmd/sbxr-release verify-public-release -tag "$tag" > "failure/$tag.public-verification.json" && jq -e --argjson expected "$release" '.outcome == "accepted" and .release_identity == $expected.release_identity and .sequence == $expected.sequence' "failure/$tag.public-verification.json" >/dev/null; then
                 public_valid=true
                 mkdir -p -m 0700 "failure/public/$tag"
                 while read -r asset; do

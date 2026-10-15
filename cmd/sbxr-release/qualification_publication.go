@@ -614,7 +614,13 @@ func validStablePublicationObservation(observation stablePublicationObservation,
 	if !public {
 		return observation.Draft && !observation.Immutable && !observation.Prerelease && observation.Attestation == nil && observation.LatestInstallSHA256 == "" && observation.PublicVerification == nil
 	}
-	return !observation.Draft && observation.Immutable && observation.Prerelease == action.Prerelease && observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID && observation.LatestInstallSHA256 == action.Assets[0].SHA256 && observation.Attestation != nil && *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 1, Initiator: "github", PredicateType: "release"}) && validPublicLatestVerification(observation.PublicVerification, action)
+	return !observation.Draft && observation.Immutable && observation.Prerelease == action.Prerelease && observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID && observation.LatestInstallSHA256 == action.Assets[0].SHA256 && validStableReleaseAttestation(observation.Attestation, action.Commit) && validPublicLatestVerification(observation.PublicVerification, action)
+}
+
+func validStableReleaseAttestation(attestation *stableReleaseAttestation, commit string) bool {
+	// Count remains the raw API total. The production verifier proves that at
+	// least one target proof exists and that every target claim agrees on bytes.
+	return attestation != nil && attestation.Commit == commit && attestation.Count > 0 && attestation.Count < 100 && attestation.Initiator == "github" && attestation.PredicateType == "release"
 }
 
 func validStablePublicationTarget(observation stablePublicationObservation, action publishStableReleaseAction) bool {
@@ -640,7 +646,7 @@ func validStablePropagationObservation(observation, prior stablePublicationObser
 		return !observation.Immutable && observation.Attestation == nil && observation.LatestInstallSHA256 == "" && reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && pendingPublicLatestVerification(observation.PublicVerification)
 	}
 	latestPending := reflect.DeepEqual(observation.LatestReleaseID, prior.LatestReleaseID) && observation.LatestInstallSHA256 == "" || observation.LatestReleaseID != nil && *observation.LatestReleaseID == action.ReleaseID && (observation.LatestInstallSHA256 == "" || observation.LatestInstallSHA256 == action.Assets[0].SHA256)
-	attestationPending := observation.Attestation == nil || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 0, Initiator: "", PredicateType: "release"}) || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 1, Initiator: "github", PredicateType: "release"})
+	attestationPending := observation.Attestation == nil || *observation.Attestation == (stableReleaseAttestation{Commit: action.Commit, Count: 0, Initiator: "", PredicateType: "release"}) || validStableReleaseAttestation(observation.Attestation, action.Commit)
 	return latestPending && attestationPending && pendingPublicLatestVerification(observation.PublicVerification)
 }
 

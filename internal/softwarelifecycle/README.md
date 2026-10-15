@@ -35,6 +35,13 @@ entry points and tests, and the [current operator procedure](../../docs/acceptan
 for live qualification. [The historical Installer-Updater release procedure](../../docs/acceptance/historical/installer-updater-release.md)
 documents the historical Installer-Updater release-pair procedure.
 
+Native release verification accepts one or more equivalent proofs for the
+selected tag, commit and exact four asset digests, alongside valid proofs for
+other tags at the same commit. Every returned proof must pass existing signature
+and statement checks; conflicting target claims, incomplete pages and histories
+outside the bounded first page are refused. Publication observations retain the
+total API count. See [ADR-0031](../../docs/adr/0031-equivalent-native-release-proofs.md).
+
 ## Current clean-install-only scope
 
 [ADR-0028](../../docs/adr/0028-clean-install-only.md) declares
