@@ -211,8 +211,8 @@ func testAcceptedPrivateDispatch(t *testing.T, rotating bool) {
 		t.Fatal("private dispatch did not serve authoritative profile")
 	}
 	host.publicIPv4 <- false
-	if <-done != subscriptionserving.Stopped {
-		t.Fatal("private dispatch did not stop after public IPv4 drift")
+	if <-done != subscriptionserving.Failed {
+		t.Fatal("private dispatch did not report failure after public IPv4 drift")
 	}
 }
 

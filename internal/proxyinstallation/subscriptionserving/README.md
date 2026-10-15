@@ -68,6 +68,10 @@ zero process capabilities, no-new-privileges and inaccessible credential,
 staging, proc and host-control paths. It binds only the recorded IPv4 TCP 8443.
 Missing or conflicting facts refuse silently and create no state.
 
+A failed periodic public-IPv4 check still stops serving immediately. The owning
+dispatch reports `Failed` (exit 1), while Owner cancellation reports `Stopped`
+(exit 0); neither path prints the address, credential or raw network error.
+
 The fixed systemd unit denies access to the entire credential staging directory,
 not a list of currently known candidates. It also denies proc and systemd/D-Bus
 control paths, preventing alternate host-root lookup and host-control access.

@@ -98,6 +98,8 @@ type servingDispatchHost interface {
 	BindServingListener(string) (net.Listener, error)
 }
 
+var errServingPublicIPv4Check = errors.New("subscription serving public IPv4 check failed")
+
 func (m *installedInterface) servingSurfaceSafe() bool {
 	if m.host == nil {
 		return false
@@ -256,16 +258,20 @@ func serveSubscription(ctx context.Context, lifecycle softwarelifecycle.Interfac
 		return subscriptionserving.Refused
 	}
 	lock.Release()
-	servingContext, cancel := context.WithCancel(ctx)
-	defer cancel()
+	servingContext, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	go func() {
 		select {
 		case accepted, ok := <-host.WatchServingPublicIPv4(servingContext, record.PublicIPv4):
 			if ok && !accepted {
-				cancel()
+				cancel(errServingPublicIPv4Check)
 			}
 		case <-servingContext.Done():
 		}
 	}()
-	return m.Serve(servingContext, state, listener)
+	code = m.Serve(servingContext, state, listener)
+	if code == subscriptionserving.Stopped && context.Cause(servingContext) == errServingPublicIPv4Check {
+		return subscriptionserving.Failed
+	}
+	return code
 }
