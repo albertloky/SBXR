@@ -4,6 +4,11 @@ status: accepted
 
 # Review main divergence before publishing an exact qualified candidate
 
+For current publication, [ADR-0032](0032-qualified-publication-retry.md)
+supersedes the separate protected-environment approval ceremony and automatic
+publication-failure burn rules described below. The exact main-divergence and
+security review requirements remain; historical records keep their meaning.
+
 The Owner approved this release eligibility change on 2026-10-12. A newer main
 commit alone makes an otherwise valid exact candidate **pending review**. It does
 not invalidate its passed qualification or consume its Release Identity. This

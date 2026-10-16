@@ -81,6 +81,8 @@ five-minute submission/validation, no-prefix-publication rule, stop/cleanup hand
 and actual safety/final cleanup from
 [ordinary recurring acceptance](ordinary-recurring-live.md). Qualification
 transport TLS, GitHub/asset TLS and software attestations remain separate.
+The pre-effect input correction below is the only exception to stopping on a
+recoverable UI input error; failed or incomplete required checks still stop.
 
 Apply the non-certificate artifact, client, credential, disclosure and evidence
 handling requirements from [MVP acceptance](mvp-live-acceptance.md). Its old
@@ -107,6 +109,51 @@ Bearer-token protection prevents unauthenticated retrieval at the server.
 Plain HTTP still lets a network observer steal the link and proxy UUID or alter
 the downloaded configuration. No claim of secret containment on the network is
 made. Preserve protections for local files, logs and retained evidence.
+
+## Karing input and bounded correction
+
+For the initial `mvp-subscription` import, focus the currently rendered link
+field by coordinates, type the Subscription Link through native input events,
+Tab to the remark, type it, then Tab to blur. Derive coordinates from the current
+form. Check the complete rendered values after blur before one Save. AX
+`setValue` or a displayed AX value alone does not prove form-model commitment;
+after Save, verify the actual saved URL and exact native profile/node readbacks.
+A successful import still requires fresh node latency, manual refresh and all
+other required checks, with the selected connection and settings preserved.
+
+Before submitting terminal failure for a demonstrated automation input error
+(for example, an empty-link error despite displayed text), allow at most two
+corrective attempts after the initial attempt, subject to all of these limits:
+
+1. Retain the initial diagnostic and every attempt in private run evidence,
+   bound to the same candidate and request: actual times, input method, error,
+   rendered/committed-input readbacks, effect/profile absence and correction
+   count. Preserve secret-safe summaries; keep credentials out of public records.
+2. Before each correction, prove the input was not committed and the intended
+   import had no effects, including no test profile/node creation and unchanged
+   selected connection/settings. Observe any uncertain Save outcome read-only
+   before repeating a mutation; if absence cannot be proved, do not retry. An
+   existing profile must be verified through the normal checks, never imported
+   again to resolve uncertainty or obtain a better result.
+3. Repeat the native focus/type/blur sequence, check the rendered values, and
+   use at most one Save per correction. Count corrections across form reopening;
+   reopening cannot reset the allowance. Stop after two unsuccessful corrections.
+   Keep the original action/repetition budget (including any five-repetition
+   ceiling), request, computed operation deadline and submission/cleanup limits;
+   use the stricter remaining limit and do not reset or extend any clock.
+4. This permits correcting uncommitted input only. Do not retry a genuine
+   product/security failure, a partial import, or any enablement, refresh,
+   credential rotation or removal under this allowance. Once input is committed,
+   require the ordinary import/product checks; an empty-field correction is not
+   proof of subscription acceptance. Autonomous correction creates no attended
+   human wait or paused interval.
+
+If correction is inadmissible, its allowance/budget expires, or required checks
+remain incomplete, use the existing terminal failure and safety-cleanup path.
+Report a demonstrated automation input failure as such, with subscription
+acceptance unverified; report actual product/security failures separately. Keep
+all earlier errors even if a correction succeeds. A submitted terminal failure
+or burned attempt cannot resume or become passed through this procedure.
 
 ## Attended Karing response windows
 
