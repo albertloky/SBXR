@@ -15,6 +15,15 @@ applicable confirmation, and revalidates its facts under mutation authority
 before effects. Keep status and View details read-only: observation does not
 finish pending work, convert durable authority, or create missing authority.
 
+Setup refusals retain `PROXY-INSTALLATION-ACTION-REFUSED` and name the failed
+check. The existing correction text includes a `SETUP-PREFLIGHT-*` or
+`SETUP-REVALIDATION-*` diagnostic with safe expected/observed facts. Destination
+failures show completed DNS/TCP/TLS/HTTP2/certificate checks; they do not print
+raw network errors, addresses learned from the host, identity material, or
+subprocess output. Revalidation still requires every original check and exact
+fact equality. A diagnostic identifies the observed refusal, not the historical
+cause of a prior run without these observations.
+
 ## Find the owning code
 
 | Task | Start here |

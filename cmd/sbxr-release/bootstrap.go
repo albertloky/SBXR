@@ -72,15 +72,16 @@ cleanup() {
   fi
 }
 finish() {
-  local code=$1 status=${2:-1}
+  local code=$1 status=${2:-1} check=${3:-}
   trap - EXIT
   cleanup || code='SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  [ -z "$check" ] || printf 'install/%s\n' "$check" >&2
   printf '%s\n' "$code"
   exit "$status"
 }
-host_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED'; }
-release_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED'; }
-release_unavailable() { finish 'SOFTWARE-LIFECYCLE-INSTALL-RELEASE-UNAVAILABLE'; }
+host_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED' 1 "${1:-}"; }
+release_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED' 1 "${1:-}"; }
+release_unavailable() { finish 'SOFTWARE-LIFECYCLE-INSTALL-RELEASE-UNAVAILABLE' 1 "${1:-}"; }
 prerequisite_failed() { finish 'SOFTWARE-LIFECYCLE-INSTALL-PREREQUISITE-FAILED'; }
 path_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED'; }
 reclamation_failed() { finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'; }
@@ -144,22 +145,22 @@ interrupted() {
 trap interrupted HUP INT TERM
 trap cleanup EXIT
 
-[ "$#" -eq 0 ] || host_refused
-[ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" = '0' ] || host_refused
-[ "$("$ROOT/usr/bin/uname" -s 2>/dev/null)" = 'Linux' ] || host_refused
+[ "$#" -eq 0 ] || host_refused 'host/arguments expected=none'
+[ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" = '0' ] || host_refused 'host/uid expected=root observed=mismatch'
+[ "$("$ROOT/usr/bin/uname" -s 2>/dev/null)" = 'Linux' ] || host_refused 'host/kernel expected=Linux observed=mismatch'
 case "$("$ROOT/usr/bin/uname" -m 2>/dev/null)" in
   x86_64) ARCH='amd64'; EXPECTED_EXECUTABLE_SHA256=$AMD64_EXECUTABLE_SHA256 ;;
   aarch64) ARCH='arm64'; EXPECTED_EXECUTABLE_SHA256=$ARM64_EXECUTABLE_SHA256 ;;
-  *) host_refused ;;
+  *) host_refused 'host/architecture expected=amd64-or-arm64 observed=mismatch' ;;
 esac
 os_release="$ROOT/etc/os-release"
 if [ -L "$os_release" ]; then
-  [ "$("$ROOT/usr/bin/readlink" "$os_release" 2>/dev/null)" = '../usr/lib/os-release' ] || host_refused
+  [ "$("$ROOT/usr/bin/readlink" "$os_release" 2>/dev/null)" = '../usr/lib/os-release' ] || host_refused 'host/os-release-link'
   os_release="$ROOT/usr/lib/os-release"
 fi
-[ -f "$os_release" ] && [ ! -L "$os_release" ] || host_refused
-[ "$("$ROOT/usr/bin/grep" -c '^ID=ubuntu$' "$os_release" 2>/dev/null)" = '1' ] || host_refused
-[ "$("$ROOT/usr/bin/grep" -Ec '^VERSION_ID="?24\.04"?$' "$os_release" 2>/dev/null)" = '1' ] || host_refused
+[ -f "$os_release" ] && [ ! -L "$os_release" ] || host_refused 'host/os-release-file'
+[ "$("$ROOT/usr/bin/grep" -c '^ID=ubuntu$' "$os_release" 2>/dev/null)" = '1' ] || host_refused 'host/distribution expected=ubuntu observed=mismatch'
+[ "$("$ROOT/usr/bin/grep" -Ec '^VERSION_ID="?24\.04"?$' "$os_release" 2>/dev/null)" = '1' ] || host_refused 'host/ubuntu-version expected=24.04 observed=mismatch'
 
 "$ROOT/usr/bin/mkdir" -p "$ROOT/run/lock" >/dev/null 2>&1 || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 lock="$ROOT/run/lock/sbxr.lock"
@@ -436,7 +437,8 @@ fi
 
 # The moving GitHub HTTPS command trusts this script; its embedded identity pins every later download.
 download() {
-  local name=$1 destination=$2 limit=$3 url=${4:-} response status effective http
+  local name=$1 destination=$2 limit=$3 url=${4:-} response status effective http diagnostic_http
+  DOWNLOAD_FAILURE='download/redirect-target'
   if [ -z "$url" ]; then
     url="https://github.com/$REPOSITORY/releases/download/$TAG/$name"
   fi
@@ -445,6 +447,9 @@ download() {
   effective=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '1p')
   http=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '2p')
   if [ "$status" -ne 0 ]; then
+    diagnostic_http=$http
+    case "$diagnostic_http" in [0-9][0-9][0-9]) ;; *) diagnostic_http='unknown' ;; esac
+    DOWNLOAD_FAILURE="download/curl asset=$name exit=$status http=$diagnostic_http"
     case "$status:$http" in 6:*|7:*|28:*|35:*|60:*|22:5??) return 3 ;; *) return 2 ;; esac
   fi
   case "$effective" in
@@ -455,20 +460,20 @@ download() {
 }
 download_or_finish() {
   download "$@"
-  case "$?" in 0) return 0 ;; 3) release_unavailable ;; *) release_refused ;; esac
+  case "$?" in 0) return 0 ;; 3) release_unavailable "$DOWNLOAD_FAILURE" ;; *) release_refused "$DOWNLOAD_FAILURE" ;; esac
 }
 
 index="$WORK/release-index.json"
 download_or_finish 'release-index.json' "$index" 1048576
-[ -f "$index" ] && [ ! -L "$index" ] || release_refused
-[ "$("$ROOT/usr/bin/wc" -c <"$index")" -le 1048576 ] 2>/dev/null || release_refused
+[ -f "$index" ] && [ ! -L "$index" ] || release_refused 'index/file'
+[ "$("$ROOT/usr/bin/wc" -c <"$index")" -le 1048576 ] 2>/dev/null || release_refused 'index/size expected<=1048576'
 index_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\]\}$'
 # Match the canonical ReleaseIdentity encoding and ReleaseSupport.valid contract:
 # clean-install scopes have no sources; recurring support has 1..32 unique sources.
 subscription_source_pattern='\{"Repository":"{{.Repository}}","Tag":"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)","Commit":"[0-9a-f]{40}","IndexSHA256":"[0-9a-f]{64}"\}'
 subscription_support_pattern='\{"scope":("(first-subscription-clean-install|subscription-clean-install-repair|subscription-clean-install-only)","sources":\[\]|"recurring-subscription-upgrade","sources":\['"$subscription_source_pattern"'(,'"$subscription_source_pattern"'){0,31}\]),"contract":"sbxr-subscription-update-v1"\}'
 subscription_index_pattern='^\{"schema":2,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":[1-9][0-9]*,"assets":\[\{"name":"install\.sh","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-amd64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\},\{"name":"sbxr-linux-arm64\.tar\.gz","size":[1-9][0-9]*,"sha256":"[0-9a-f]{64}"\}\],"support":'"$subscription_support_pattern"'\}$'
-single_line "$index" && { "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || "$ROOT/usr/bin/grep" -Eqx "$subscription_index_pattern" "$index"; } || release_refused
+single_line "$index" && { "$ROOT/usr/bin/grep" -Eqx "$index_pattern" "$index" || "$ROOT/usr/bin/grep" -Eqx "$subscription_index_pattern" "$index"; } || release_refused 'index/canonical-contract'
 if "$ROOT/usr/bin/grep" -Fq '"scope":"recurring-subscription-upgrade"' "$index"; then
   sources=$("$ROOT/usr/bin/grep" -Eo "$subscription_source_pattern" "$index") || release_refused
   seen_sources='|'
@@ -478,7 +483,7 @@ if "$ROOT/usr/bin/grep" -Fq '"scope":"recurring-subscription-upgrade"' "$index";
   done <<<"$sources"
 fi
 index_sequence=$("$ROOT/usr/bin/sed" -n 's/.*"sequence":\([0-9]*\).*/\1/p' "$index")
-if [ "$RESTORING_REMOVAL" -eq 1 ]; then SEQUENCE=$index_sequence; else [ "$index_sequence" = "$SEQUENCE" ] || release_refused; fi
+if [ "$RESTORING_REMOVAL" -eq 1 ]; then SEQUENCE=$index_sequence; else [ "$index_sequence" = "$SEQUENCE" ] || release_refused 'index/sequence expected=embedded observed=mismatch'; fi
 archive_name="sbxr-linux-$ARCH.tar.gz"
 archive_sha=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p' "$index")
 archive_size=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"size":\([0-9][0-9]*\).*/\1/p' "$index")
@@ -486,9 +491,9 @@ archive_size=$("$ROOT/usr/bin/sed" -n 's/.*"name":"'"$archive_name"'"[^}]*"size"
 
 archive="$WORK/$archive_name"
 download_or_finish "$archive_name" "$archive" 268435456
-[ -f "$archive" ] && [ ! -L "$archive" ] || release_refused
-[ "$("$ROOT/usr/bin/wc" -c <"$archive")" -eq "$archive_size" ] 2>/dev/null || release_refused
-[ "$("$ROOT/usr/bin/sha256sum" "$archive" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$archive_sha" ] || release_refused
+[ -f "$archive" ] && [ ! -L "$archive" ] || release_refused 'archive/file'
+[ "$("$ROOT/usr/bin/wc" -c <"$archive")" -eq "$archive_size" ] 2>/dev/null || release_refused 'archive/size expected=index observed=mismatch'
+[ "$("$ROOT/usr/bin/sha256sum" "$archive" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$archive_sha" ] || release_refused 'archive/sha256 expected=index observed=mismatch'
 index_sha=$("$ROOT/usr/bin/sha256sum" "$index" | "$ROOT/usr/bin/cut" -d' ' -f1) || release_refused
 [ "$RESTORING_REMOVAL" -eq 0 ] || [ "$index_sha" = "$REMOVAL_INDEX_SHA" ] || release_refused
 
@@ -567,17 +572,17 @@ if [ ! -x "$ROOT/usr/bin/tar" ]; then
   "$ROOT/usr/bin/apt-get" install --yes --no-install-recommends tar >/dev/null 2>&1 || prerequisite_failed
   [ -x "$ROOT/usr/bin/tar" ] || prerequisite_failed
 fi
-[ "$("$ROOT/usr/bin/tar" -tzf "$archive" 2>/dev/null)" = 'sbxr' ] || release_refused
+[ "$("$ROOT/usr/bin/tar" -tzf "$archive" 2>/dev/null)" = 'sbxr' ] || release_refused 'archive/member expected=sbxr observed=mismatch'
 candidate="$WORK/sbxr"
-(ulimit -f 262144; "$ROOT/usr/bin/tar" -xOzf "$archive" sbxr >"$candidate") 2>/dev/null || release_refused
+(ulimit -f 262144; "$ROOT/usr/bin/tar" -xOzf "$archive" sbxr >"$candidate") 2>/dev/null || release_refused 'archive/extraction'
 [ -f "$candidate" ] && [ ! -L "$candidate" ] || release_refused
 "$ROOT/usr/bin/chmod" 0600 "$candidate" || release_refused
 executable_sha=$("$ROOT/usr/bin/sha256sum" "$candidate" | "$ROOT/usr/bin/cut" -d' ' -f1) || release_refused
-verify_executable_identity "$candidate" "$WORK/candidate-identity.json" || release_refused
-verify_elf_architecture "$candidate" || release_refused
+verify_executable_identity "$candidate" "$WORK/candidate-identity.json" || release_refused 'executable/identity-trailer'
+verify_elf_architecture "$candidate" || release_refused 'executable/architecture expected=host observed=mismatch'
 candidate_identity_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"'"$TAG"'","commit":"'"$COMMIT"'","sequence":'"$SEQUENCE"',"architecture":"'"$ARCH"'","payload_sha256":"[0-9a-f]{64}"\}$'
-single_line "$WORK/candidate-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candidate_identity_pattern" "$WORK/candidate-identity.json" || release_refused
-[ "$RESTORING_REMOVAL" -eq 1 ] || [ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused
+single_line "$WORK/candidate-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candidate_identity_pattern" "$WORK/candidate-identity.json" || release_refused 'executable/identity expected=release observed=mismatch'
+[ "$RESTORING_REMOVAL" -eq 1 ] || [ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused 'executable/sha256 expected=embedded observed=mismatch'
 
 if [ "$RESTORING_REMOVAL" -eq 1 ]; then
   if [ "$http_serving" -eq 1 ]; then

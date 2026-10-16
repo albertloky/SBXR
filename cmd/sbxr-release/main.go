@@ -81,6 +81,8 @@ func main() {
 			message := "sbxr release qualification refused"
 			if gate, ok := err.(stablePreflightRefusal); ok {
 				message += ": " + gate.Error()
+			} else if diagnostic, ok := err.(*qualificationDiagnostic); ok {
+				message += ": " + diagnostic.Error()
 			}
 			fmt.Fprintln(os.Stderr, message)
 			os.Exit(1)

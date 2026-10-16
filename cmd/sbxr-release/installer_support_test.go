@@ -257,7 +257,7 @@ func verifyInstallerSupportIndex(t *testing.T, fixture installerFixture, body []
 func assertInstallerReleaseRefused(t *testing.T, fixture installerFixture) {
 	t.Helper()
 	before := installerAuthoritySnapshot(t, fixture.root)
-	body, err := exec.Command("bash", fixture.script).CombinedOutput()
+	body, err := exec.Command("bash", fixture.script).Output()
 	if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED" {
 		t.Fatalf("release refusal = %v, %q", err, body)
 	}

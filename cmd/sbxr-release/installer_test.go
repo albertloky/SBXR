@@ -35,7 +35,7 @@ func TestGeneratedInstallerRefusesNonRootBeforeMutation(t *testing.T) {
 
 	command := exec.Command("bash", output)
 	command.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C"}
-	body, err := command.CombinedOutput()
+	body, err := command.Output()
 	if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED" {
 		t.Fatalf("non-root install = %v, %q", err, body)
 	}
@@ -93,7 +93,7 @@ func TestGeneratedInstallerSupportsOnlyFixedUbuntuHosts(t *testing.T) {
 			fixture := newInstallerFixture(t)
 			test.change(t, fixture)
 			before := installerAuthoritySnapshot(t, fixture.root)
-			body, err := exec.Command("bash", fixture.script).CombinedOutput()
+			body, err := exec.Command("bash", fixture.script).Output()
 			if after := installerAuthoritySnapshot(t, fixture.root); !reflect.DeepEqual(before, after) {
 				t.Fatal("refusal changed installation authority")
 			}
@@ -494,7 +494,7 @@ func TestGeneratedInstallerRefusesWrongELFArchitectureBeforeMutation(t *testing.
 	wrong := installerExecutable(t, installerPayload(t, "arm64"), "v2.0.0", strings.Repeat("a", 40), 17, "amd64")
 	replaceInstallerArchiveProof(t, fixture.root, "amd64", wrong)
 
-	body, err := exec.Command("bash", fixture.script).CombinedOutput()
+	body, err := exec.Command("bash", fixture.script).Output()
 	if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED" {
 		t.Fatalf("wrong ELF architecture = %v, %q", err, body)
 	}
@@ -510,7 +510,7 @@ func TestGeneratedInstallerRefusesAChangedSelfConsistentExecutable(t *testing.T)
 	changed := installerExecutable(t, payload, "v2.0.0", strings.Repeat("a", 40), 17, "amd64")
 	replaceInstallerArchiveProof(t, fixture.root, "amd64", changed)
 
-	body, err := exec.Command("bash", fixture.script).CombinedOutput()
+	body, err := exec.Command("bash", fixture.script).Output()
 	if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED" {
 		t.Fatalf("changed executable = %v, %q", err, body)
 	}
@@ -530,9 +530,12 @@ func TestGeneratedInstallerRefusesExtraIndexMaterialBeforeMutation(t *testing.T)
 		t.Fatal(err)
 	}
 
-	result, err := exec.Command("bash", fixture.script).CombinedOutput()
-	if err == nil || strings.TrimSpace(string(result)) != "SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED" {
-		t.Fatalf("extra index material = %v, %q", err, result)
+	command := exec.Command("bash", fixture.script)
+	var diagnostic bytes.Buffer
+	command.Stderr = &diagnostic
+	result, err := command.Output()
+	if err == nil || strings.TrimSpace(string(result)) != "SOFTWARE-LIFECYCLE-INSTALL-RELEASE-REFUSED" || diagnostic.String() != "install/index/canonical-contract\n" {
+		t.Fatalf("extra index material = %v, stdout=%q stderr=%q", err, result, diagnostic.String())
 	}
 	if _, err := os.Lstat(filepath.Join(fixture.root, "usr/local/bin/sbxr")); !os.IsNotExist(err) {
 		t.Fatalf("extra index material changed the executable path: %v", err)

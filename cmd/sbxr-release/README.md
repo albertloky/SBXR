@@ -92,6 +92,26 @@ The successful verified-input artifact and provenance checks remain required.
 A reconstruction using refreshed observations does not
 establish the historical rejecting gate.
 
+The qualification CLI also reports `qualification-input/<check>` for reads,
+empty/oversize input, invalid or duplicate-key JSON, envelope/schema and stage;
+recognized stages report `<stage>/canonical-facts` for their wire contract.
+Stable publication reports `stable-publication/<check>` for approval, action
+index, replay/binding, history and observation failures, retaining a nested
+`stable-preflight/<gate>` when preflight replay fails. Check those exact inputs
+and bindings before retrying. Numeric bounds/counts are safe to print; rejected
+field values and private parser/I/O cause text are excluded. Causes remain
+available through Go error unwrapping.
+
+The generated installer keeps its existing stdout result codes and emits
+`install/<check>` on stderr for host admission, download, index contract and
+archive/executable integrity checks. Download diagnostics retain the asset name,
+curl exit status and a three-digit HTTP status (or `unknown`), excluding curl
+stderr and URLs. Expected-versus-observed labels identify the authority being
+compared without exposing payloads. These diagnostics do not cover every older
+qualification evaluator, publication propagation/finalization branch, installer
+removal-restoration or filesystem mutation failure; some still return generic
+results. They cannot reconstruct a previously unrecorded rejecting check.
+
 ### Main divergence
 
 Stable preflight validates the existing exact qualification chain before treating

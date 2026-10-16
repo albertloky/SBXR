@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
@@ -38,45 +39,70 @@ type qualificationEnvelope struct {
 	Stage  string `json:"stage"`
 }
 
+// Diagnostic text is fixed by the check; private parser/I/O causes stay unwrap-able.
+type qualificationDiagnostic struct {
+	check string
+	cause error
+}
+
+func (err *qualificationDiagnostic) Error() string { return err.check }
+func (err *qualificationDiagnostic) Unwrap() error { return err.cause }
+
+func qualificationRefused(check string, cause error) error {
+	return &qualificationDiagnostic{check: check, cause: cause}
+}
+
 func runQualification(input io.Reader, output io.Writer) error {
 	document, err := io.ReadAll(io.LimitReader(input, maxQualificationFactsBytes+1))
-	if err != nil || len(document) == 0 || len(document) > maxQualificationFactsBytes || softwarelifecycle.ValidateUniqueJSON(document) != nil {
-		return errors.New("qualification facts refused")
+	if err != nil {
+		return qualificationRefused("qualification-input/read", err)
+	}
+	if len(document) == 0 {
+		return qualificationRefused("qualification-input/empty", nil)
+	}
+	if len(document) > maxQualificationFactsBytes {
+		return qualificationRefused(fmt.Sprintf("qualification-input/size expected<=%d observed>=%d", maxQualificationFactsBytes, len(document)), nil)
+	}
+	if err := softwarelifecycle.ValidateUniqueJSON(document); err != nil {
+		return qualificationRefused("qualification-input/unique-json", err)
 	}
 	var envelope qualificationEnvelope
-	if json.Unmarshal(document, &envelope) != nil || envelope.Schema != qualificationFactsSchema {
-		return errors.New("qualification facts refused")
+	if err := json.Unmarshal(document, &envelope); err != nil {
+		return qualificationRefused("qualification-input/envelope", err)
+	}
+	if envelope.Schema != qualificationFactsSchema {
+		return qualificationRefused("qualification-input/schema", nil)
 	}
 	var decision any
 	switch envelope.Stage {
 	case candidatePreflightStage:
 		var facts qualificationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateCandidatePreflight(facts, document)
 	case candidateDraftConstructionStage:
 		var facts candidateDraftConstructionFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateCandidateDraftConstruction(facts, document)
 	case candidateDraftVerificationStage:
 		var facts candidateDraftVerificationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateCandidateDraftVerification(facts, document)
 	case qualificationBoundaryStage:
 		var facts qualificationBoundaryFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateQualificationBoundary(facts)
 	case acceptanceVPSResultStage:
 		var facts acceptanceVPSResultFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateAcceptanceVPSResult(facts, document)
 	case v3PackagedLiveResultStage:
@@ -84,25 +110,25 @@ func runQualification(input io.Reader, output io.Writer) error {
 	case "v3-scenario-result":
 		var facts v3RecurringResultFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateV3ScenarioResult(facts, document)
 	case "v3-scenario-failure":
 		var facts v3ScenarioFailureFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateV3ScenarioFailure(facts, document)
 	case candidateFailureStage:
 		var facts candidateFailureFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateCandidateFailure(facts, document)
 	case candidateFailureVerificationStage:
 		var facts candidateFailureVerificationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateCandidateFailureVerification(facts, document)
 	case "owner-exception-result":
@@ -120,47 +146,47 @@ func runQualification(input io.Reader, output io.Writer) error {
 	case stablePublicationStage:
 		var facts stablePublicationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStablePublication(facts, document)
 	case stablePublicationVerificationStage:
 		var facts stablePublicationVerificationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStablePublicationVerification(facts, document)
 	case stablePublicationRecordStage:
 		var facts stablePublicationRecordFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStablePublicationRecord(facts, document)
 	case stableV3FinalizationStage:
 		var facts stableV3FinalizationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStableV3Finalization(facts, document)
 	case stableNoUpdateStage:
 		var facts stableNoUpdateFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStableNoUpdate(facts, document)
 	case stableFailureStage:
 		var facts stableFailureFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStableFailure(facts, document)
 	case stableFailureVerificationStage:
 		var facts stableFailureVerificationFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateStableFailureVerification(facts, document)
 	default:
-		return errors.New("qualification facts refused")
+		return qualificationRefused("qualification-input/stage", nil)
 	}
 	if err != nil {
 		return err

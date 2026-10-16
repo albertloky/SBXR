@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -446,38 +447,53 @@ func evaluateStablePublication(facts stablePublicationFacts, document []byte) (s
 
 // Record replay is reachable only through the explicit, action-free record verifier.
 func replayStablePublication(facts stablePublicationFacts, document []byte, recordOnly bool) (stablePublicationDecision, error) {
-	refused := func() (stablePublicationDecision, error) {
-		return stablePublicationDecision{}, errors.New("stable publication refused")
+	refused := func(check string) (stablePublicationDecision, error) {
+		return stablePublicationDecision{}, qualificationRefused("stable-publication/"+check, nil)
 	}
 	observedAt, timeErr := time.Parse(time.RFC3339, facts.ObservedAt)
 	authorized := facts.Approval.State == "automatic" && facts.Approval.Environments != nil && len(facts.Approval.Environments) == 0 || facts.Approval.State == "approved" && len(facts.Approval.Environments) == 1 && facts.Approval.Environments[0].Name == "stable-publication"
-	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationStage || facts.ActionIndex < 0 || !authorized || timeErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || secretBearing(document) {
-		return refused()
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationStage || timeErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || secretBearing(document) {
+		return refused("facts")
+	}
+	if !authorized {
+		return refused("approval")
+	}
+	if facts.ActionIndex < 0 {
+		return refused("action-index expected>=0")
 	}
 	preflight, preflightFacts, err := verifiedStablePreflight(facts.PreflightFacts, facts.PreflightDecision)
-	if err != nil || facts.ActionIndex >= len(preflight.Actions) {
-		return refused()
+	if err != nil {
+		return stablePublicationDecision{}, err
+	}
+	if facts.ActionIndex >= len(preflight.Actions) {
+		return refused(fmt.Sprintf("action-index expected<%d observed=%d", len(preflight.Actions), facts.ActionIndex))
 	}
 	var manifest qualificationManifest
-	if !decodeCanonical(preflightFacts.SignedManifest, &manifest) || !validPublicationHistory(manifest, facts.SubscriptionHistory) {
-		return refused()
+	if !decodeCanonical(preflightFacts.SignedManifest, &manifest) {
+		return refused("manifest")
+	}
+	if !validPublicationHistory(manifest, facts.SubscriptionHistory) {
+		return refused("subscription-history")
 	}
 	priorDecisionSHA256 := documentSHA256(facts.PreflightDecision)
 	expectedLatestReleaseID := preflightFacts.LatestReleaseID
 	if facts.ActionIndex == 0 {
 		if !bytes.Equal(facts.PriorVerificationFacts, []byte("null")) || !bytes.Equal(facts.PriorVerificationDecision, []byte("null")) {
-			return refused()
+			return refused("unexpected-prior-verification")
 		}
 	} else {
 		var priorFacts stablePublicationVerificationFacts
 		if !decodeCanonical(facts.PriorVerificationFacts, &priorFacts) {
-			return refused()
+			return refused("prior-verification-facts")
 		}
 		prior, err := replayStablePublicationVerification(priorFacts, facts.PriorVerificationFacts, recordOnly)
 		priorBytes, marshalErr := marshalCanonical(prior)
 		var priorPublicationFacts stablePublicationFacts
-		if err != nil || marshalErr != nil || !bytes.Equal(priorBytes, facts.PriorVerificationDecision) || prior.Outcome != "accepted" || !decodeCanonical(priorFacts.PublicationFacts, &priorPublicationFacts) || priorPublicationFacts.ActionIndex != facts.ActionIndex-1 || !bytes.Equal(priorPublicationFacts.PreflightFacts, facts.PreflightFacts) || !bytes.Equal(priorPublicationFacts.PreflightDecision, facts.PreflightDecision) {
-			return refused()
+		if err != nil {
+			return stablePublicationDecision{}, qualificationRefused("stable-publication/prior-verification: "+err.Error(), err)
+		}
+		if marshalErr != nil || !bytes.Equal(priorBytes, facts.PriorVerificationDecision) || prior.Outcome != "accepted" || !decodeCanonical(priorFacts.PublicationFacts, &priorPublicationFacts) || priorPublicationFacts.ActionIndex != facts.ActionIndex-1 || !bytes.Equal(priorPublicationFacts.PreflightFacts, facts.PreflightFacts) || !bytes.Equal(priorPublicationFacts.PreflightDecision, facts.PreflightDecision) {
+			return refused("prior-verification-decision")
 		}
 		priorDecisionSHA256 = documentSHA256(facts.PriorVerificationDecision)
 		value := preflight.Actions[facts.ActionIndex-1].ReleaseID
@@ -493,13 +509,16 @@ func replayStablePublication(facts stablePublicationFacts, document []byte, reco
 		}
 		validObservation = (!observed.Prerelease || recovery) && validStablePublicationTarget(observed, action) && reflect.DeepEqual(observed.LatestReleaseID, expectedLatestReleaseID) && observed.Attestation == nil && observed.LatestInstallSHA256 == "" && observed.PublicVerification == nil
 	}
-	if facts.PriorDecisionSHA256 != priorDecisionSHA256 || !validObservation {
-		return refused()
+	if facts.PriorDecisionSHA256 != priorDecisionSHA256 {
+		return refused("prior-decision-sha256")
+	}
+	if !validObservation {
+		return refused("observation")
 	}
 	legacy := recordOnly && facts.RemoteMain == "" && len(facts.Approval.DecisionChain) == 0 && preflight.Outcome == "actions-required" && preflightFacts.MainReview == nil
 	if !legacy {
 		if !validCommit(facts.RemoteMain) {
-			return refused()
+			return refused("remote-main")
 		}
 		chain := []decisionChainEntry{{DecisionSHA256: documentSHA256(facts.PreflightDecision), FactsSHA256: documentSHA256(facts.PreflightFacts), Outcome: preflight.Outcome, Stage: stablePreflightStage}}
 		review := preflightFacts.MainReview
@@ -517,12 +536,15 @@ func replayStablePublication(facts stablePublicationFacts, document []byte, reco
 func verifiedStablePreflight(factsDocument, decisionDocument []byte) (stablePublicationDecision, stablePreflightFacts, error) {
 	var facts stablePreflightFacts
 	if !decodeCanonical(factsDocument, &facts) {
-		return stablePublicationDecision{}, stablePreflightFacts{}, errors.New("stable publication refused")
+		return stablePublicationDecision{}, stablePreflightFacts{}, qualificationRefused("stable-publication/preflight-canonical-facts", nil)
 	}
 	decision, err := evaluateStablePreflight(facts, factsDocument)
 	decisionBytes, marshalErr := marshalCanonical(decision)
-	if err != nil || marshalErr != nil || !bytes.Equal(decisionBytes, decisionDocument) {
-		return stablePublicationDecision{}, stablePreflightFacts{}, errors.New("stable publication refused")
+	if err != nil {
+		return stablePublicationDecision{}, stablePreflightFacts{}, qualificationRefused("stable-publication/preflight: "+err.Error(), err)
+	}
+	if marshalErr != nil || !bytes.Equal(decisionBytes, decisionDocument) {
+		return stablePublicationDecision{}, stablePreflightFacts{}, qualificationRefused("stable-publication/preflight-decision", marshalErr)
 	}
 	return decision, facts, nil
 }

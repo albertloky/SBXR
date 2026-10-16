@@ -2303,7 +2303,7 @@ func TestExecuteRefusesUntrustedPreparedAuthority(t *testing.T) {
 		installation := newInstallation(host)
 		prepared := installation.Review(t.Context(), StartSetupAction).Prepared
 		host.preflight.PublicIPv4 = "1.1.1.1"
-		assertRefused(t, installation.Execute(t.Context(), *prepared, Approved, nil), "Prepared Action facts")
+		assertRefused(t, installation.Execute(t.Context(), *prepared, Approved, nil), "Public IPv4 changed")
 	})
 }
 

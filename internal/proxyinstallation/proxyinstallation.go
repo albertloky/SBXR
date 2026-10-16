@@ -597,7 +597,7 @@ func (module *installedInterface) review(ctx context.Context, action Action) Rev
 	facts := module.host.Preflight(ctx, slices.Clone(footprint), slices.Clone(destinations))
 	selected, failed, correction := acceptedPreflight(facts)
 	if failed != "" {
-		review.Result = refused(NotSetUp, failed, correction)
+		review.Result = setupPreflightRefused(NotSetUp, facts, failed, correction)
 		return review
 	}
 	identity, err := module.singbox.PrepareIdentity()
@@ -1102,9 +1102,18 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 	installed := module.statusUnderMutationLock(ctx, lock)
 	currentFacts := module.host.Preflight(ctx, slices.Clone(footprint), slices.Clone(destinations))
 	currentFacts.MutationLockAvailable = authority.facts.MutationLockAvailable
-	selected, failed, _ := acceptedPreflight(currentFacts)
-	if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release || failed != "" || !samePreflight(authority.facts, currentFacts) || !module.singbox.ValidIdentity(authority.identity) {
-		return refused(authority.status, "Prepared Action facts", "Review the action again after restoring every changed safety fact.")
+	selected, failed, correction := acceptedPreflight(currentFacts)
+	if installed.State != softwarelifecycle.Ready || installed.Installed == nil || *installed.Installed != authority.release {
+		return setupDiagnosticRefused(authority.status, "Installed SBXR revalidation", "SETUP-REVALIDATION-INSTALLED", "Ready with the reviewed Release Identity", fmt.Sprintf("state=%s, identity_present=%t, identity_matches=%t", setupLifecycleState(installed.State), installed.Installed != nil, installed.Installed != nil && *installed.Installed == authority.release), "Restore the reviewed Ready installation, then review Start setup again.")
+	}
+	if failed != "" {
+		return setupPreflightRefused(authority.status, currentFacts, failed, correction)
+	}
+	if !samePreflight(authority.facts, currentFacts) {
+		return setupDiagnosticRefused(authority.status, changedSetupFact(authority.facts, currentFacts), "SETUP-REVALIDATION-DRIFT", "unchanged reviewed preflight facts", "changed preflight facts", "Inspect the changed fact and review Start setup again; the old Prepared Action cannot be reused.")
+	}
+	if !module.singbox.ValidIdentity(authority.identity) {
+		return setupDiagnosticRefused(authority.status, "Generated Client Identity revalidation", "SETUP-REVALIDATION-IDENTITY", "valid generated identity", "identity validation failed", "Review Start setup again with the qualified executable; no identity values are included in diagnostics.")
 	}
 	configuration, err := module.singbox.EncodeServerConfiguration(authority.identity, selected.Address, selected.ServerName)
 	if err != nil {
