@@ -5,6 +5,13 @@ under [ADR-0028](../adr/0028-clean-install-only.md), with HTTP behavior from
 [ADR-0026](../adr/0026-http-subscription.md). Historical HTTPS evidence
 retains its policy and cannot qualify changed HTTP candidate bytes.
 
+[Qualified publication and retry](../adr/0032-qualified-publication-retry.md)
+permits stable publication after successful exact-candidate tests and cleanup,
+starting automatically when the official main-branch qualification completes
+successfully, without a second human publication approval. Main divergence still
+requires exact review. A publishing failure preserves that qualification for
+transparent retry; authentication and exact bytes are rechecked.
+The narrow legacy prepublication-failure recovery retains the original burn/audit.
 
 ## Recorded release state
 
@@ -25,8 +32,9 @@ removal. No source setup or subscription certificate issuance is needed.
 [The live89 operator-recording correction](../adr/0029-live89-operator-recording-correction.md)
 is restricted to fresh v3.1.90/168. It reuses the accepted five HTTP journeys with
 unchanged product source and executable payloads, preserves the original failed
-workflow/burn and null cleanup callback, and requires fresh automated qualification
-and separate publication approval. It does not schedule another live attempt or
+workflow/burn and null cleanup callback, and requires fresh automated qualification.
+Its historical separate approval requirement is refined by ADR-0032 for current
+publication. It does not schedule another live attempt or
 change the ordinary procedure for other candidates.
 
 [Ordinary recurring live acceptance](ordinary-recurring-live.md) and

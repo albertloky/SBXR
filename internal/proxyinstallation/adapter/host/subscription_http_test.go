@@ -30,6 +30,9 @@ func httpSubscriptionFixture(t *testing.T) (Adapter, *bool) {
 	}
 	firewall := false
 	a.subscriptionCommand = func(_ context.Context, name string, args ...string) (string, int, bool) {
+		if value, ok := firewallFixtureProperty(a, SubscriptionResourcesForEnablement("8.8.8.8", SubscriptionPreflight{HTTP: true}), name, args); ok {
+			return value, 0, true
+		}
 		switch name {
 		case "iptables-save":
 			rules := "*filter\n:INPUT ACCEPT [0:0]\n"
@@ -41,7 +44,7 @@ func httpSubscriptionFixture(t *testing.T) (Adapter, *bool) {
 			if slices.Equal(args, []string{"enable", "--now", "sbxr-subscription-firewall.service"}) {
 				firewall = true
 			}
-			if slices.Equal(args, []string{"disable", "--now", "sbxr-subscription-firewall.service"}) {
+			if slices.Equal(args, []string{"disable", "--now", "sbxr-subscription-firewall.service"}) || slices.Equal(args, []string{"stop", "sbxr-subscription-firewall.service"}) {
 				firewall = false
 			}
 			return "", 0, true

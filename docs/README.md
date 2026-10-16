@@ -26,6 +26,13 @@ Historical HTTPS and recurring policies retain their meanings; they do not add
 source update/recovery journeys to the current scope. Local implementation and
 regressions do not assert a packaged live pass.
 
+[Qualified publication and retry](adr/0032-qualified-publication-retry.md) makes
+successful exact-candidate tests and cleanup the stable-publication authority.
+Successful current clean-install-only qualification starts stable publication automatically.
+Publication revalidates authentication and unchanged bytes, pauses for exact
+main-divergence review when needed, preserves failures for transparent retry, and
+requires no second human publication approval.
+
 ## Repository layout
 
 ```text

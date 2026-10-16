@@ -11,6 +11,7 @@ declarations and wire formats.
 | Boundary | [qualification_boundary.go](qualification_boundary.go) | Signed-manifest and native-approval boundary checks. |
 | Legacy live records | [qualification_legacy_live.go](qualification_legacy_live.go) | Installer-Updater and first-V3 historical record readers and shared record shapes. |
 | Publication | [qualification_publication.go](qualification_publication.go) | Stable publication and no-update evaluation. |
+| Publication recovery | [qualification_publication_recovery.go](qualification_publication_recovery.go) | Authenticated prepublication recovery, preserved burn history and original failed-record audit. |
 | Failure | [qualification_failure.go](qualification_failure.go) | Failure and withdrawal records. |
 | Scope and recurring evidence | [qualification_scope.go](qualification_scope.go), [qualification_recurring.go](qualification_recurring.go) | Scope selection and recurring/historical live evidence validation. |
 | Ordinary live evidence | [qualification_mvp.go](qualification_mvp.go) | The five policy-specific HTTPS/HTTP journeys and exact-source packaged update/recovery checks. |
@@ -47,7 +48,51 @@ still exits successfully when the result was written, so callers must require
 permits equivalent native proofs while retaining signature and byte checks.
 This verification policy does not qualify a live release.
 
-## Publication eligibility after main drift
+## Qualified publication and retry
+
+Successful required tests and cleanup qualify the exact unchanged candidate for
+stable publication under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md).
+The stable workflow binds the verified facts and decision automatically, without
+a second `stable-publication` human environment approval or another
+`acceptance-vps` host probe. Authentication, exact asset digests and the complete
+successful acceptance chain remain required on every publication attempt.
+Successful completion of this repository's official `Construct qualified drafts`
+workflow on `main` starts current clean-install-only publication automatically
+through `workflow_run`; historical scopes retain explicit dispatch.
+Only successful same-repository runs qualify for that trigger. Main divergence
+still pauses for the exact review below. Manual dispatch retains
+`qualification_run_id` for retrying that successful run or explicitly abandoning it.
+
+A publication job failure preserves qualification and its actual failure evidence
+for retry of the same candidate run. Observe the current release state first if a
+request may already have succeeded. Only explicit abandonment invokes the stable
+failure finalizer and burn path. No failed test or incomplete cleanup can be
+converted into a pass by retrying publication.
+
+An old clean-install-only candidate already finalized as an immutable failed
+prerelease can recover only with its authenticated `prepublication-failure` burn,
+original complete successful acceptance chain and exact unchanged identity,
+release ID and assets. The stable workflow authenticates the existing signed
+qualification and burn, then archives validated recovery facts before promoting
+that same release through metadata. No new signing permissions are required. Its notes contain the original
+qualified Acceptance Record plus an audit footer with the complete original failed
+record in base64 and its SHA-256 digest; the burn tag and signed qualification
+record remain untouched. It creates no new candidate, tag, sequence or asset bytes
+and needs no replacement live run when the original evidence remains complete
+and applicable. Other burns and integrity failures still refuse. See ADR-0032 for
+the v3.1.95/173 applicability and historical limits.
+
+Stable preflight refusals print a fixed `stable-preflight/<gate>` name without
+input values. Optional `stable-preflight-diagnostics-<run>` artifacts contain only
+fixed outcome values, counts and exact input sizes/SHA-256 digests. Raw facts,
+release bodies and arbitrary strings are excluded rather than trusted to a
+marker-only secret scan. Collection/upload failures skip unsafe uploads and emit
+a fixed warning; they cannot change the validator result or trigger a burn.
+The successful verified-input artifact and provenance checks remain required.
+A reconstruction using refreshed observations does not
+establish the historical rejecting gate.
+
+### Main divergence
 
 Stable preflight validates the existing exact qualification chain before treating
 main drift as `pending-review`. Its `review-stable-release` actions retain the
@@ -57,20 +102,22 @@ and the evidence-applicability `rationale`. The helper
 `.github/scripts/release-main-review.py` reproduces the committed divergence.
 
 The workflow's `reviewed_main`, `security_assessment` and `divergence_rationale`
-inputs prepare the review; its separate protected `stable-publication` approval
-binds the stable-preflight facts/decision in the existing `approval.decision_chain`.
+inputs prepare the review; its automatic `approval.decision_chain` binds the
+stable-preflight facts and decision.
 Publication facts carry fresh `remote_main`. Only `no-security-fixes-missing` for
 the exact reviewed main can advance a divergent candidate. Further main drift or
-stale approval returns `pending-review` with no publication actions. The workflow
+stale review returns `pending-review` with no publication actions. The workflow
 also rechecks main immediately before each publication request and skips burn and
-finalization on a review pause. Actual failures and abandonment keep their burn
-handling. Current publication and propagation verification always require fresh
-main and bound approval. Historical accepted publication records use the explicit
+finalization on a review pause. Failed publishing attempts preserve qualification;
+explicit abandonment retains burn handling. Current publication and propagation
+verification always require fresh main and the bound decision chain.
+Historical accepted publication records use the explicit
 `stable-publication-record-verification` stage, which takes canonical
 `publication_verification_facts` and `publication_verification_decision`, returns
 `accepted-record` with no actions, and cannot authorize publication or propagation.
-Omitting current fields does not select that route. Acceptance Records and public
-readers are unchanged. See [ADR-0030](../../docs/adr/0030-reviewed-release-main-divergence.md).
+Omitting current fields does not select that route. Historical signed records
+retain their interpretation. See [ADR-0030](../../docs/adr/0030-reviewed-release-main-divergence.md)
+with ADR-0032's publication and retry refinement.
 
 ## Approved r24 supplement
 
@@ -100,8 +147,9 @@ The integrated exception is restricted to v3.1.81/159. Its signed
 `owner-exception-result` additionally requires the exact canonical archival
 supplement and matching historical package/host/client declarations. It emits an
 explicit reuse record, not fresh live scenarios. Normal native qualification,
-attestations, burns and separate publication approval still apply. Public readers
-and stable finalization understand the same bounded profile.
+attestations and qualification failure handling still apply. Current publication
+follows ADR-0032. Public readers and stable finalization understand the same
+bounded profile.
 
 ## Approved live89 operator-recording correction
 
@@ -124,7 +172,8 @@ scenario references and a fifth reference to the approved correction bundle.
 Explicit provenance discloses reused live89 evidence, the original failed
 workflow/burn, actual timestamps and null callback, and no fresh live run. New
 release identity stamps and asset/index/installer metadata differ. Installed
-product and public readers remain unchanged; fresh native checks, attestations,
-normal failure/burn handling and separate stable-publication approval remain.
+product and public readers remain unchanged; fresh native checks, attestations and
+normal qualification failure handling remain. Current publication/retry follows
+ADR-0032.
 See [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) for the
 exact applicability and audit boundary.

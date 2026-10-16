@@ -114,7 +114,7 @@ func runQualification(input io.Reader, output io.Writer) error {
 	case stablePreflightStage:
 		var facts stablePreflightFacts
 		if !decodeCanonical(document, &facts) {
-			return errors.New("qualification facts refused")
+			return stablePreflightRefusal("canonical-facts")
 		}
 		decision, err = evaluateStablePreflight(facts, document)
 	case stablePublicationStage:

@@ -74,7 +74,7 @@ func TestSubscriptionQualificationHasIsolatedRebootSafeTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"127.0.0.1:9443", "127.0.0.2", "--to-ports 9443", "ExecStartPre=", "ExecStopPost=", "WantedBy=multi-user.target", "systemctl enable", "systemctl disable", "cmp -s", "route-down", "update-ca-certificates", "transport-owned"} {
+	for _, required := range []string{"127.0.0.1:9443", "127.0.0.2", "--to-ports 9443", "ExecStartPre=", "ExecStopPost=", "WantedBy=multi-user.target", "systemctl enable", "owned_unit_link", "cmp -s", "route-down", "update-ca-certificates", "transport-owned"} {
 		if !strings.Contains(string(script), required) {
 			t.Fatalf("missing transport lifecycle %q", required)
 		}

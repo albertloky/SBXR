@@ -33,7 +33,8 @@ retains ordinary native, signing, attestation, failure and publication gates.
 | Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
 | Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [startup cancellation regression](test_mvp_startup_cleanup.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md); use the driver's `--protected-wrapper` opt-in |
 | Candidate transport | `v3-qualification-transport.sh` |
-| Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh`; `release-main-review.py` binds committed candidate/main divergence to an explicit security/evidence assessment for separate protected publication approval (see [ADR-0030](../../docs/adr/0030-reviewed-release-main-divergence.md)) |
+| Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh`; `release-main-review.py` binds committed candidate/main divergence to the security/evidence assessment retained by [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
+| Qualified publication retry | `publication-recovery.py`, `test_publication_recovery.py`; authenticate an existing prepublication burn and its certified workflow invocation, preserving the full failed record before metadata-only recovery under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Authenticated release asset reads | `download-release-asset.py` |
 | One-time v3.1.75 maintenance (outside release dispatch) | [helper](sbxr-snapshot-recovery/main.go), [executable driver](sbxr-snapshot-recovery/rehearse.py), [protected log-parent wrapper](sbxr-snapshot-recovery/with-protected-log-parent.sh), [command supervisor](sbxr-snapshot-recovery/protected_command_supervisor.py), [wrapper VM qualification](sbxr-snapshot-recovery/with-protected-log-parent-test.sh), [runbook comparison regression](sbxr-snapshot-recovery/test_runbook.py), and [runbook](../../docs/acceptance/v3.1.75-snapshot-recovery-runbook.md) |
 
@@ -43,6 +44,39 @@ unit, its staged publication path, and its enablement symlink. Absence checks
 treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
+
+The candidate transport persists an absolute cutoff in its existing `deadline`
+file, with a `runtime-deadline` sixty seconds earlier for process shutdown and
+rollback. `up [UTC_UNIX_EPOCH]` accepts an earlier approved cutoff; it cannot
+extend the signed `attended_finish_by` plus thirty minutes or the existing
+six-hour ceiling. Without attendance the legacy six-hour bound remains. The
+workflow derives the bound from the signed attendance value; the operator must
+choose that value within the approved security window before dispatch. An
+explicit cutoff bounds execution; it does not grant permission to start a run.
+For an approval at A with journeys ending by A+2h30 and cleanup by A+3h, use
+that attendance value and an absolute cutoff no later than A+3h. Preparation
+counts inside the window. Restart reads the stored runtime deadline unchanged.
+
+At cutoff the existing service terminates its gateway and descendants, escalates
+to KILL after five seconds, and runs bounded rollback of only its exact NAT
+rule, hosts line and matching CA source. Startup and shutdown are bounded too.
+The hook takes a lock on the existing `transport-owned` marker and rejects a
+replaced marker after waiting. It retains staging, keys and unit files because
+an operator may still be reading them; it neither drives product removal nor
+restores Mac/Karing state. Automatic routing rollback is not proof of complete
+run cleanup. Failures leave the unit failed and emit
+`SBXR-TRANSPORT-ROLLBACK-FAILED` in its journal; successful route restoration emits
+`SBXR-TRANSPORT-ROUTES-RESTORED`. Failure never extends the approved window.
+
+Normal `down` runs after the coordinator's readers have finished. It waits for
+the owned service to stop before taking the same lock, then restores routes,
+unlinks only the exact owned enablement link/unit, and validates the entire
+known staging tree before deleting its leaves. Unknown files, links, hardlinks
+or directories writable by group/others refuse deletion. The manifest and ownership marker are
+retained until other removals finish so a partial cleanup can be retried. Keep
+the existing protected-menu process supervision, product cleanup and client
+restoration inside the approved window; this transport cutoff adds no release
+qualification requirement.
 
 For local operator helpers that use `LABEL.private`, `LABEL.stderr` and
 `LABEL.receipt.json` for their inner captures, launch the outer command through

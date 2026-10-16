@@ -5,6 +5,10 @@ refinements apply only within their stated scope; this index does not adopt,
 revoke or rewrite a decision. [CONTEXT.md](../../CONTEXT.md) is the shared glossary.
 
 For current product and release scope, begin with [ADR-0028](0028-clean-install-only.md).
+For publication after successful qualification or recovery from a publishing
+failure, use [ADR-0032](0032-qualified-publication-retry.md). It refines the
+separate approval and automatic burn requirements without rewriting historical
+signed records.
 The [live89 operator-recording correction](0029-live89-operator-recording-correction.md)
 applies only to fresh v3.1.90/168 with unchanged product source and executable
 payloads; it preserves the failed v3.1.89 run and burn.
@@ -18,6 +22,7 @@ general publication waiver. See the [acceptance guide](../acceptance/README.md).
 
 ## Current V3 and scoped release decisions
 
+- [0032 — Publish qualified files and preserve publication retries](0032-qualified-publication-retry.md)
 - [0031 — Select equivalent native release proofs](0031-equivalent-native-release-proofs.md)
 
 - [0030 — Review main divergence before publishing an exact candidate](0030-reviewed-release-main-divergence.md)

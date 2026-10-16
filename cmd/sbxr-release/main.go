@@ -71,8 +71,18 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "qualification" {
-		if len(os.Args) != 2 || runQualification(os.Stdin, os.Stdout) != nil {
-			fmt.Fprintln(os.Stderr, "sbxr release qualification refused")
+		var err error
+		if len(os.Args) != 2 {
+			err = errors.New("qualification arguments refused")
+		} else {
+			err = runQualification(os.Stdin, os.Stdout)
+		}
+		if err != nil {
+			message := "sbxr release qualification refused"
+			if gate, ok := err.(stablePreflightRefusal); ok {
+				message += ": " + gate.Error()
+			}
+			fmt.Fprintln(os.Stderr, message)
 			os.Exit(1)
 		}
 		return

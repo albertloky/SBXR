@@ -32,6 +32,7 @@ finish pending work, convert durable authority, or create missing authority.
 | Software Lifecycle compatibility and runtime collaboration | [software_update.go](software_update.go) |
 | New-setup boot provisioning of the volatile whole-host lock | [lock_provision.go](lock_provision.go), [adapter/host/lock_provision.go](adapter/host/lock_provision.go), and [softwarelifecycle/mutation_lock.go](../softwarelifecycle/mutation_lock.go) |
 | Linux filesystem, systemd, Certbot, firewall, process, and lock mechanics | [adapter/host](adapter/host) |
+| Subscription firewall unit, effective commands, and exact enablement-link ownership | [adapter/host/subscription_firewall.go](adapter/host/subscription_firewall.go) |
 | sing-box configuration and UUID-only Client Identity replacement | [adapter/singbox/singbox.go](adapter/singbox/singbox.go) |
 | Numbered Owner menu and Software Lifecycle choices | [adapter/terminal/run.go](adapter/terminal/run.go) and [adapter/terminal/lifecycle.go](adapter/terminal/lifecycle.go) |
 | Authenticated HTTP serving and legacy TLS transaction compatibility | [subscriptionserving/README.md](subscriptionserving/README.md) and [subscriptionserving/serving.go](subscriptionserving/serving.go) |
@@ -52,6 +53,16 @@ historical migration implementation in
 [subscription_transport.go](subscription_transport.go) remains covered by its
 existing regressions; its presence is not a supported incoming path. Reviewed
 Complete removal still owns exact retained-resource cleanup.
+
+Subscription enablement and recorded resource removal prove the canonical main
+firewall file, absence of foreign fragments and drop-ins, and the effective
+systemd commands before starting or stopping that unit. Reload the verified file before using a loaded removal route. Removal
+stops only that unit and deletes only its exact owned enablement link; it does
+not use broad unit disablement to remove administrator-created links. If the
+main file is already absent, require a quiescent unit with no main or control process and remove only the
+proved dangling link. Foreign or uncertain routes refuse while
+retaining recovery authority. These checks do not protect against concurrent
+reconfiguration by another root process.
 
 The certificate-specific behavior below applies to legacy HTTPS records.
 

@@ -74,8 +74,6 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		"group: installer-updater-release",
 		"cancel-in-progress: false",
 		"github.ref == 'refs/heads/main'",
-		"environment: acceptance-vps",
-		"environment: stable-publication",
 		".github/workflows/candidate.yml",
 		"conclusion:$candidate_run[0].conclusion",
 		"gh attestation verify qualification-manifest.json",
@@ -129,6 +127,9 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		}
 	}
 	for _, forbidden := range []string{
+		"environment: acceptance-vps",
+		"environment: stable-publication",
+		"/approvals",
 		"sbxr-components-",
 		"acceptance staged-onboarding",
 		"validate-package-qualification",
@@ -163,14 +164,19 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 			t.Fatalf("stable preflight retained policy %q", forbidden)
 		}
 	}
-	approval := strings.Index(publication, `name == "stable-publication"`)
+	approval := strings.Index(publication, `environments:[],state:"automatic"`)
 	recheck := strings.Index(publication, `stage:"stable-publication"`)
 	action := strings.Index(publication, `.type == "publish-stable-release"`)
 	publish := strings.Index(publication, `gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id"`)
 	verify := strings.Index(publication, `stage:"stable-publication-verification"`)
 	accepted := strings.Index(publication, `.outcome == "accepted"`)
 	if approval < 0 || !(approval < recheck && recheck < action && action < publish && publish < verify && verify < accepted) {
-		t.Fatal("stable publication does not recheck and verify each approved draft before advancing")
+		t.Fatal("stable publication does not bind automatic authorization and verify each qualified release before advancing")
+	}
+	for _, forbidden := range []string{"ACCEPTANCE_VPS_", "ssh ", "ssh.key", "Recheck preserved B"} {
+		if strings.Contains(preflight, forbidden) {
+			t.Fatalf("stable preflight retained live-host dependency %q", forbidden)
+		}
 	}
 	assertActionsPinned(t, workflow)
 }
@@ -270,6 +276,9 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		t.Fatal("candidate failure handling does not verify and burn every identity before release mutation")
 	}
 	stableFailure := stable[strings.Index(stable, "finalize-failure:"):]
+	if !strings.Contains(stableFailure, "if: always() && inputs.operation == 'abandon'") || strings.Contains(stableFailure, "needs.preflight.result") || strings.Contains(stableFailure, "needs.publish.result") {
+		t.Fatal("recoverable publication failure still finalizes or burns the qualified release")
+	}
 	if strings.Index(stableFailure, "git push --atomic origin") > strings.Index(stableFailure, `gh release edit "$tag"`) ||
 		strings.Index(stableFailure, "git push --atomic origin") > strings.Index(stableFailure, `gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"`) ||
 		!strings.Contains(stableFailure, `jq -S .burn <<<"$action"`) ||

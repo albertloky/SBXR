@@ -41,7 +41,7 @@ func (a Adapter) PreflightHTTPSubscription(ctx context.Context, ipv4 string) Sub
 		}
 	}
 	rules = strings.Join(stable, "\n")
-	facts.Firewall = observation(code == 0 && strings.Contains(rules, "*filter\n") && strings.Contains(rules, ":INPUT ") && strings.Contains(rules, "\nCOMMIT") && !strings.Contains(rules, "sbxr-subscription"), observed && code == 0)
+	facts.Firewall = observation(code == 0 && strings.Contains(rules, "*filter\n") && strings.Contains(rules, ":INPUT ") && strings.Contains(rules, "\nCOMMIT") && !strings.Contains(rules, "sbxr-subscription") && a.subscriptionFirewallFilesSafe(false, false), observed && code == 0)
 	facts.FirewallIdentity = digest([]byte(rules))
 	return facts
 }
@@ -89,7 +89,13 @@ func (a Adapter) prepareHTTPSubscription(ctx context.Context, input Subscription
 	if input.Report != nil {
 		input.Report("Preparing HTTP subscription resources")
 	}
-	if !authorize(1, nil) || !a.publishSubscriptionFile(SubscriptionFirewallUnitPath, []byte(subscriptionResourceUnit(resources)), 0644) || !authorize(2, nil) || !a.subscriptionPreparationCommand(ctx, "systemctl", "daemon-reload") || !authorize(3, nil) || !a.subscriptionPreparationCommand(ctx, "systemctl", "enable", "--now", "sbxr-subscription-firewall.service") || !a.exactHTTPSubscriptionFirewall(input.PublicIPv4) || !authorize(8, &serving) || !a.prepareServingStaging() || !authorize(9, &serving) {
+	if !authorize(1, nil) || !a.publishSubscriptionFile(SubscriptionFirewallUnitPath, []byte(subscriptionResourceUnit(resources)), 0644) || !authorize(2, nil) || !a.subscriptionPreparationCommand(ctx, "systemctl", "daemon-reload") {
+		return failed
+	}
+	if safe, _ := a.subscriptionFirewallEffective(ctx, resources, false); !safe || !a.subscriptionFirewallFilesSafe(true, false) {
+		return failed
+	}
+	if !authorize(3, nil) || !a.subscriptionPreparationCommand(ctx, "systemctl", "enable", "--now", "sbxr-subscription-firewall.service") || !a.subscriptionFirewallFilesSafe(true, true) || !a.exactHTTPSubscriptionFirewall(input.PublicIPv4) || !authorize(8, &serving) || !a.prepareServingStaging() || !authorize(9, &serving) {
 		return failed
 	}
 	credential := append(bytes.Clone(input.Credential), '\n')

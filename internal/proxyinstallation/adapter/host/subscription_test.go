@@ -928,6 +928,9 @@ func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
 	adapter.packageLocksAvailable = func() bool { return true }
 	adapter.subscriptionBind = func(string, string) bool { return true }
 	adapter.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
+		if value, ok := firewallFixtureProperty(adapter, SubscriptionResourcesForEnablement(renewal.PublicIPv4, SubscriptionPreflight{}), name, args); ok {
+			return value, 0, true
+		}
 		switch name {
 		case "/snap/bin/certbot":
 			want := []string{"certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--required-profile", "shortlived", "--ip-address", renewal.PublicIPv4}
@@ -960,7 +963,7 @@ func testSubscriptionRecorderDirectory(t *testing.T, created bool) {
 			if slices.Equal(args, []string{"enable", "--now", "sbxr-subscription-firewall.service"}) {
 				firewall = true
 			}
-			if slices.Equal(args, []string{"disable", "--now", "sbxr-subscription-firewall.service"}) {
+			if slices.Equal(args, []string{"disable", "--now", "sbxr-subscription-firewall.service"}) || slices.Equal(args, []string{"stop", "sbxr-subscription-firewall.service"}) {
 				firewall = false
 			}
 		}

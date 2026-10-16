@@ -43,6 +43,11 @@ func httpsRetirementFixture(t *testing.T) (Adapter, HTTPSRetirementAuthority, Se
 	loaded := ServingAuthority{}
 	fallback := renewalAdapter.subscriptionCommand
 	a.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
+		unitBody, _ := os.ReadFile(a.path(SubscriptionFirewallUnitPath))
+		resources := SubscriptionResourcesForEnablement(renewal.PublicIPv4, SubscriptionPreflight{HTTP: !strings.Contains(string(unitBody), "--dport 80 ")})
+		if value, ok := firewallFixtureProperty(a, resources, name, args); ok {
+			return value, 0, true
+		}
 		if name == "iptables-save" {
 			body := "*filter\n:INPUT ACCEPT [0:0]\n-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT\n"
 			for _, port := range []string{"80", "8443"} {

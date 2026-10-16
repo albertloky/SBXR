@@ -53,6 +53,7 @@ type stablePreflightFacts struct {
 	MainReview          *stableMainReview          `json:"main_review,omitempty"`
 	ManifestAttested    bool                       `json:"manifest_attested"`
 	ObservedAt          string                     `json:"observed_at"`
+	PublicationRecovery *stablePublicationRecovery `json:"publication_recovery,omitempty"`
 	Releases            []stableReleaseObservation `json:"releases"`
 	RemoteMain          string                     `json:"remote_main"`
 	Schema              string                     `json:"schema"`
@@ -80,6 +81,7 @@ type publishStableReleaseAction struct {
 	Latest              bool                    `json:"latest"`
 	ObservedAt          string                  `json:"observed_at"`
 	Prerelease          bool                    `json:"prerelease"`
+	PriorBody           *string                 `json:"prior_body,omitempty"`
 	PriorDecisionSHA256 string                  `json:"prior_decision_sha256"`
 	ReleaseID           int64                   `json:"release_id"`
 	ReleaseIdentity     decisionReleaseIdentity `json:"release_identity"`
@@ -248,19 +250,24 @@ type stableNoUpdateDecision struct {
 	Stage               string                  `json:"stage"`
 }
 
+// Only fixed gate names reach stderr; rejected input values remain private.
+type stablePreflightRefusal string
+
+func (gate stablePreflightRefusal) Error() string { return "stable-preflight/" + string(gate) }
+
 func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stablePublicationDecision, error) {
-	refused := func() (stablePublicationDecision, error) {
-		return stablePublicationDecision{}, errors.New("stable preflight refused")
+	refused := func(gate stablePreflightRefusal) (stablePublicationDecision, error) {
+		return stablePublicationDecision{}, gate
 	}
 	observedAt, observedErr := time.Parse(time.RFC3339, facts.ObservedAt)
 	createdAt, createdErr := time.Parse(time.RFC3339, facts.CandidateRun.CreatedAt)
 	age := observedAt.Sub(createdAt)
 	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePreflightStage || !facts.ManifestAttested || facts.BurnedIdentities == nil || facts.Releases == nil || secretBearing(document) || observedErr != nil || createdErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || createdAt.Format(time.RFC3339) != facts.CandidateRun.CreatedAt || age < 0 || age >= 90*24*time.Hour || !validSHA256(facts.ChecklistSHA256) || !validCommit(facts.RemoteMain) || !validFailureBurns(facts.BurnedIdentities) {
-		return refused()
+		return refused("facts")
 	}
 	var envelope qualificationEnvelope
 	if json.Unmarshal(facts.AcceptanceFacts, &envelope) != nil {
-		return refused()
+		return refused("acceptance-facts")
 	}
 	var records []acceptanceRecord
 	var boundaryDocument json.RawMessage
@@ -268,12 +275,12 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	case acceptanceVPSResultStage:
 		var acceptanceFacts acceptanceVPSResultFacts
 		if !decodeCanonical(facts.AcceptanceFacts, &acceptanceFacts) {
-			return refused()
+			return refused("acceptance-facts")
 		}
 		acceptance, err := evaluateAcceptanceVPSResult(acceptanceFacts, facts.AcceptanceFacts)
 		acceptanceBytes, marshalErr := marshalCanonical(acceptance)
 		if err != nil || marshalErr != nil || !bytes.Equal(acceptanceBytes, facts.AcceptanceDecision) {
-			return refused()
+			return refused("acceptance-decision")
 		}
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
 	case v3PackagedLiveResultStage, "owner-exception-result", live89CorrectionStage:
@@ -281,54 +288,70 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 			QualificationBoundaryFacts json.RawMessage `json:"qualification_boundary_facts"`
 		}
 		if json.Unmarshal(facts.AcceptanceFacts, &acceptanceFacts) != nil {
-			return refused()
+			return refused("acceptance-facts")
 		}
 		acceptance, err := evaluateV3Result(facts.AcceptanceFacts)
 		acceptanceBytes, marshalErr := marshalCanonical(acceptance)
 		if err != nil || marshalErr != nil || !bytes.Equal(acceptanceBytes, facts.AcceptanceDecision) {
-			return refused()
+			return refused("acceptance-decision")
 		}
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
 	default:
-		return refused()
+		return refused("acceptance-stage")
 	}
 	var boundaryFacts qualificationBoundaryFacts
 	if !decodeCanonical(boundaryDocument, &boundaryFacts) {
-		return refused()
+		return refused("boundary-facts")
 	}
 	manifest, err := evaluateQualificationBoundary(boundaryFacts)
 	manifestBytes, manifestBytesErr := marshalCanonical(manifest)
-	if err != nil || manifestBytesErr != nil || !bytes.Equal(facts.SignedManifest, manifestBytes) || facts.ChecklistSHA256 != manifest.AcceptanceVPSChecklistSHA256 || facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) {
-		return refused()
+	if err != nil || manifestBytesErr != nil || !bytes.Equal(facts.SignedManifest, manifestBytes) {
+		return refused("boundary-manifest")
+	}
+	if facts.ChecklistSHA256 != manifest.AcceptanceVPSChecklistSHA256 {
+		return refused("checklist")
+	}
+	if facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) {
+		return refused("candidate-run")
 	}
 	if review := facts.MainReview; review != nil && (review.CandidateCommit != manifest.Workflow.Commit || !validCommit(review.ReviewedMain) || !validSHA256(review.DivergenceSHA256) || strings.TrimSpace(review.Rationale) == "" || (review.SecurityAssessment != "unreviewed" && review.SecurityAssessment != "no-security-fixes-missing" && review.SecurityAssessment != "security-fixes-missing")) {
-		return refused()
+		return refused("main-review")
 	}
 	var verificationFacts candidateDraftVerificationFacts
 	if !decodeCanonical(boundaryFacts.DraftVerificationFacts, &verificationFacts) {
-		return refused()
+		return refused("draft-verification-facts")
 	}
 	var constructionFacts candidateDraftConstructionFacts
 	if !decodeCanonical(verificationFacts.ConstructionFacts, &constructionFacts) {
-		return refused()
+		return refused("draft-construction-facts")
 	}
 	var preflightFacts qualificationFacts
-	if !decodeCanonical(constructionFacts.PreflightFacts, &preflightFacts) || facts.Archive != (stableArchiveObservation{Commit: preflightFacts.ArchiveCommit, RemoteCommit: preflightFacts.ArchiveRemoteCommit, RemoteTagObject: preflightFacts.ArchiveRemoteTagObject, TagObject: preflightFacts.ArchiveTagObject, Type: preflightFacts.ArchiveType}) || !reflect.DeepEqual(facts.LatestTag, preflightFacts.LatestTag) || !reflect.DeepEqual(facts.BurnedIdentities, preflightFacts.BurnedIdentities) {
-		return refused()
+	if !decodeCanonical(constructionFacts.PreflightFacts, &preflightFacts) {
+		return refused("candidate-preflight-facts")
+	}
+	if facts.Archive != (stableArchiveObservation{Commit: preflightFacts.ArchiveCommit, RemoteCommit: preflightFacts.ArchiveRemoteCommit, RemoteTagObject: preflightFacts.ArchiveRemoteTagObject, TagObject: preflightFacts.ArchiveTagObject, Type: preflightFacts.ArchiveType}) {
+		return refused("archive")
+	}
+	resuming := currentCleanPublication(manifest) && len(facts.Releases) == 1 && !facts.Releases[0].Draft && facts.Releases[0].Immutable && !facts.Releases[0].Prerelease && facts.LatestTag != nil && *facts.LatestTag == manifest.Releases[0].Tag && facts.LatestReleaseID != nil && *facts.LatestReleaseID == manifest.Releases[0].ReleaseID
+	if !reflect.DeepEqual(facts.LatestTag, preflightFacts.LatestTag) && !resuming {
+		return refused("latest-tag")
 	}
 	if !validPublicationHistory(manifest, facts.SubscriptionHistory) {
-		return refused()
+		if facts.SubscriptionHistory != nil && facts.SubscriptionHistory.PublicLatest.Outcome != "accepted" {
+			return refused("subscription-history-public-latest")
+		}
+		return refused("subscription-history")
 	}
 	var expectedLatestReleaseID *int64
 	if preflightFacts.LatestTag != nil {
 		release, exists := releaseByTag(preflightFacts.Releases, *preflightFacts.LatestTag)
 		if !exists {
-			return refused()
+			return refused("latest-source")
 		}
 		expectedLatestReleaseID = &release.ID
 	}
-	if !reflect.DeepEqual(facts.LatestReleaseID, expectedLatestReleaseID) {
-		return refused()
+	if !reflect.DeepEqual(facts.LatestReleaseID, expectedLatestReleaseID) && !resuming {
+		return refused("latest-release-id")
 	}
 	preflight, err := verifiedPreflightDecision(constructionFacts.PreflightFacts, constructionFacts.PreflightDecision)
 	expectedReleases := 2
@@ -336,28 +359,54 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		expectedReleases = 1
 	}
 	if err != nil || preflight.SourceState != manifest.SourceState || len(manifest.Releases) != expectedReleases || len(facts.Releases) != expectedReleases || len(records) != expectedReleases {
-		return refused()
+		return refused("candidate-decision-release-count")
 	}
 	recordsByTag := make(map[string]string, len(records))
 	for _, record := range records {
 		if _, exists := recordsByTag[record.Tag]; exists {
-			return refused()
+			return refused("acceptance-record-tags")
 		}
 		recordsByTag[record.Tag] = record.Body
+	}
+	recoveryRecords, recoveryErr := assessStablePublicationRecovery(facts, manifest, recordsByTag, preflightFacts.BurnedIdentities)
+	if recoveryErr != nil {
+		return refused("publication-recovery")
+	}
+	if recoveryRecords == nil {
+		if currentCleanPublication(manifest) {
+			if !preservedPublicationBurns(facts.BurnedIdentities, preflightFacts.BurnedIdentities) {
+				return refused("burned-identities")
+			}
+			for _, burn := range facts.BurnedIdentities {
+				if burn.OriginalTag == manifest.Releases[0].Tag || burn.Sequence == manifest.Releases[0].Sequence {
+					return refused("burned-identities")
+				}
+			}
+		} else if !reflect.DeepEqual(facts.BurnedIdentities, preflightFacts.BurnedIdentities) {
+			return refused("burned-identities")
+		}
+	}
+	for tag, body := range recoveryRecords {
+		recordsByTag[tag] = body
 	}
 	for index, release := range manifest.Releases {
 		observed := facts.Releases[index]
 		if observed.Tag != release.Tag || observed.Sequence != release.Sequence || observed.Commit != release.Commit || observed.ReleaseID != release.ReleaseID || observed.ReleaseIdentity != release.ReleaseIdentity || !reflect.DeepEqual(observed.Assets, release.Assets) {
-			return refused()
+			return refused("release-identity-assets")
 		}
 		if manifest.Mode == "v3" || index == 1 || manifest.SourceState == "initial-normal" {
-			if !observed.Draft || observed.Immutable || observed.Prerelease || observed.Body != recordsByTag[release.Tag] {
-				return refused()
+			retry := currentCleanPublication(manifest) && !observed.Draft && observed.Immutable && !observed.Prerelease
+			recovery := recoveryRecords != nil && !observed.Draft && observed.Immutable && observed.Prerelease && observed.Body == facts.PublicationRecovery.FailedBody
+			if (!observed.Draft || observed.Immutable || observed.Prerelease) && !retry && !recovery {
+				return refused("release-state")
+			}
+			if observed.Body != recordsByTag[release.Tag] && !recovery {
+				return refused("release-body")
 			}
 		} else {
 			source, exists := releaseByTag(preflightFacts.Releases, release.Tag)
 			if !exists || observed.Draft || !observed.Immutable || observed.Prerelease != (manifest.SourceState == "rescue") || observed.Body != source.Body {
-				return refused()
+				return refused("source-release-state-record")
 			}
 		}
 	}
@@ -377,6 +426,9 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 			failureReason = "v3-publication-or-verification-failure"
 		}
 		actions[index] = publishStableReleaseAction{Assets: release.Assets, Body: recordsByTag[release.Tag], Commit: release.Commit, Draft: false, FactsSHA256: factsSHA256, FailureReason: failureReason, Immutable: true, Latest: true, ObservedAt: facts.ObservedAt, Prerelease: false, PriorDecisionSHA256: priorDecisionSHA256, ReleaseID: release.ReleaseID, ReleaseIdentity: release.ReleaseIdentity, Sequence: release.Sequence, Tag: release.Tag, Type: "publish-stable-release"}
+		if recoveryRecords != nil {
+			actions[index].PriorBody = &facts.PublicationRecovery.FailedBody
+		}
 	}
 	outcome := "actions-required"
 	if facts.RemoteMain != manifest.Workflow.Commit {
@@ -398,7 +450,8 @@ func replayStablePublication(facts stablePublicationFacts, document []byte, reco
 		return stablePublicationDecision{}, errors.New("stable publication refused")
 	}
 	observedAt, timeErr := time.Parse(time.RFC3339, facts.ObservedAt)
-	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationStage || facts.ActionIndex < 0 || facts.Approval.State != "approved" || len(facts.Approval.Environments) != 1 || facts.Approval.Environments[0].Name != "stable-publication" || timeErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || secretBearing(document) {
+	authorized := facts.Approval.State == "automatic" && facts.Approval.Environments != nil && len(facts.Approval.Environments) == 0 || facts.Approval.State == "approved" && len(facts.Approval.Environments) == 1 && facts.Approval.Environments[0].Name == "stable-publication"
+	if facts.Schema != qualificationFactsSchema || facts.Stage != stablePublicationStage || facts.ActionIndex < 0 || !authorized || timeErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || secretBearing(document) {
 		return refused()
 	}
 	preflight, preflightFacts, err := verifiedStablePreflight(facts.PreflightFacts, facts.PreflightDecision)
@@ -430,7 +483,17 @@ func replayStablePublication(facts stablePublicationFacts, document []byte, reco
 		value := preflight.Actions[facts.ActionIndex-1].ReleaseID
 		expectedLatestReleaseID = &value
 	}
-	if facts.PriorDecisionSHA256 != priorDecisionSHA256 || !validStablePublicationObservation(facts.Observation, preflight.Actions[facts.ActionIndex], expectedLatestReleaseID, false) {
+	action := preflight.Actions[facts.ActionIndex]
+	validObservation := validStablePublicationObservation(facts.Observation, action, expectedLatestReleaseID, false)
+	if currentCleanPublication(manifest) && !facts.Observation.Draft && facts.Observation.Immutable {
+		observed := facts.Observation
+		recovery := action.PriorBody != nil && observed.Body == *action.PriorBody && observed.Prerelease
+		if recovery {
+			observed.Body = action.Body
+		}
+		validObservation = (!observed.Prerelease || recovery) && validStablePublicationTarget(observed, action) && reflect.DeepEqual(observed.LatestReleaseID, expectedLatestReleaseID) && observed.Attestation == nil && observed.LatestInstallSHA256 == "" && observed.PublicVerification == nil
+	}
+	if facts.PriorDecisionSHA256 != priorDecisionSHA256 || !validObservation {
 		return refused()
 	}
 	legacy := recordOnly && facts.RemoteMain == "" && len(facts.Approval.DecisionChain) == 0 && preflight.Outcome == "actions-required" && preflightFacts.MainReview == nil
@@ -444,7 +507,6 @@ func replayStablePublication(facts stablePublicationFacts, document []byte, reco
 			return stablePublicationDecision{Actions: []publishStableReleaseAction{}, FactsSHA256: documentSHA256(document), Outcome: "pending-review", PriorDecisionSHA256: priorDecisionSHA256, Schema: qualificationDecisionSchema, Stage: stablePublicationStage}, nil
 		}
 	}
-	action := preflight.Actions[facts.ActionIndex]
 	action.Type = "publish-stable-release"
 	action.FactsSHA256 = documentSHA256(document)
 	action.PriorDecisionSHA256 = priorDecisionSHA256

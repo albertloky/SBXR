@@ -209,7 +209,16 @@ func validPublicationHistory(manifest qualificationManifest, history *v3ReleaseH
 		return history == nil
 	}
 	attempt := manifest.V3Attempt
+	// A retry may observe this exact candidate already made Latest by its prior
+	// publishing attempt. Its original baseline remains signed in the manifest.
+	if currentCleanPublication(manifest) && history != nil && len(manifest.Releases) == 1 && validSubscriptionHistory(history, attempt.Support.Scope, nil) && reflect.DeepEqual(historyBaseline(history), manifest.Releases[0]) {
+		return true
+	}
 	return attempt != nil && attempt.Support != nil && attempt.Baseline != nil && validSubscriptionHistory(history, attempt.Support.Scope, attempt.Baseline)
+}
+
+func currentCleanPublication(manifest qualificationManifest) bool {
+	return manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && len(manifest.Releases) == 1 && manifest.V3Attempt != nil && manifest.V3Attempt.Support != nil && manifest.V3Attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly
 }
 
 func historicalV1Tag(tag string) bool {

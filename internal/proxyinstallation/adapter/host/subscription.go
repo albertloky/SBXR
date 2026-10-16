@@ -322,7 +322,7 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 		return input.Authorize != nil && input.Authorize(checkpoint, serving)
 	}
 	resources := SubscriptionResourcesForEnablement(input.PublicIPv4, facts)
-	if input.Resources != resources || !resources.Valid() {
+	if input.Resources != resources || !resources.Valid() || !adapter.subscriptionFirewallFilesSafe(false, false) {
 		return SubscriptionEnableResult{}
 	}
 	unit := subscriptionFirewallUnit(input.PublicIPv4)
@@ -347,7 +347,13 @@ func (adapter Adapter) PrepareSubscription(ctx context.Context, input Subscripti
 	if !authorize(4, nil) {
 		return SubscriptionEnableResult{Resources: resources}
 	}
-	if !adapter.publishSubscriptionFile(SubscriptionFirewallUnitPath, []byte(unit), 0644) || !authorize(5, nil) || !runOK("systemctl", "daemon-reload") || !authorize(6, nil) || !runOK("systemctl", "enable", "--now", "sbxr-subscription-firewall.service") || !adapter.exactSubscriptionFirewall(input.PublicIPv4) {
+	if !adapter.publishSubscriptionFile(SubscriptionFirewallUnitPath, []byte(unit), 0644) || !authorize(5, nil) || !runOK("systemctl", "daemon-reload") {
+		return SubscriptionEnableResult{Resources: resources}
+	}
+	if safe, _ := adapter.subscriptionFirewallEffective(ctx, resources, false); !safe || !adapter.subscriptionFirewallFilesSafe(true, false) {
+		return SubscriptionEnableResult{Resources: resources}
+	}
+	if !authorize(6, nil) || !runOK("systemctl", "enable", "--now", "sbxr-subscription-firewall.service") || !adapter.subscriptionFirewallFilesSafe(true, true) || !adapter.exactSubscriptionFirewall(input.PublicIPv4) {
 		return SubscriptionEnableResult{Resources: resources}
 	}
 	if input.Report != nil {
@@ -1092,7 +1098,7 @@ func (adapter Adapter) RemoveSubscriptionResources(ctx context.Context, authorit
 	if err != nil && !errors.Is(err, os.ErrNotExist) || err == nil && string(unit) != subscriptionResourceUnit(authority) {
 		return false
 	}
-	if !adapter.removeSubscriptionPublication(SubscriptionFirewallUnitPath, []byte(subscriptionResourceUnit(authority)), 0644) {
+	if !adapter.subscriptionFirewallFilesSafe(true, true) {
 		return false
 	}
 	run := adapter.subscriptionCommand
@@ -1100,10 +1106,28 @@ func (adapter Adapter) RemoveSubscriptionResources(ctx context.Context, authorit
 		run = commandOutput
 	}
 	if err == nil {
-		_, code, observed := run(ctx, "systemctl", "disable", "--now", "sbxr-subscription-firewall.service")
-		if !observed || code != 0 || !adapter.removeFile(SubscriptionFirewallUnitPath).OK {
+		_, code, observed := run(ctx, "systemctl", "daemon-reload")
+		if !observed || code != 0 {
 			return false
 		}
+	}
+	safe, loaded := adapter.subscriptionFirewallEffective(ctx, authority, errors.Is(err, os.ErrNotExist))
+	if !safe || err == nil && !loaded {
+		return false
+	}
+	if !adapter.removeSubscriptionPublication(SubscriptionFirewallUnitPath, []byte(subscriptionResourceUnit(authority)), 0644) {
+		return false
+	}
+	if loaded {
+		if safe, stillLoaded := adapter.subscriptionFirewallEffective(ctx, authority, false); !safe || !stillLoaded {
+			return false
+		}
+		_, code, observed := run(ctx, "systemctl", "stop", "sbxr-subscription-firewall.service")
+		if !observed || code != 0 || !adapter.removeSubscriptionFirewallLink() || !adapter.removeFile(SubscriptionFirewallUnitPath).OK {
+			return false
+		}
+	} else if !adapter.removeSubscriptionFirewallLink() || !adapter.safelyAbsent(SubscriptionFirewallUnitPath) {
+		return false
 	}
 	if !authority.HTTP && !adapter.removeOwnedLineage(serving) {
 		return false
@@ -1119,7 +1143,7 @@ func (adapter Adapter) RemoveSubscriptionResources(ctx context.Context, authorit
 		return false
 	}
 	rules, code, observed := run(ctx, "iptables-save", "-t", "filter")
-	return observed && code == 0 && !strings.Contains(rules, "--comment sbxr-subscription")
+	return observed && code == 0 && !strings.Contains(rules, "--comment sbxr-subscription") && adapter.subscriptionFirewallFilesSafe(false, false)
 }
 
 func subscriptionTCPAvailable(ipv4, port string) bool {

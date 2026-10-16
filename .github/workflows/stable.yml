@@ -1,6 +1,10 @@
 name: Publish qualified stable releases
 
 on:
+  workflow_run:
+    workflows: [Construct qualified drafts]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       operation:
@@ -45,24 +49,20 @@ env:
 
 jobs:
   preflight:
-    if: github.ref == 'refs/heads/main' && inputs.operation == 'publish'
+    if: github.ref == 'refs/heads/main' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) || inputs.operation == 'publish')
     runs-on: ubuntu-24.04
-    environment: acceptance-vps
     outputs:
-      request_approval: ${{ steps.eligibility.outputs.request_approval }}
+      publication_ready: ${{ steps.eligibility.outputs.publication_ready }}
     permissions:
       actions: read
       attestations: read
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+      QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id || github.event.workflow_run.id }}
       REVIEWED_MAIN: ${{ inputs.reviewed_main }}
       SECURITY_ASSESSMENT: ${{ inputs.security_assessment }}
       DIVERGENCE_RATIONALE: ${{ inputs.divergence_rationale }}
-      ACCEPTANCE_VPS_HOST: ${{ secrets.ACCEPTANCE_VPS_HOST }}
-      ACCEPTANCE_VPS_HOST_KEY: ${{ secrets.ACCEPTANCE_VPS_HOST_KEY }}
-      ACCEPTANCE_VPS_SSH_PRIVATE_KEY: ${{ secrets.ACCEPTANCE_VPS_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -93,6 +93,11 @@ jobs:
           cd ..
 
           manifest=verified/qualification-manifest.json
+          if test "$GITHUB_EVENT_NAME" = workflow_run && ! jq -e '.mode == "v3" and .v3_attempt.support.scope == "subscription-clean-install-only"' "$manifest" >/dev/null; then
+            printf 'publication_ready=false\n' >> "$GITHUB_OUTPUT"
+            printf '%s\n' 'Automatic publication applies to the current clean-install-only scope; historical scopes retain explicit dispatch.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           git fetch --force --tags origin
           if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
             python3 .github/scripts/live89-correction-review.py "$run_sha" > verified/live89-correction-review.json
@@ -164,55 +169,100 @@ jobs:
             jq -cS --slurpfile review verified/main-review.json '. + {main_review:$review[0]}' verified/stable-preflight-facts.json | tr -d '\n' > reviewed-facts.json
             mv reviewed-facts.json verified/stable-preflight-facts.json
           fi
+          python3 .github/scripts/publication-recovery.py verified/stable-preflight-facts.json > recovery-facts.json
+          mv recovery-facts.json verified/stable-preflight-facts.json
           go run ./cmd/sbxr-release qualification < verified/stable-preflight-facts.json > verified/stable-preflight-decision.json
           facts_sha256="$(sha256sum verified/stable-preflight-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum candidate/acceptance/acceptance-vps-result-decision.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "stable-preflight" and (.outcome == "actions-required" or .outcome == "pending-review") and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (if .outcome == "actions-required" then all(.actions[]; .type == "publish-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256) else all(.actions[]; .type == "review-stable-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256) end)' verified/stable-preflight-decision.json >/dev/null
           publish="$(jq -r --slurpfile facts verified/stable-preflight-facts.json '.outcome == "actions-required" or ($facts[0].main_review.security_assessment == "no-security-fixes-missing" and $facts[0].main_review.reviewed_main == $facts[0].remote_main)' verified/stable-preflight-decision.json)"
-          printf 'request_approval=%s\n' "$publish" >> "$GITHUB_OUTPUT"
+          printf 'publication_ready=%s\n' "$publish" >> "$GITHUB_OUTPUT"
+          while read -r action; do
+            tag="$(jq -r .tag <<<"$action")"
+            jq -jr .body <<<"$action" > "verified/records/$tag.md"
+          done < <(jq -c '.actions[]' verified/stable-preflight-decision.json)
           jq '{candidate:.candidate_run.head_sha,current_main:.remote_main,main_review,releases:[.releases[]|{tag,commit,assets}]}' verified/stable-preflight-facts.json >> "$GITHUB_STEP_SUMMARY"
           if test "$publish" != true; then printf '%s\n' 'Pending divergence review; qualification preserved. No publication or burn.' >> "$GITHUB_STEP_SUMMARY"; fi
 
-      - name: Recheck preserved B before publication approval
-        if: steps.eligibility.outputs.request_approval == 'true'
-        run: |
-          set -euo pipefail
-          if test "$(jq -r .mode verified/qualification-manifest.json)" = v3; then exit 0; fi
-          test -n "$ACCEPTANCE_VPS_HOST"
-          test -n "$ACCEPTANCE_VPS_HOST_KEY"
-          test -n "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY"
-          install -m 0600 /dev/null ssh.key
-          printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
-          printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
-          trap 'rm -f ssh.key known_hosts' EXIT
-          final_release="$(jq -c '.releases[1]' verified/qualification-manifest.json)"
-          environment="TAG=$(jq -r .tag <<<"$final_release") SEQUENCE=$(jq -r .sequence <<<"$final_release") COMMIT=$(jq -r .commit <<<"$final_release") INDEX=$(jq -r .release_identity.release_index_sha256 <<<"$final_release")"
-          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" "$environment bash -se" <<'REMOTE'
-          set -euo pipefail
-          test "$(. /etc/os-release; printf '%s:%s' "$ID" "$VERSION_ID")" = ubuntu:24.04
-          test "$(uname -m)" = x86_64
-          test "$(stat -c '%u:%g:%a:%h:%F' /usr/local/bin/sbxr)" = '0:0:755:1:regular file'
-          test "$(stat -c '%u:%g:%a:%F' /var/lib/sbxr)" = '0:0:700:directory'
-          test "$(stat -c '%u:%g:%a:%h:%F' /var/lib/sbxr/installed.json)" = '0:0:600:1:regular file'
-          test "$(find /var/lib/sbxr -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed.json
-          jq -e --arg tag "$TAG" --arg commit "$COMMIT" --arg index "$INDEX" --argjson sequence "$SEQUENCE" '.repository == "albertloky/SBXR" and .tag == $tag and .commit == $commit and .release_index_sha256 == $index and .sequence == $sequence and .architecture == "amd64"' /var/lib/sbxr/installed.json >/dev/null
-          test "$(jq -r .executable_sha256 /var/lib/sbxr/installed.json)" = "$(sha256sum /usr/local/bin/sbxr | cut -d' ' -f1)"
-          test ! -e /var/lib/sbxr/update.json
-          flock -n /run/lock/sbxr.lock true
-          printf '0\n' | script -qec 'env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr' /dev/null | grep -F 'Status: Ready'
-          REMOTE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verified-stable-publication-input
           path: verified
           if-no-files-found: error
           retention-days: 90
+      - name: Build bounded stable preflight diagnostic summary
+        id: preflight-diagnostics
+        if: always()
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, sys
+
+          def outcome(value, allowed):
+              if not isinstance(value, dict):
+                  return "unavailable"
+              result = value.get("outcome")
+              return result if isinstance(result, str) and result in allowed else "invalid"
+
+          def count(value):
+              return len(value) if isinstance(value, list) else None
+
+          try:
+              files, values = {}, {}
+              for name in ("verified/stable-preflight-facts.json", "verified/stable-preflight-decision.json", "current-release-history.json", "current-source-verification.json"):
+                  path = pathlib.Path(name)
+                  if not path.exists() and not path.is_symlink():
+                      files[path.name], values[path.name] = None, None
+                      continue
+                  if path.is_symlink() or not path.is_file():
+                      raise ValueError()
+                  with path.open("rb") as stream:
+                      raw = stream.read((16 << 20) + 1)
+                  if len(raw) > 16 << 20:
+                      raise ValueError()
+                  files[path.name] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+                  try:
+                      values[path.name] = json.loads(raw)
+                  except (ValueError, UnicodeError):
+                      values[path.name] = None
+              facts = values["stable-preflight-facts.json"]
+              facts = facts if isinstance(facts, dict) else {}
+              history = facts.get("subscription_history")
+              history = history if isinstance(history, dict) else {}
+              complete = history.get("complete")
+              summary = {"schema": "sbxr-stable-preflight-diagnostics-v1", "files": files,
+                         "validation_outcome": outcome(values["stable-preflight-decision.json"], {"actions-required", "pending-review"}),
+                         "public_latest_outcome": outcome(values["current-source-verification.json"], {"accepted", "refused", "unavailable"}),
+                         "history_complete": complete if type(complete) is bool else None,
+                         "history_release_count": count(history.get("releases")),
+                         "burned_identity_count": count(facts.get("burned_identities"))}
+              os.mkdir("preflight-diagnostics", 0o700)
+              with open("preflight-diagnostics/summary.json", "x") as stream:
+                  json.dump(summary, stream, sort_keys=True, separators=(",", ":"))
+          except Exception:
+              sys.exit(1)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        id: preflight-diagnostics-upload
+        if: always() && steps.preflight-diagnostics.outcome == 'success'
+        continue-on-error: true
+        with:
+          name: stable-preflight-diagnostics-${{ github.run_id }}
+          path: preflight-diagnostics/summary.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Warn when optional preflight diagnostics are unavailable
+        id: preflight-diagnostics-warning
+        if: always() && (steps.preflight-diagnostics.outcome == 'failure' || steps.preflight-diagnostics-upload.outcome == 'failure')
+        continue-on-error: true
+        run: printf '%s\n' '::warning::Stable preflight diagnostics unavailable; validation result unchanged.'
 
   publish:
-    if: inputs.operation == 'publish' && needs.preflight.outputs.request_approval == 'true'
+    if: needs.preflight.outputs.publication_ready == 'true' && (github.event_name == 'workflow_run' || inputs.operation == 'publish')
     needs: preflight
     runs-on: ubuntu-24.04
-    environment: stable-publication
     permissions:
       actions: read
       attestations: read
@@ -232,15 +282,13 @@ jobs:
         with:
           name: verified-stable-publication-input
           path: verified
-      - name: Publish unchanged drafts in the approved order and publicly verify them
+      - name: Publish unchanged qualified releases in order and publicly verify them
         id: publication
         run: |
           set -euo pipefail
           printf '%s\n' prepublication > publication-stage
           manifest=verified/qualification-manifest.json
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" > approvals.json
-          jq -e '[.[] | select(.state == "approved" and any(.environments[]; .name == "stable-publication"))] | length > 0' approvals.json >/dev/null
-          jq -cS --slurpfile decision verified/stable-preflight-decision.json --arg decision_sha256 "$(sha256sum verified/stable-preflight-decision.json | cut -d' ' -f1)" '[.[] | select(.state == "approved" and any(.environments[]; .name == "stable-publication"))][0] | {decision_chain:[{decision_sha256:$decision_sha256,facts_sha256:$decision[0].facts_sha256,outcome:$decision[0].outcome,stage:$decision[0].stage}],environments:[{name:"stable-publication"}],state:.state}' approvals.json > approval.json
+          jq -cnS --slurpfile decision verified/stable-preflight-decision.json --arg decision_sha256 "$(sha256sum verified/stable-preflight-decision.json | cut -d' ' -f1)" '{decision_chain:[{decision_sha256:$decision_sha256,facts_sha256:$decision[0].facts_sha256,outcome:$decision[0].outcome,stage:$decision[0].stage}],environments:[],state:"automatic"}' > approval.json
           mkdir -m 0700 public publication-evidence rechecked
 
           collect_observation() {
@@ -336,7 +384,7 @@ jobs:
             if test "$(jq -r .outcome stable-publication-decision.json)" = pending-review; then
               printf '%s\n' pending-review > publication-stage
               printf 'pending=true\n' >> "$GITHUB_OUTPUT"
-              printf '%s\n' 'Main or approval changed; publication paused for another review. Qualification preserved.' >> "$GITHUB_STEP_SUMMARY"
+              printf '%s\n' 'Main changed; publication paused for divergence review. Qualification preserved.' >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             facts_sha256="$(sha256sum stable-publication-facts.json | cut -d' ' -f1)"
@@ -353,7 +401,11 @@ jobs:
               exit 0
             fi
             printf '%s\n' "$(jq -r .failure_reason <<<"$action")" > publication-stage
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=false -f make_latest=true >/dev/null
+            if jq -e '.prior_body != null' <<<"$action" >/dev/null; then
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=false -f make_latest=true -F "body=@verified/records/$tag.md" >/dev/null
+            else
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -F prerelease=false -f make_latest=true >/dev/null
+            fi
             for attempt in $(seq 1 60); do
               if collect_observation "$action" "public/$tag" true > stable-publication-verification-observation.next; then mv stable-publication-verification-observation.next stable-publication-verification-observation.json; else printf 'null' > stable-publication-verification-observation.json; fi
               prior_decision_sha256="$(sha256sum stable-publication-decision.json | cut -d' ' -f1)"
@@ -537,7 +589,7 @@ jobs:
           retention-days: 90
 
   finalize-failure:
-    if: always() && (inputs.operation == 'abandon' || needs.preflight.result == 'failure' || needs.preflight.result == 'cancelled' || needs.publish.result == 'failure' || needs.publish.result == 'cancelled')
+    if: always() && inputs.operation == 'abandon'
     needs: [preflight, publish]
     runs-on: ubuntu-24.04
     permissions:

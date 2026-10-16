@@ -19,7 +19,8 @@ Its signed `live89_correction_review` and dedicated correction-result stage bind
 the exact accepted v3.1.89 archive, unchanged product/build source and identical
 unstamped executable payloads. It records reused evidence with the original
 failed workflow and burn intact, performs no new live journey and requires fresh
-native qualification, attestations and separate stable-publication approval.
+native qualification and attestations. Current publication follows
+[ADR-0032](../adr/0032-qualified-publication-retry.md).
 It is distinct from an Owner exception; all other candidates use this procedure.
 
 Use exactly these five journeys in order:
@@ -76,7 +77,7 @@ host cleanliness or a successful packaged live run.
 
 Apply the non-certificate prerequisites, operator/outside/Karing attendance,
 temporary qualification transport and protected-log-parent procedure, 30-minute technical scenarios, two-hour subscription journey,
-five-minute submission/validation, no-prefix-publication rule, stop/burn handling
+five-minute submission/validation, no-prefix-publication rule, stop/cleanup handling
 and actual safety/final cleanup from
 [ordinary recurring acceptance](ordinary-recurring-live.md). Qualification
 transport TLS, GitHub/asset TLS and software attestations remain separate.
@@ -88,6 +89,19 @@ apply to legacy HTTPS policies only. Do not run CA dry runs, replacement or
 renewal actions for a fresh HTTP candidate. Root-only isolated Linux/systemd
 fixtures and native CI remain required where applicable; local fixtures do not
 prove the VPS, outside route, real Karing's HTTP acceptance, or a live release.
+
+After all required tests and actual host/client/secret cleanup pass, the exact
+unchanged candidate qualifies for stable publication under
+[ADR-0032](../adr/0032-qualified-publication-retry.md). Successful completion of the
+official main-branch qualification starts the stable workflow automatically;
+main divergence still pauses for exact review. Publication replays that successful
+evidence and rechecks authentication, integrity and current release state; it
+requires no second human `stable-publication` approval or new
+`acceptance-vps` host probe. A publication job failure preserves qualification
+and accurate failure evidence for retry. Explicit abandonment retains the burn
+path. Failed or incomplete live checks and cleanup still stop qualification.
+The ADR also defines the narrow authenticated recovery of an old prepublication
+failure without rewriting its original burn or repeating already proved journeys.
 
 Bearer-token protection prevents unauthenticated retrieval at the server.
 Plain HTTP still lets a network observer steal the link and proxy UUID or alter

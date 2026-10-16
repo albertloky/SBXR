@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise exact Git divergence and the final publication pause without network."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -84,15 +85,15 @@ class MainReviewTests(unittest.TestCase):
                     else:
                         (root / "patched").unlink()
 
-    def test_pending_skip_does_not_burn_but_failure_and_abandonment_do(self):
+    def test_only_explicit_abandonment_burns(self):
         condition = WORKFLOW.read_text().split("  finalize-failure:\n", 1)[1].splitlines()[0].strip().removeprefix("if: ")
         for operation, preflight, publication, burn in [
             ("publish", "success", "skipped", False),
             ("publish", "success", "success", False),
-            ("publish", "failure", "skipped", True),
-            ("publish", "cancelled", "skipped", True),
-            ("publish", "success", "failure", True),
-            ("publish", "success", "cancelled", True),
+            ("publish", "failure", "skipped", False),
+            ("publish", "cancelled", "skipped", False),
+            ("publish", "success", "failure", False),
+            ("publish", "success", "cancelled", False),
             ("abandon", "skipped", "skipped", True),
         ]:
             with self.subTest(operation=operation, preflight=preflight, publication=publication):
@@ -100,8 +101,100 @@ class MainReviewTests(unittest.TestCase):
                 expression = expression.replace("inputs.operation", repr(operation)).replace("needs.preflight.result", repr(preflight)).replace("needs.publish.result", repr(publication))
                 self.assertEqual(eval(expression, {"__builtins__": {}}), burn)
         workflow = WORKFLOW.read_text()
-        self.assertIn("if: inputs.operation == 'publish' && needs.preflight.outputs.request_approval == 'true'", workflow)
+        self.assertIn("if: needs.preflight.outputs.publication_ready == 'true' && (github.event_name == 'workflow_run' || inputs.operation == 'publish')", workflow)
+        self.assertIn("workflows: [Construct qualified drafts]", workflow)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
+        self.assertIn("github.event.workflow_run.head_repository.full_name == github.repository", workflow)
+        self.assertIn("QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id || github.event.workflow_run.id }}", workflow)
+        self.assertIn('if test "$GITHUB_EVENT_NAME" = workflow_run && ! jq -e \'.mode == "v3" and .v3_attempt.support.scope == "subscription-clean-install-only"\'', workflow)
         self.assertEqual(workflow.count("if: steps.publication.outputs.pending != 'true'"), 3)
+
+    def test_automatic_authorization_binds_the_exact_preflight_decision(self):
+        command = next(line.strip() for line in WORKFLOW.read_text().splitlines()
+                       if "environments:[],state:\"automatic\"" in line)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "verified").mkdir()
+            decision = {"facts_sha256": "c" * 64, "outcome": "actions-required", "stage": "stable-preflight"}
+            raw = json.dumps(decision, separators=(",", ":")).encode()
+            (root / "verified/stable-preflight-decision.json").write_bytes(raw)
+            result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + command], cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads((root / "approval.json").read_text()), {
+                "state": "automatic", "environments": [],
+                "decision_chain": [{**decision, "decision_sha256": hashlib.sha256(raw).hexdigest()}],
+            })
+
+    def test_failed_publication_request_or_verification_can_retry_the_same_release(self):
+        workflow = WORKFLOW.read_text()
+        start = workflow.index('            if test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main"')
+        end_marker = '            verify_public_package "public/$tag" "$tag"'
+        end = workflow.index(end_marker, start) + len(end_marker)
+        shell = workflow[start:end]
+        for failure in ("before-patch", "after-patch", "verification"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "bin").mkdir()
+                (root / "publication-evidence/0").mkdir(parents=True)
+                (root / "stable-publication-facts.json").write_text("{}")
+                qualified = b'{"qualified":"unchanged"}'
+                (root / "stable-publication-decision.json").write_bytes(qualified)
+                (root / "bin/gh").write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+root = pathlib.Path.cwd()
+if sys.argv[1:] == ['api', 'repos/fixture/repo/git/ref/heads/main', '--jq', '.object.sha']:
+    print('a' * 40)
+    sys.exit(0)
+expected = ['api', '--method', 'PATCH', 'repos/fixture/repo/releases/17', '-F', 'draft=false', '-F', 'prerelease=false', '-f', 'make_latest=true']
+if sys.argv[1:] != expected:
+    sys.exit(80)
+mode = os.environ['FIXTURE_FAILURE']
+if mode == 'before-patch':
+    print('FIXTURE-PUBLISH-REQUEST-FAILED', file=sys.stderr)
+    sys.exit(1)
+(root / 'remote-state').write_text('stable immutable tested bytes')
+if mode == 'after-patch':
+    print('FIXTURE-PUBLISH-RESPONSE-LOST', file=sys.stderr)
+    sys.exit(1)
+''')
+                (root / "bin/go").write_text('''#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1:] != ['run', './cmd/sbxr-release', 'qualification']:
+    sys.exit(80)
+facts = json.load(sys.stdin)
+if facts['stage'] != 'stable-publication-verification' or facts['observation'] != {'remote': 'stable immutable tested bytes'}:
+    sys.exit(81)
+if os.environ['FIXTURE_FAILURE'] == 'verification':
+    print('FIXTURE-PUBLIC-VERIFICATION-FAILED', file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({'schema':'sbxr-release-qualification-decision-v1', 'stage':'stable-publication-verification', 'outcome':'accepted', 'actions':[]}))
+''')
+                for cli in (root / "bin").iterdir():
+                    cli.chmod(0o755)
+                prefix = '''set -euo pipefail
+remote_main=''' + "a" * 40 + '''
+release_id=17
+tag=v3.1.95
+action_index=0
+action='{"failure_reason":"v3-publication-or-verification-failure"}'
+collect_observation() { jq -cnS --arg state "$(cat remote-state)" '{remote:$state}'; }
+verify_public_package() { test "$(cat remote-state)" = 'stable immutable tested bytes'; }
+'''
+                env = dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
+                           GITHUB_REPOSITORY="fixture/repo", GITHUB_OUTPUT=str(root / "output"),
+                           GITHUB_STEP_SUMMARY=str(root / "summary"), FIXTURE_FAILURE=failure)
+                first = subprocess.run(["bash", "-c", prefix + shell], cwd=root, env=env, capture_output=True, text=True)
+                self.assertNotEqual(first.returncode, 0)
+                self.assertIn("FIXTURE-", first.stderr)
+                self.assertEqual((root / "stable-publication-decision.json").read_bytes(), qualified)
+                self.assertEqual((root / "remote-state").exists(), failure != "before-patch")
+                self.assertFalse(any(root.glob("release-burned*")))
+                env["FIXTURE_FAILURE"] = "none"
+                retry = subprocess.run(["bash", "-c", prefix + shell], cwd=root, env=env, capture_output=True, text=True)
+                self.assertEqual(retry.returncode, 0, retry.stderr)
+                self.assertEqual((root / "stable-publication-decision.json").read_bytes(), qualified)
+                evidence = json.loads((root / "publication-evidence/0/attempt-1-decision.json").read_text())
+                self.assertEqual(evidence["outcome"], "accepted")
 
 
 if __name__ == "__main__":
