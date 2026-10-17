@@ -27,6 +27,7 @@ retains ordinary native, signing, attestation, failure and publication gates.
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | One-target live89 recording correction | `live89-correction-review.py`, `test_live89_correction_review.py`; exact committed-source review and fresh archive payload verification under [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
+| Native Karing receipt readbacks | `native-receipts.py`, `test_native_receipts.py`; definitions-only source for fresh run-local capture/recording helpers, with actual native-store provenance and strict node comparison |
 | Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
@@ -100,6 +101,13 @@ reservation; it is retained. Do not redirect outer logs onto inner capture
 paths. This local wrapper does not perform observations, submit evidence, retry
 an attempt, or authorize live work. Its nested-subprocess regression runs in the
 ordinary Go suite. The run-local helper in this example remains attempt-specific.
+
+Fresh native operator preparation copies `native-receipts.py` from this source
+alongside its capture/recording helpers before freezing their bytes. The current
+VLESS URI omits packet encoding; the reader requires Karing's explicit `xudp`,
+matching sing-box's omitted-field default. Explicit empty encoding disables that
+behavior and is refused. Historical run copies and failed records remain frozen;
+this local correction supplies no live qualification or publication authority.
 
 The shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
 `STATUS-RECOVERY-REQUIRED` lifecycle review code exactly once before its exact
