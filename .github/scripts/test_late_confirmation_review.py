@@ -2,11 +2,13 @@
 """Real Git comparisons, with synthetic base/tree pins confined to the fixture."""
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name('late-confirmation-review.py').resolve()
 
@@ -21,6 +23,8 @@ class ReviewTest(unittest.TestCase):
         os.chdir(self.temp.name)
         self.addCleanup(os.chdir, old)
         self.git('init', '-q')
+        # Detached maintenance can outlive git commit and race TemporaryDirectory cleanup.
+        self.git('config', 'maintenance.auto', 'false')
         self.git('config', 'user.name', 'Fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.write('cmd/sbxr/main.go', 'runtime fixture\n')
@@ -72,6 +76,37 @@ class ReviewTest(unittest.TestCase):
         for commit in [self.base, 'HEAD', '--help', 'a' * 39]:
             with self.assertRaises(ValueError):
                 self.review.review(commit)
+
+class FixtureLifecycleTest(unittest.TestCase):
+    def test_git_writers_finish_before_fixture_cleanup(self):
+        class FailingReviewTest(ReviewTest):
+            def test_exact_policy_delta(self):
+                super().test_exact_policy_delta()
+                self.fail('deliberate fixture assertion failure')
+
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / 'git-trace.jsonl'
+            config = Path(directory) / 'gitconfig'
+            config.write_text('[maintenance]\n auto = true\n autoDetach = true\n'
+                              '[maintenance "commit-graph"]\n enabled = true\n auto = -1\n')
+            old = os.getcwd()
+            with mock.patch.dict(os.environ, GIT_TRACE2_EVENT=str(trace),
+                                 GIT_CONFIG_GLOBAL=str(config), GIT_CONFIG_NOSYSTEM='1'):
+                for case in (ReviewTest('test_exact_policy_delta'),
+                             ReviewTest('test_runtime_change_refuses'),
+                             FailingReviewTest('test_exact_policy_delta')):
+                    result = unittest.TestResult()
+                    case.run(result)
+                    self.assertEqual(result.errors, [])
+                    self.assertEqual(len(result.failures), int(isinstance(case, FailingReviewTest)))
+                    self.assertEqual(os.getcwd(), old)
+                    self.assertFalse(Path(case.temp.name).exists())
+            events = [json.loads(line) for line in trace.read_text().splitlines()]
+            self.assertTrue(any(e.get('event') == 'cmd_name' and e.get('name') == 'commit' for e in events))
+            writers = [e['argv'] for e in events if e.get('event') == 'child_start'
+                       and any(arg in ('maintenance', 'gc') for arg in e['argv'])]
+            self.assertEqual(writers, [], 'temporary Git fixtures must not launch background writers')
+
 
 if __name__ == '__main__':
     unittest.main()
