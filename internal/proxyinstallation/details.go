@@ -70,32 +70,31 @@ func ownedDetails(installed softwarelifecycle.ReleaseIdentity, installedReady bo
 	checks := []struct {
 		fact        hostadapter.Observation
 		unavailable string
-		accepted    bool
 		mismatch    string
 		correction  string
 		observe     string
 	}{
-		{facts.Host, "Ubuntu version and architecture", facts.Host.Accepted, "the host is not Ubuntu 24.04 amd64", "Use the V3 installation only on Ubuntu Server 24.04 amd64, then inspect again.", "Restore read-only access to /etc/os-release, then inspect again."},
-		{facts.PublicIPv4Matches, "public IPv4", facts.PublicIPv4Matches.Accepted, "the current public IPv4 does not match the Ownership Record", "Restore the recorded public IPv4 to this VPS, then inspect again.", "Restore HTTPS access to https://api.ipify.org, then inspect again."},
-		{facts.Ownership, "Ownership Record", facts.Ownership.Accepted, "the Ownership Record changed during inspection", "Restore the exact valid Ownership Record checkpoint, then inspect again.", "Restore read-only access to /var/lib/sbxr/proxy-ownership.json, then inspect again."},
-		{facts.TransactionFilesAbsent, "transaction files", facts.TransactionFilesAbsent.Accepted, "unfinished transaction material is present after Running", "Remove only the proved V3 transaction files, then inspect again.", "Restore read-only access to the four fixed V3 transaction paths, then inspect again."},
-		{facts.APTKey, "APT signing key", facts.APTKey.Accepted, "the SagerNet signing key identity does not match", "Restore /etc/apt/keyrings/sagernet.asc from the qualified package identity, then inspect again.", "Restore read-only access to /etc/apt/keyrings/sagernet.asc, then inspect again."},
-		{facts.APTSource, "APT source", facts.APTSource.Accepted, "the SagerNet APT source identity does not match", "Restore /etc/apt/sources.list.d/sagernet.sources to the exact qualified source, then inspect again.", "Restore read-only access to /etc/apt/sources.list.d/sagernet.sources, then inspect again."},
-		{facts.Package, "proxy package", facts.Package.Accepted, "the sing-box package identity does not match", "Restore sing-box 1.13.19 amd64 from the qualified DEB, then inspect again.", "Restore working dpkg-query inspection for sing-box, then inspect again."},
-		{facts.Hold, "package hold", facts.Hold.Accepted, "the sing-box package hold is absent", "Apply the package hold to sing-box 1.13.19, then inspect again.", "Restore working apt-mark inspection for sing-box, then inspect again."},
-		{facts.PackageIdentity, "package user and group", facts.PackageIdentity.Accepted, "the sing-box user or group identity does not match", "Restore the package-created sing-box user and group ownership, then inspect again.", "Restore working getent inspection for the sing-box user and group, then inspect again."},
-		{facts.Configuration, "protected configuration", facts.Configuration.Accepted, "the protected configuration identity does not match", "Restore /etc/sing-box/config.json with the recorded SHA-256 and protected ownership, then inspect again.", "Restore read-only access to /etc/sing-box/config.json, then inspect again."},
-		{facts.State, "protected state", facts.State.Accepted, "the protected sing-box state identity does not match", "Restore /var/lib/sing-box with the package-created sing-box ownership and native systemd mode 0755, then inspect again.", "Restore read-only access to /var/lib/sing-box, then inspect again."},
-		{facts.Validation, "packaged validation", facts.Validation.Accepted, "the packaged configuration validation was refused", "Restore the recorded protected configuration until packaged sing-box check accepts it, then inspect again.", "Restore execution of the packaged sing-box check command, then inspect again."},
-		{facts.ServiceProvenance, "systemd unit provenance", facts.ServiceProvenance.Accepted, "sing-box.service does not have package provenance", "Restore /usr/lib/systemd/system/sing-box.service from sing-box 1.13.19, then inspect again.", "Restore working dpkg-query provenance inspection for sing-box.service, then inspect again."},
-		{facts.ServiceEnabled, "service enabled state", facts.ServiceEnabled.Accepted, "sing-box.service is not enabled", "Enable the package-owned sing-box.service, then inspect again.", "Restore working systemctl enabled-state inspection for sing-box.service, then inspect again."},
-		{facts.ServiceActive, "service active state", facts.ServiceActive.Accepted, "sing-box.service is not active", "Start sing-box.service from the exact installed package, then inspect again.", "Restore working systemctl active-state inspection for sing-box.service, then inspect again."},
-		{facts.Listener, "public listener ownership", facts.Listener.Accepted, "TCP port 443 is not owned by the expected sing-box service", "Restore the sing-box listener on the recorded public endpoint, then inspect again.", "Restore working ss inspection for TCP port 443, then inspect again."},
+		{facts.Host, "Ubuntu version and architecture", "the host is not Ubuntu 24.04 amd64", "Use the V3 installation only on Ubuntu Server 24.04 amd64, then inspect again.", "Restore read-only access to /etc/os-release, then inspect again."},
+		{facts.PublicIPv4Matches, "public IPv4", "the current public IPv4 does not match the Ownership Record", "Restore the recorded public IPv4 to this VPS, then inspect again.", "Restore HTTPS access to https://api.ipify.org, then inspect again."},
+		{facts.Ownership, "Ownership Record", "the Ownership Record changed during inspection", "Restore the exact valid Ownership Record checkpoint, then inspect again.", "Restore read-only access to /var/lib/sbxr/proxy-ownership.json, then inspect again."},
+		{facts.TransactionFilesAbsent, "transaction files", "unfinished transaction material is present after Running", "Remove only the proved V3 transaction files, then inspect again.", "Restore read-only access to the four fixed V3 transaction paths, then inspect again."},
+		{facts.APTKey, "APT signing key", "the SagerNet signing key identity does not match", "Restore /etc/apt/keyrings/sagernet.asc from the qualified package identity, then inspect again.", "Restore read-only access to /etc/apt/keyrings/sagernet.asc, then inspect again."},
+		{facts.APTSource, "APT source", "the SagerNet APT source identity does not match", "Restore /etc/apt/sources.list.d/sagernet.sources to the exact qualified source, then inspect again.", "Restore read-only access to /etc/apt/sources.list.d/sagernet.sources, then inspect again."},
+		{facts.Package, "proxy package", "the sing-box package identity does not match", "Restore sing-box 1.13.19 amd64 from the qualified DEB, then inspect again.", "Restore working dpkg-query inspection for sing-box, then inspect again."},
+		{facts.Hold, "package hold", "the sing-box package hold is absent", "Apply the package hold to sing-box 1.13.19, then inspect again.", "Restore working apt-mark inspection for sing-box, then inspect again."},
+		{facts.PackageIdentity, "package user and group", "the sing-box user or group identity does not match", "Restore the package-created sing-box user and group ownership, then inspect again.", "Restore working getent inspection for the sing-box user and group, then inspect again."},
+		{facts.Configuration, "protected configuration", "the protected configuration identity does not match", "Restore /etc/sing-box/config.json with the recorded SHA-256 and protected ownership, then inspect again.", "Restore read-only access to /etc/sing-box/config.json, then inspect again."},
+		{facts.State, "protected state", "the protected sing-box state identity does not match", "Restore /var/lib/sing-box with the package-created sing-box ownership and native systemd mode 0755, then inspect again.", "Restore read-only access to /var/lib/sing-box, then inspect again."},
+		{facts.Validation, "packaged validation", "the packaged configuration validation was refused", "Restore the recorded protected configuration until packaged sing-box check accepts it, then inspect again.", "Restore execution of the packaged sing-box check command, then inspect again."},
+		{facts.ServiceProvenance, "systemd unit provenance", "sing-box.service does not have package provenance", "Restore /usr/lib/systemd/system/sing-box.service from sing-box 1.13.19, then inspect again.", "Restore working dpkg-query provenance inspection for sing-box.service, then inspect again."},
+		{facts.ServiceEnabled, "service enabled state", "sing-box.service is not enabled", "Enable the package-owned sing-box.service, then inspect again.", "Restore working systemctl enabled-state inspection for sing-box.service, then inspect again."},
+		{facts.ServiceActive, "service active state", "sing-box.service is not active", "Start sing-box.service from the exact installed package, then inspect again.", "Restore working systemctl active-state inspection for sing-box.service, then inspect again."},
+		{facts.Listener, "public listener ownership", "TCP port 443 is not owned by the expected sing-box service", "Restore the sing-box listener on the recorded public endpoint, then inspect again.", "Restore working ss inspection for TCP port 443, then inspect again."},
 	}
 	for _, check := range checks {
 		if !check.fact.Observed {
 			details = append(details, "Detected mismatch: "+check.unavailable+" could not be inspected", "Safe correction: "+check.observe)
-		} else if !check.accepted {
+		} else if !check.fact.Accepted {
 			details = append(details, "Detected mismatch: "+check.mismatch, "Safe correction: "+check.correction)
 		}
 	}
@@ -141,12 +140,7 @@ func inspectionDetails(installed softwarelifecycle.ReleaseIdentity, installedRea
 		version = installed.Tag
 		identity = fmt.Sprintf("%s %s %s %s", installed.Repository, installed.Tag, installed.Commit, installed.IndexSHA256)
 	}
-	ownership := "Absent"
-	if slices.ContainsFunc(inspection.Resources, func(resource hostadapter.Resource) bool {
-		return resource.Name == "/var/lib/sbxr/proxy-ownership.json" && resource.Present
-	}) {
-		ownership = "Present"
-	}
+	ownership := present(resourcePresent(inspection.Resources, "/var/lib/sbxr/proxy-ownership.json"))
 	direction, lock := "none", "Available"
 	clientIdentity, publicEndpoint := "Absent", "Absent"
 	destination, serverName := "Absent", "Absent"
