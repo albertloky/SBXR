@@ -53,6 +53,15 @@ class PackageObservation(unittest.TestCase):
         self.assertEqual(self.observe()['status'], 'hold ok installed')
         self.command.assert_called_once()
 
+    def test_candidate_sbxr_hash_cannot_replace_installed_proxy_hash(self):
+        sbxr, proxy = 'a' * 64, 'b' * 64
+        with patch.object(OBSERVER, 'digest', side_effect=lambda path: proxy if str(path) == str(self.path('/usr/bin/sing-box')) else sbxr):
+            self.expected['installed_binary_sha256'] = sbxr
+            with self.assertRaisesRegex(OBSERVER.Refused, 'installed-proxy-binary'):
+                self.observe()
+            self.expected['installed_binary_sha256'] = proxy
+            self.assertEqual(self.observe()['binary_sha256'], proxy)
+
     def test_ownership_is_product_string_not_declaration_object(self):
         self.assertEqual(self.observe()['ownership_package_identity'], OBSERVER.ownership_identity(RECEIPT))
         self.ownership['proxy_package_identity'] = RECEIPT

@@ -11,7 +11,7 @@ import (
 )
 
 func TestMVPWindowObserverContracts(t *testing.T) {
-	for _, name := range []string{"test_mvp_inspect_window.py", "test_mvp_recovery_window.py"} {
+	for _, name := range []string{"test_prepare_mvp_window.py", "test_mvp_inspect_window.py", "test_mvp_recovery_window.py"} {
 		command := exec.Command("python3", ".github/scripts/"+name, "-v")
 		command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 		if output, err := command.CombinedOutput(); err != nil {

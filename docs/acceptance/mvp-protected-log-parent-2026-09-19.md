@@ -143,10 +143,16 @@ candidate declaration, fresh host observations, and exact source checkout:
 | JSON field | Expected value / authority |
 |---|---|
 | `proxy_package` | The unchanged `v3_attempt.proxy_package` from the verified qualification manifest (or reviewed declaration before signing). |
-| `installed_binary_sha256` | SHA-256 of `./usr/bin/sing-box` extracted locally from that receipt's size/SHA-256-verified DEB. This is **not** the DEB digest. |
+| `installed_binary_sha256` | SHA-256 of `./usr/bin/sing-box` extracted locally from that receipt's size/SHA-256-verified DEB. Neither the DEB digest nor the candidate SBXR executable digest belongs here. |
 | `snap_packages` | Fresh reviewed `certbot`, `core24`, `snapd` entries, each containing only `version`, `revision`, `snap_sha256`, `snap_size`. Compare Certbot and snapd version/size/digest to the declared packages; preserve the reviewed core24 receipt. |
 | `operator_sha256` | Map of the four staged basenames below to hashes of their reviewed source files. |
 | `log_parent`, `log_children` | Fresh reviewed `metadata` and immediate directory/symlink inventory in the observer's JSON shape (`device`, `inode`, `uid`, `gid`, `mode` as an octal string, `links`, `directory`, `symlink`, `xattrs`). Use the original 0775 identity; do not adopt drift as a new baseline. |
+
+Use `.github/scripts/prepare-mvp-window.py --input "$reviewed_expectation_base" --proxy-deb "$verified_proxy_deb" --output "$expectation_file"`
+to derive this proxy pin instead of copying a hash slot. It preserves the other
+reviewed fields and creates a private file exclusively; it does not refresh or
+authenticate host facts. Candidate SBXR executable and archive hashes remain in
+the independent candidate binding and Installed Record checks.
 
 The archive and Installed Record are separate authorities. Running requires
 `dpkg-query` to report the declared version and architecture with **`hold ok
