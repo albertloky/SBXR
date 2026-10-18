@@ -194,7 +194,7 @@ func newOwnershipRecord(release softwarelifecycle.ReleaseIdentity, facts hostada
 	lockProvisioning := hostadapter.NewLockProvisioningAuthority()
 	record := ownershipRecord{
 		Schema: 1, Phase: ownershipRecorded, Direction: cleanupRequired, Release: release,
-		Package:    "https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		Package:    "https://deb.sagernet.org/ sing-box 1.14.3 amd64 32297878 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
 		PublicIPv4: facts.PublicIPv4, DestinationAddress: destination.Address, DestinationName: destination.ServerName,
 		ConfigurationSHA256: hex.EncodeToString(digest[:]),
 		LockProvisioning:    &lockProvisioning,
@@ -828,7 +828,7 @@ func removalCheckpointLimit(record ownershipRecord) int {
 }
 
 func validOwnedProxyFields(record ownershipRecord) bool {
-	if record.Package != "https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf" || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(record.ConfigurationSHA256) || !slices.Equal(record.Resources, recordResources(record, false)) {
+	if record.Package != "https://deb.sagernet.org/ sing-box 1.14.3 amd64 32297878 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e" || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(record.ConfigurationSHA256) || !slices.Equal(record.Resources, recordResources(record, false)) {
 		return false
 	}
 	_, acceptedDestination := acceptedDestination(record.DestinationAddress, record.DestinationName)
@@ -845,12 +845,12 @@ func ownershipResources(configurationDigest string) []string {
 		"/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1",
 		finalOwnershipPath + " root:root 0600 one-link finalization authority",
 		"/var/lib/sbxr/.proxy-ownership.json.next root:root 0600 one-link transaction material",
-		"/var/lib/sbxr/sing-box_1.13.19_amd64.deb root-owned one-link verified package artifact",
+		"/var/lib/sbxr/sing-box_1.14.3_amd64.deb root-owned one-link verified package artifact",
 		"/etc/apt/keyrings/sagernet.asc sha256:803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",
 		"/etc/apt/keyrings/sagernet.asc.sbxr-next root-owned transaction material",
 		"/etc/apt/sources.list.d/sagernet.sources https://deb.sagernet.org/ signed-by sagernet.asc",
 		"/etc/apt/sources.list.d/sagernet.sources.sbxr-next root-owned transaction material",
-		"sing-box package 1.13.19 amd64 deb-sha256:fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		"sing-box package 1.14.3 amd64 deb-sha256:ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
 		"sing-box package hold",
 		"/etc/sing-box/config.json sha256:" + configurationDigest,
 		"/var/lib/sing-box package state",

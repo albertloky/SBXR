@@ -312,7 +312,21 @@ func validV3StageTimes(stage v3StageTimes, observedAt string) bool {
 }
 
 func expectedV3PackageIdentity() v3PackageIdentity {
+	return v3PackageIdentity{Repository: "https://deb.sagernet.org/", SigningKeySHA256: "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", Name: "sing-box", Version: "1.14.3", Architecture: "amd64", Size: 32297878, SHA256: "ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e"}
+}
+
+func historicalV3PackageIdentity() v3PackageIdentity {
 	return v3PackageIdentity{Repository: "https://deb.sagernet.org/", SigningKeySHA256: "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", Name: "sing-box", Version: "1.13.19", Architecture: "amd64", Size: 24597120, SHA256: "fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"}
+}
+
+func expectedV3AttemptPackageIdentity(attempt v3QualificationAttempt, preflight qualificationFacts) v3PackageIdentity {
+	// These fixed archival paths retain their original package bytes.
+	prior := live89OriginalBurn()
+	if attempt.OwnerException != "" || attempt.Live89CorrectionReview != nil ||
+		preflight.Candidate.BTag == prior.OriginalTag && preflight.Candidate.BSequence == prior.Sequence && preflight.Commit == prior.Commit {
+		return historicalV3PackageIdentity()
+	}
+	return expectedV3PackageIdentity()
 }
 
 func buildV3AcceptanceRecord(manifest qualificationManifest, facts v3PackagedLiveResultFacts) (string, error) {
@@ -328,7 +342,7 @@ func buildV3AcceptanceRecord(manifest qualificationManifest, facts v3PackagedLiv
 		return "", err
 	}
 	var body strings.Builder
-	for _, line := range []string{"# SBXR Acceptance Record", "Status: Qualified", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit, "Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + record.WorkflowRun, "Acceptance time: " + record.AcceptedAt, "Runner: " + record.Runner, "Go toolchain: " + facts.Runner.GoToolchain, "Public verifier: " + facts.Runner.PublicVerifier, "Qualification role: Clean-installed V3 release", "Detailed evidence SHA-256: " + record.DetailedEvidenceSHA256, "Proxy package: sing-box 1.13.19 amd64 " + record.ProxyPackage.SHA256, "Outside-client package: sing-box 1.13.19 amd64 " + record.OutsideClientPackage.SHA256, "Secret-safe result: Passed", "Stable result code: " + record.StableResultCode, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: " + record.Stages.IntegratedVerification, "Codex Live Acceptance: Passed", "Owner Acceptance: Not required"} {
+	for _, line := range []string{"# SBXR Acceptance Record", "Status: Qualified", "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit, "Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + record.WorkflowRun, "Acceptance time: " + record.AcceptedAt, "Runner: " + record.Runner, "Go toolchain: " + facts.Runner.GoToolchain, "Public verifier: " + facts.Runner.PublicVerifier, "Qualification role: Clean-installed V3 release", "Detailed evidence SHA-256: " + record.DetailedEvidenceSHA256, "Proxy package: sing-box " + record.ProxyPackage.Version + " amd64 " + record.ProxyPackage.SHA256, "Outside-client package: sing-box " + record.OutsideClientPackage.Version + " amd64 " + record.OutsideClientPackage.SHA256, "Secret-safe result: Passed", "Stable result code: " + record.StableResultCode, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: " + record.Stages.IntegratedVerification, "Codex Live Acceptance: Passed", "Owner Acceptance: Not required"} {
 		body.WriteString(line + "\n")
 	}
 	for _, asset := range release.Assets {

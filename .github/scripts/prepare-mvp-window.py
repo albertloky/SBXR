@@ -25,7 +25,7 @@ def unique(pairs):
 
 def prepare(expected, deb):
     receipt = expected['proxy_package']
-    if (receipt['name'], receipt['version'], receipt['architecture']) != ('sing-box', '1.13.19', 'amd64'):
+    if (receipt['name'], receipt['version'], receipt['architecture']) != ('sing-box', '1.14.3', 'amd64'):
         raise ValueError('Unsupported proxy package')
     raw = Path(deb).read_bytes()
     if len(raw) != receipt['size'] or hashlib.sha256(raw).hexdigest() != receipt['sha256']:

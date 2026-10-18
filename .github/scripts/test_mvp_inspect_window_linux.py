@@ -28,8 +28,8 @@ spec = importlib.util.spec_from_file_location('observer', SOURCE / 'mvp-inspect-
 observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
 RECEIPT = {'repository': 'https://deb.sagernet.org/', 'name': 'sing-box',
-           'version': '1.13.19', 'architecture': 'amd64', 'size': 24597120,
-           'sha256': 'fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf'}
+           'version': '1.14.3', 'architecture': 'amd64', 'size': 32297878,
+           'sha256': 'ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e'}
 ROOT = Path('/root/sbxr-mvp-log-parent')
 OWNED = Path('/var/lib/sbxr')
 PRODUCT = Path('/usr/local/bin/sbxr')
@@ -230,7 +230,7 @@ LogLevel ERROR
             Path('/etc/systemd/system/sing-box.service').unlink(missing_ok=True)
             for p in OWNED.iterdir():
                 assert p.name in ('installed.json', 'proxy-ownership.json', 'renewal-attempts.json',
-                                  'sing-box_1.13.19_amd64.deb'), p
+                                  'sing-box_1.14.3_amd64.deb'), p
                 p.unlink()
             PRODUCT.unlink(missing_ok=True)
             run(['systemctl', 'daemon-reload'])
@@ -261,7 +261,7 @@ LogLevel ERROR
         run(['apt-mark', 'hold', 'sing-box'])
         for name in ('not-installed', 'not-set-up', 'removed'):
             check(name, 'unexpected-proxy-package')
-        artifact = OWNED / 'sing-box_1.13.19_amd64.deb'
+        artifact = OWNED / 'sing-box_1.14.3_amd64.deb'
         for is_link in (False, True):
             if is_link:
                 artifact.symlink_to('/missing-mvp-artifact')

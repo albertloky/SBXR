@@ -570,9 +570,9 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		`stage:"v3-packaged-live-result"`,
 		"v3-packaged-live-result-facts.json",
 		"v3-packaged-live-result-decision.json",
-		`curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_qb4px/sing-box_1.13.19_linux_amd64.deb -o "$client_deb"`,
-		`PACKAGE_SIZE=24597120`,
-		`PACKAGE_SHA256=fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf`,
+		`curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_Gz0vP/sing-box_1.14.3_linux_amd64.deb -o "$client_deb"`,
+		`PACKAGE_SIZE=32297878`,
+		`PACKAGE_SHA256=ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e`,
 		`test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"`,
 		`test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"`,
 		`.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1`,
@@ -584,7 +584,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		"'Validate configuration'",
 		"'Activation committed'",
 		"'Removal committed'",
-		"fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		"ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
 		"RELEASE-V3-PACKAGED-LIVE-QUALIFICATION",
 		`(.records | length) == 1`,
@@ -600,7 +600,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	if strings.Contains(v3Path, "client_root=/dev/shm/") {
 		t.Fatal("V3 qualification executes the outside client from the runner's noexec /dev/shm mount")
 	}
-	download := strings.Index(string(scriptBody), `curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_qb4px/sing-box_1.13.19_linux_amd64.deb`)
+	download := strings.Index(string(scriptBody), `curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_Gz0vP/sing-box_1.14.3_linux_amd64.deb`)
 	size := strings.Index(string(scriptBody), `test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"`)
 	digest := strings.Index(string(scriptBody), `test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"`)
 	extract := strings.Index(string(scriptBody), `dpkg-deb -x "$client_deb" "$client_root"`)

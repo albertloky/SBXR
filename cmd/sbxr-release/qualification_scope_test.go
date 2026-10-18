@@ -203,6 +203,7 @@ func testFirstSubscriptionAttempt(t *testing.T, exception string, policy string)
 	}
 	if exception != "" {
 		attempt["owner_exception"] = exception
+		attempt["proxy_package"] = historicalV3PackageIdentity()
 	}
 	attempt["support"] = facts.Candidate.Support
 	attempt["baseline"] = historyBaseline(facts.SubscriptionHistory)

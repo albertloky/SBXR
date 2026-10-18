@@ -177,3 +177,34 @@ func assertCleanInstallOnlyPublication(t *testing.T, binary string, pre qualific
 		assertQualificationRefused(t, binary, qualificationDocument(t, v), name)
 	}
 }
+
+func TestFreshQualificationRequiresSingBox1143(t *testing.T) {
+	current := expectedV3AttemptPackageIdentity(v3QualificationAttempt{}, qualificationFacts{})
+	if current.Version != "1.14.3" || current.Size != 32297878 || current.SHA256 != "ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e" {
+		t.Fatalf("fresh package identity = %#v", current)
+	}
+	// Exercise the declaration gate, rather than just the package selector.
+	binary := buildQualificationDeclarationBinary(t)
+	boundary, _, _ := mvpQualificationFixtureForSupport(t, binary, false, true, true)
+	var facts qualificationBoundaryFacts
+	if !decodeCanonical([]byte(boundary), &facts) || facts.V3Attempt.ProxyPackage != current {
+		t.Fatal("fresh declaration did not bind the current package")
+	}
+	facts.V3Attempt.ProxyPackage = historicalV3PackageIdentity()
+	if _, err := evaluateQualificationBoundary(facts); err == nil {
+		t.Fatal("fresh candidate accepted historical package evidence")
+	}
+}
+
+func TestHistoricalPackageReplayRequiresExactOriginalLive89Source(t *testing.T) {
+	prior := live89OriginalBurn()
+	pre := qualificationFacts{Commit: prior.Commit}
+	pre.Candidate.BTag, pre.Candidate.BSequence = prior.OriginalTag, prior.Sequence
+	if expectedV3AttemptPackageIdentity(v3QualificationAttempt{}, pre) != historicalV3PackageIdentity() {
+		t.Fatal("original live89 package identity lost")
+	}
+	pre.Commit = strings.Repeat("f", 40)
+	if expectedV3AttemptPackageIdentity(v3QualificationAttempt{}, pre) != expectedV3PackageIdentity() {
+		t.Fatal("changed source borrowed historical package authority")
+	}
+}

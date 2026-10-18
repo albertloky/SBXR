@@ -121,12 +121,17 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} {
+	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14} {
+		name := fmt.Sprint(variant)
+		legacyPackage := variant == 14
+		if legacyPackage {
+			name, variant = "sing-box-1.13.19", 3
+		}
 		schema := variant
 		if variant >= 3 {
 			schema = 2
 		}
-		t.Run(fmt.Sprint(variant), func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			fixture := newInstallerFixture(t)
 			if variant >= 8 {
 				// A newer installer must also restore an exact recurring release
@@ -163,7 +168,11 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"resource_creating_releases":[` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `,` + string(creatorJSON) + `],"finishing_release_identity":` + string(finisherJSON) + "}\n")
 			}
 			if variant >= 3 {
-				ownership, err = os.ReadFile("../../internal/proxyinstallation/testdata/subscription-absent-schema2.json")
+				ownershipFixture := "../../internal/proxyinstallation/testdata/subscription-absent-schema2.json"
+				if legacyPackage {
+					ownershipFixture = "testdata/subscription-absent-sing-box-1.13.19-schema2.json"
+				}
+				ownership, err = os.ReadFile(ownershipFixture)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -373,6 +382,19 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				"unknown operation":          bytes.Replace(ownership, []byte(`"phase":`), []byte(`"operation":{},"phase":`), 1),
 				"conflicting identity alias": bytes.Replace(ownership, []byte(`"Tag":`), []byte(`"tag":"v9.0.0","Tag":`), 1),
 				"unknown resource":           bytes.Replace(ownership, []byte(`root:root 0600 one-link`), []byte(`unproved resource`), 1),
+			}
+			if variant >= 3 {
+				var fields struct {
+					Package string `json:"proxy_package_identity"`
+				}
+				if json.Unmarshal(ownership, &fields) != nil {
+					t.Fatal("package authority fixture")
+				}
+				otherPackage := "https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"
+				if legacyPackage {
+					otherPackage = "https://deb.sagernet.org/ sing-box 1.14.3 amd64 32297878 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e"
+				}
+				invalid["mixed package resources"] = bytes.Replace(ownership, []byte(`"proxy_package_identity":"`+fields.Package+`"`), []byte(`"proxy_package_identity":"`+otherPackage+`"`), 1)
 			}
 			if variant == 7 || variant >= 8 {
 				invalid["changed startup authority"] = bytes.Replace(ownership, []byte(`"drop_in_sha256":"`+strings.Repeat("9", 64)+`"`), []byte(`"drop_in_sha256":"`+strings.Repeat("0", 64)+`"`), 1)

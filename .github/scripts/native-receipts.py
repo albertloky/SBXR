@@ -205,7 +205,7 @@ def readbacks(live, facts, url_name, content_name):
             isinstance(tls['reality'], dict) and set(tls['reality']) == {'enabled', 'public_key', 'short_id'},
             'Native TLS/REALITY fields differ')
     # The URI omits packet encoding: sing-box defaults to XUDP; explicit "" disables it.
-    # https://github.com/SagerNet/sing-box/blob/v1.13.19/protocol/vless/outbound.go#L74-L85
+    # https://github.com/SagerNet/sing-box/blob/v1.14.3/protocol/vless/outbound.go#L77-L85
     comparisons = {'protocol': (node['type'], 'vless'), 'uuid': (node['uuid'], uri.username),
                    'address': (node['server'], uri.hostname), 'port': (node['server_port'], port),
                    'flow': (node['flow'], query['flow'][0]), 'tls.enabled': (tls['enabled'], True),

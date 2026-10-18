@@ -565,7 +565,7 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 	for _, asset := range release.Assets {
 		body.WriteString("Asset: " + asset.Name + " " + strconv.FormatInt(asset.Size, 10) + " " + asset.SHA256 + "\n")
 	}
-	body.WriteString("Proxy package: sing-box 1.13.19 amd64 " + attempt.ProxyPackage.SHA256 + "\n")
+	body.WriteString("Proxy package: sing-box " + attempt.ProxyPackage.Version + " amd64 " + attempt.ProxyPackage.SHA256 + "\n")
 	body.WriteString("Karing package: karing " + attempt.Packages.Karing.Version + " " + attempt.Packages.Karing.Architecture + " " + attempt.Packages.Karing.SHA256 + "\n")
 	for _, scenario := range facts.DetailedEvidence.Scenarios {
 		encoded, err := marshalCanonical(scenario)
@@ -678,7 +678,7 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||
 		!independentID(attempt.VPSID, "vps") || !independentID(attempt.OutsideRunnerID, "runner") || !independentID(attempt.MacRunnerID, "mac") || !regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`).MatchString(attempt.MacOSVersion) || !validSHA256(attempt.VPSIdentitySHA256) ||
-		attempt.ProxyPackage != expectedV3PackageIdentity() || !validV3Packages(attempt.Packages) || !validV3Packages(attempt.AfterSnapRefresh) ||
+		attempt.ProxyPackage != expectedV3AttemptPackageIdentity(attempt, preflight) || !validV3Packages(attempt.Packages) || !validV3Packages(attempt.AfterSnapRefresh) ||
 		attempt.Packages.Karing != attempt.AfterSnapRefresh.Karing || (!mvp && attempt.Packages.Certbot == attempt.AfterSnapRefresh.Certbot) || (mvp && attempt.Packages != attempt.AfterSnapRefresh) || preflight.LatestTag == nil {
 		return false
 	}

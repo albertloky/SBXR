@@ -415,3 +415,33 @@ func (fixture *latestReleaseFixture) serveHTTP(writer http.ResponseWriter, reque
 		_, _ = writer.Write(fixture.assets[fixture.release.Assets[id-1].Name])
 	}
 }
+
+func TestV3RecordAcceptsOnlyExactQualifiedProxyPackages(t *testing.T) {
+	fixture := newLatestReleaseFixture(t)
+	body := strings.NewReplacer(
+		"# SBXR Installer-Updater Acceptance Record", "# SBXR Acceptance Record",
+		"Qualification role: Discovered, installed, recovered, final latest release", "Qualification role: Clean-installed V3 release",
+		"Stable result code: RELEASE-INSTALLER-UPDATER-TWO-RELEASE-QUALIFICATION", "Stable result code: RELEASE-V3-PACKAGED-LIVE-QUALIFICATION",
+		"Integrated Verification: Passed on live Ubuntu Server 24.04 amd64", "Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and outside runner",
+	).Replace(fixture.acceptanceRecord())
+	old := "sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"
+	current := "sing-box 1.14.3 amd64 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e"
+	for _, tc := range []struct {
+		name, proxy, outside string
+		accepted             bool
+	}{
+		{"historical", old, old, true},
+		{"current", current, current, true},
+		{"mixed versions", current, old, false},
+		{"wrong digest", strings.Replace(current, "ed7f", "0000", 1), strings.Replace(current, "ed7f", "0000", 1), false},
+		{"wrong version", strings.Replace(current, "1.14.3", "1.14.2", 1), strings.Replace(current, "1.14.3", "1.14.2", 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture.release.Body = body + "Detailed evidence SHA-256: " + strings.Repeat("a", 64) + "\nProxy package: " + tc.proxy + "\nOutside-client package: " + tc.outside + "\n"
+			_, outcome := NewWithEndpoint(fixture.server.Client(), fixture.server.URL, fixture.verifier).CheckLatest(t.Context())
+			if (outcome == softwarelifecycle.LatestReleaseAccepted) != tc.accepted {
+				t.Fatalf("CheckLatest() = %v; accepted = %v", outcome, tc.accepted)
+			}
+		})
+	}
+}

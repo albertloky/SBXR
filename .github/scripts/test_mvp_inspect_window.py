@@ -14,8 +14,8 @@ SPEC = importlib.util.spec_from_file_location('observer', Path(__file__).with_na
 OBSERVER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(OBSERVER)
 RECEIPT = {'repository': 'https://deb.sagernet.org/', 'name': 'sing-box',
-           'version': '1.13.19', 'architecture': 'amd64', 'size': 24597120,
-           'sha256': 'fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf'}
+           'version': '1.14.3', 'architecture': 'amd64', 'size': 32297878,
+           'sha256': 'ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e'}
 
 
 class PackageObservation(unittest.TestCase):
@@ -32,7 +32,7 @@ class PackageObservation(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
         self.expected = {'proxy_package': RECEIPT, 'installed_binary_sha256': '1' * 64}
-        self.command = patch.object(OBSERVER, 'command', return_value='1.13.19\tamd64\thold ok installed').start()
+        self.command = patch.object(OBSERVER, 'command', return_value='1.14.3\tamd64\thold ok installed').start()
         self.addCleanup(patch.stopall)
         self.ownership = {'phase': 'Running', 'unfinished_direction': 'none',
                           'proxy_package_identity': OBSERVER.ownership_identity(RECEIPT)}
@@ -70,17 +70,17 @@ class PackageObservation(unittest.TestCase):
             self.observe()
 
     def test_unheld_wrong_version_architecture_and_config_only_refused(self):
-        for status in ('1.13.19\tamd64\tinstall ok installed',
+        for status in ('1.14.3\tamd64\tinstall ok installed',
                        '1.13.18\tamd64\thold ok installed',
-                       '1.13.19\tarm64\thold ok installed',
-                       '1.13.19\tamd64\tdeinstall ok config-files', None):
+                       '1.14.3\tarm64\thold ok installed',
+                       '1.14.3\tamd64\tdeinstall ok config-files', None):
             with self.subTest(status=status):
                 self.command.return_value = status
                 with self.assertRaisesRegex(OBSERVER.Refused, 'installed-proxy-package'):
                     self.observe()
 
     def test_artifact_and_broken_symlink_refused(self):
-        artifact = self.path('/var/lib/sbxr/sing-box_1.13.19_amd64.deb')
+        artifact = self.path('/var/lib/sbxr/sing-box_1.14.3_amd64.deb')
         for symlink in (False, True):
             if symlink:
                 artifact.symlink_to(self.root / 'missing')

@@ -256,10 +256,10 @@ var aptSourceBody = []byte("Types: deb\nURIs: https://deb.sagernet.org/\nSuites:
 
 var hostSetupSpec = hostadapter.SetupSpec{
 	OwnershipPath: "/var/lib/sbxr/proxy-ownership.json", OwnershipNextPath: "/var/lib/sbxr/.proxy-ownership.json.next", LockPath: "/run/lock/sbxr.lock",
-	PackageArtifactPath: "/var/lib/sbxr/sing-box_1.13.19_amd64.deb",
+	PackageArtifactPath: "/var/lib/sbxr/sing-box_1.14.3_amd64.deb",
 	APTKeyPath:          "/etc/apt/keyrings/sagernet.asc", APTKeyURL: "https://sing-box.app/gpg.key", APTKeySHA256: "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",
 	APTSourcePath: "/etc/apt/sources.list.d/sagernet.sources",
-	PackageName:   "sing-box", PackageVersion: "1.13.19", Architecture: "amd64", PackageSize: 24597120, PackageSHA256: "fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+	PackageName:   "sing-box", PackageVersion: "1.14.3", Architecture: "amd64", PackageSize: 32297878, PackageSHA256: "ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
 	ConfigurationPath: "/etc/sing-box/config.json", StatePath: "/var/lib/sing-box", Service: "sing-box.service", ServiceUnitPath: "/usr/lib/systemd/system/sing-box.service",
 	User: "sing-box", Group: "sing-box", ListenerPort: "443",
 }
@@ -270,7 +270,7 @@ var footprint = []hostadapter.Resource{
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/proxy-ownership.json"},
 	{Kind: hostadapter.PathResource, Name: finalOwnershipPath},
 	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/.proxy-ownership.json.next"},
-	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/sing-box_1.13.19_amd64.deb"},
+	{Kind: hostadapter.PathResource, Name: "/var/lib/sbxr/sing-box_1.14.3_amd64.deb"},
 	{Kind: hostadapter.PathResource, Name: "/etc/apt/sources.list.d/sagernet.sources"},
 	{Kind: hostadapter.PathResource, Name: "/etc/apt/sources.list.d/sagernet.sources.sbxr-next"},
 	{Kind: hostadapter.PathResource, Name: "/etc/apt/keyrings/sagernet.asc"},

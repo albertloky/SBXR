@@ -334,9 +334,9 @@ func TestReadBoundFileReturnsOnlyTheExactSafeConfiguration(t *testing.T) {
 func testSetupSpec() SetupSpec {
 	return SetupSpec{
 		OwnershipPath: "/var/lib/sbxr/proxy-ownership.json", OwnershipNextPath: "/var/lib/sbxr/.proxy-ownership.json.next", LockPath: "/run/lock/sbxr.lock",
-		PackageArtifactPath: "/var/lib/sbxr/sing-box_1.13.19_amd64.deb", APTKeyPath: "/etc/apt/keyrings/sagernet.asc", APTSourcePath: "/etc/apt/sources.list.d/sagernet.sources",
+		PackageArtifactPath: "/var/lib/sbxr/sing-box_1.14.3_amd64.deb", APTKeyPath: "/etc/apt/keyrings/sagernet.asc", APTSourcePath: "/etc/apt/sources.list.d/sagernet.sources",
 		ConfigurationPath: "/etc/sing-box/config.json", StatePath: "/var/lib/sing-box", Service: "sing-box.service", ServiceUnitPath: "/usr/lib/systemd/system/sing-box.service",
-		PackageName: "sing-box", PackageVersion: "1.13.19", Architecture: "amd64", PackageSize: 24597120, User: "sing-box", Group: "sing-box", ListenerPort: "443",
+		PackageName: "sing-box", PackageVersion: "1.14.3", Architecture: "amd64", PackageSize: 32297878, User: "sing-box", Group: "sing-box", ListenerPort: "443",
 	}
 }
 
@@ -344,7 +344,7 @@ func TestRunningInspectionUsesExactPinnedServiceUnitProvenance(t *testing.T) {
 	directory := t.TempDir()
 	logPath := filepath.Join(directory, "dpkg-query.log")
 	commandPath := filepath.Join(directory, "dpkg-query")
-	command := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DPKG_QUERY_LOG\"\nif [ \"$1\" = --search ]; then printf '%s\\n' \"$DPKG_QUERY_OWNER\"; else printf '1.13.19 amd64 ii\\n'; fi\n"
+	command := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DPKG_QUERY_LOG\"\nif [ \"$1\" = --search ]; then printf '%s\\n' \"$DPKG_QUERY_OWNER\"; else printf '1.14.3 amd64 ii\\n'; fi\n"
 	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ esac
 		}
 	}
 	t.Setenv("PATH", directory)
-	t.Setenv("PACKAGE_FACT", "1.13.19 amd64 hi")
+	t.Setenv("PACKAGE_FACT", "1.14.3 amd64 hi")
 	t.Setenv("PACKAGE_HOLDS", "sing-box")
 	t.Setenv("HOST_UID", strconv.Itoa(os.Getuid()))
 	t.Setenv("HOST_GID", strconv.Itoa(os.Getgid()))
@@ -409,7 +409,7 @@ esac
 	if facts := inspect(); !facts.Package.Accepted || facts.Hold.Accepted || !facts.Hold.Observed {
 		t.Fatalf("missing separate hold facts = %#v", facts)
 	}
-	t.Setenv("PACKAGE_FACT", "1.13.19 amd64 ii")
+	t.Setenv("PACKAGE_FACT", "1.14.3 amd64 ii")
 	t.Setenv("PACKAGE_HOLDS", "sing-box")
 	if facts := inspect(); facts.Package.Accepted || !facts.Package.Observed || !facts.Hold.Accepted {
 		t.Fatalf("unheld dpkg state facts = %#v", facts)
@@ -442,10 +442,10 @@ func TestExactPackageIdentityAcceptsRecoverableDpkgStatesOnly(t *testing.T) {
 		fact string
 		want bool
 	}{
-		{"1.13.19 amd64 ii", true},
-		{"1.13.19 amd64 iF", true},
+		{"1.14.3 amd64 ii", true},
+		{"1.14.3 amd64 iF", true},
 		{"1.13.18 amd64 iF", false},
-		{"1.13.19 arm64 iF", false},
+		{"1.14.3 arm64 iF", false},
 		{"unparseable", false},
 	} {
 		if got := exactPackageIdentity(test.fact, spec); got != test.want {
@@ -460,11 +460,11 @@ func TestExactHeldPackageIdentityAcceptsOnlyInstalledHoldState(t *testing.T) {
 		fact string
 		want bool
 	}{
-		{"1.13.19 amd64 hi", true},
-		{"1.13.19 amd64 ii", false},
-		{"1.13.19 amd64 hF", false},
+		{"1.14.3 amd64 hi", true},
+		{"1.14.3 amd64 ii", false},
+		{"1.14.3 amd64 hF", false},
 		{"1.13.18 amd64 hi", false},
-		{"1.13.19 arm64 hi", false},
+		{"1.14.3 arm64 hi", false},
 		{"unparseable", false},
 	} {
 		if got := exactHeldPackageIdentity(test.fact, spec); got != test.want {

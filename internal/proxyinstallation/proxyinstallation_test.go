@@ -782,7 +782,7 @@ func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
 		t.Fatalf("Review() = %#v", review)
 	}
 	plan := strings.Join(review.Plan, "\n")
-	for _, required := range []string{"Ubuntu 24.04 amd64", "8.8.8.8:443", "google.com:443", "sing-box 1.13.19 amd64", "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", "24597120 bytes", "one generated Client Identity", "/var/lib/sbxr/proxy-ownership.json", "Infrastructure Secret", "will not change SSH, firewall, routing, or provider settings"} {
+	for _, required := range []string{"Ubuntu 24.04 amd64", "8.8.8.8:443", "google.com:443", "sing-box 1.14.3 amd64", "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", "32297878 bytes", "one generated Client Identity", "/var/lib/sbxr/proxy-ownership.json", "Infrastructure Secret", "will not change SSH, firewall, routing, or provider settings"} {
 		if !strings.Contains(plan, required) {
 			t.Errorf("plan missing %q:\n%s", required, plan)
 		}
@@ -2353,7 +2353,7 @@ func TestReviewReturnsSecretSafeNotSetUpDetails(t *testing.T) {
 		"Required unfinished direction: none",
 		"Mutation lock: Available",
 		"Ownership Record: Absent",
-		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.13.19 amd64; DEB 24597120 bytes; DEB SHA-256 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf; Absent",
+		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.14.3 amd64; DEB 32297878 bytes; DEB SHA-256 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e; Absent",
 		"Package hold: Absent",
 		"Protected configuration identity: Absent",
 		"Packaged validation result: Not applicable",
@@ -2460,7 +2460,7 @@ func TestReviewReturnsCompleteSecretSafeRunningDetails(t *testing.T) {
 		"Required unfinished direction: none",
 		"Mutation lock: Available",
 		"Ownership Record: Valid; phase Running; cleanup checkpoint 0",
-		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.13.19 amd64; DEB 24597120 bytes; DEB SHA-256 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf",
+		"Proxy Package Identity: https://deb.sagernet.org/; signing-key bytes SHA-256 803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1; sing-box 1.14.3 amd64; DEB 32297878 bytes; DEB SHA-256 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
 		"Package hold: Present",
 		"Protected configuration identity: /etc/sing-box/config.json SHA-256 " + record.ConfigurationSHA256 + "; Matches",
 		"Packaged validation result: Accepted",

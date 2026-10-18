@@ -241,7 +241,7 @@ def package_observation(phase, expected, recovery=None):
     raw = command("dpkg-query", "--show",
                   "--showformat=${Version}\t${Architecture}\t${Status}\n",
                   "sing-box", missing=True)
-    artifact = Path("/var/lib/sbxr/sing-box_1.13.19_amd64.deb")
+    artifact = Path("/var/lib/sbxr/sing-box_1.14.3_amd64.deb")
     require(not os.path.lexists(artifact), "temporary-package-artifact")
     ownership = Path("/var/lib/sbxr/proxy-ownership.json")
     renewal = Path("/var/lib/sbxr/renewal-attempts.json")
@@ -310,7 +310,7 @@ def observe(phase, expected, window_seconds, recovery_expected=None,
     require(0 < window_seconds <= 900, "menu-window-bound")
     require((phase in RECOVERY_PHASES) == (recovery_expected is not None), "recovery-phase-input")
     receipt = expected["proxy_package"]
-    require(receipt["name"] == "sing-box" and receipt["version"] == "1.13.19"
+    require(receipt["name"] == "sing-box" and receipt["version"] == "1.14.3"
             and receipt["architecture"] == "amd64", "unsupported-proxy-package")
     require(set(expected["operator_sha256"]) == set(OPERATOR_MODES), "operator-manifest")
     require(set(expected["snap_packages"]) == {"certbot", "core24", "snapd"}, "snap-manifest")

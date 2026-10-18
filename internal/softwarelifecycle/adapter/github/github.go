@@ -559,8 +559,9 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 		detailed, detailedOK := uniqueRecordValue(body, "Detailed evidence SHA-256: ")
 		proxyPackage, proxyOK := uniqueRecordValue(body, "Proxy package: ")
 		outsidePackage, outsideOK := uniqueRecordValue(body, "Outside-client package: ")
-		packageIdentity := "sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf"
-		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || proxyPackage != packageIdentity || !subscription && (!outsideOK || outsidePackage != packageIdentity) {
+		qualifiedPackage := proxyPackage == "sing-box 1.13.19 amd64 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf" ||
+			proxyPackage == "sing-box 1.14.3 amd64 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e"
+		if !detailedOK || !hashPattern.MatchString(detailed) || !proxyOK || !qualifiedPackage || !subscription && (!outsideOK || outsidePackage != proxyPackage) {
 			return "", 0, false
 		}
 		if subscription {

@@ -9,6 +9,10 @@ the [acceptance index](../acceptance/README.md) for current live scope and its
 HTTP procedure under [ADR-0028](../adr/0028-clean-install-only.md).
 Read the notes below only for the relevant background question.
 
+## Current dependency review
+
+- [sing-box 1.14.3 compatibility — 2026-10-18](sing-box-1.14.3-compatibility.md): official package identity, generated configuration and qualification boundaries.
+
 ## Dated codebase snapshots
 
 | Question | Snapshot |

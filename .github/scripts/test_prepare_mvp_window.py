@@ -40,7 +40,7 @@ class Roles(unittest.TestCase):
         self.proxy = b'fixture sing-box executable; never executed'
         self.sbxr = b'distinct fixture SBXR executable; never executed'
         self.deb = self.root/'proxy.deb'
-        self.expected = {'proxy_package': {'name': 'sing-box', 'version': '1.13.19', 'architecture': 'amd64'},
+        self.expected = {'proxy_package': {'name': 'sing-box', 'version': '1.14.3', 'architecture': 'amd64'},
                          'installed_binary_sha256': hashlib.sha256(self.sbxr).hexdigest(),
                          'log_parent': {'fixture': True}, 'log_children': {}, 'snap_packages': {},
                          'operator_sha256': {}}

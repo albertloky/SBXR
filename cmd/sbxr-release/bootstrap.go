@@ -222,8 +222,17 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     provenance_count=4
   else
     [ "${#config_sha}" -eq 64 ] || path_refused
-    fields=',"proxy_package_identity":"https://deb\.sagernet\.org/ sing-box 1\.13\.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf","public_ipv4":"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+","destination_address":"google\.com:443","destination_server_name":"google\.com","configuration_sha256":"'"$config_sha"'"'
-    resources=$resources',"/var/lib/sbxr/.proxy-ownership.json.next root:root 0600 one-link transaction material","/var/lib/sbxr/sing-box_1.13.19_amd64.deb root-owned one-link verified package artifact","/etc/apt/keyrings/sagernet.asc sha256:803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1","/etc/apt/keyrings/sagernet.asc.sbxr-next root-owned transaction material","/etc/apt/sources.list.d/sagernet.sources https://deb.sagernet.org/ signed-by sagernet.asc","/etc/apt/sources.list.d/sagernet.sources.sbxr-next root-owned transaction material","sing-box package 1.13.19 amd64 deb-sha256:fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf","sing-box package hold","/etc/sing-box/config.json sha256:'"$config_sha"'","/var/lib/sing-box package state","sing-box.service package provenance stopped-disabled-before-commit","sing-box package-created user and group","tcp/443 local listener"]'
+    proxy_package=$("$ROOT/usr/bin/sed" -n 's/.*"proxy_package_identity":"\([^"]*\)".*/\1/p' <<<"$removal_subject")
+    case "$proxy_package" in
+      'https://deb.sagernet.org/ sing-box 1.14.3 amd64 32297878 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e')
+        package_version=1.14.3; package_sha=ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e ;;
+      'https://deb.sagernet.org/ sing-box 1.13.19 amd64 24597120 fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf')
+        package_version=1.13.19; package_sha=fb628b8cedf3e4c7cb32aa9c5103e0457e65ebb35ef510d041118836ef3b33bf ;;
+      *) path_refused ;;
+    esac
+    proxy_package_pattern=$(printf '%s' "$proxy_package" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
+    fields=',"proxy_package_identity":"'"$proxy_package_pattern"'","public_ipv4":"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+","destination_address":"google\.com:443","destination_server_name":"google\.com","configuration_sha256":"'"$config_sha"'"'
+    resources=$resources',"/var/lib/sbxr/.proxy-ownership.json.next root:root 0600 one-link transaction material","/var/lib/sbxr/sing-box_'"$package_version"'_amd64.deb root-owned one-link verified package artifact","/etc/apt/keyrings/sagernet.asc sha256:803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1","/etc/apt/keyrings/sagernet.asc.sbxr-next root-owned transaction material","/etc/apt/sources.list.d/sagernet.sources https://deb.sagernet.org/ signed-by sagernet.asc","/etc/apt/sources.list.d/sagernet.sources.sbxr-next root-owned transaction material","sing-box package '"$package_version"' amd64 deb-sha256:'"$package_sha"'","sing-box package hold","/etc/sing-box/config.json sha256:'"$config_sha"'","/var/lib/sing-box package state","sing-box.service package provenance stopped-disabled-before-commit","sing-box package-created user and group","tcp/443 local listener"]'
     checkpoints='([0-9]|1[01])'
     provenance_count=15
     ip=$("$ROOT/usr/bin/sed" -n 's/.*"public_ipv4":"\([0-9.]*\)".*/\1/p' <<<"$removal_subject")
