@@ -110,6 +110,51 @@ Plain HTTP still lets a network observer steal the link and proxy UUID or alter
 the downloaded configuration. No claim of secret containment on the network is
 made. Preserve protections for local files, logs and retained evidence.
 
+## Future native settings comparison
+
+The Owner approved this prospective correction on 2026-10-19. New preparations
+may explicitly bind `sbxr-karing-settings-preservation-v2` for Karing 1.2.25,
+build 2802. It permits differences only at `/window/x`, `/window/y`, and
+`/dns/client_subnet_latest_update`. Both position values must remain integers;
+the timestamp must be Karing's empty initial value or a valid persisted Dart
+date/time string. Missing paths, changed types and malformed values refuse.
+
+The pinned upstream code saves [window position](https://github.com/KaringX/karing/blob/v1.2.25.2802/lib/main.dart#L92-L117)
+and records the [direct-IP refresh timestamp before its HTTP result](https://github.com/KaringX/karing/blob/v1.2.25.2802/lib/screens/home_screen.dart#L800-L835).
+That timestamp proves no successful DNS or traffic check. The actual
+`dns.client_subnet` value, every other DNS field, window width/height, routing,
+selector, TUN, unknown fields and all other settings remain strict. Preserve
+the original selected connection and connected/TUN values and types. Preserve
+unrelated complete profiles, their order and non-item store fields through the
+separate full-store baseline checks; this settings policy grants them no exception.
+Saved URLs, credentials, node fields, TLS and REALITY still require their exact
+native readback checks.
+
+Fresh preparation copies the canonical `native-receipts.py` and uses its shared
+`settings_binding`, `settings_readback`, `compare_settings`, `capture_settings`
+and explicit `preserved_v2` functions. Before dispatch, bind the actual supported
+app version/build, executable and Info.plist digests, fixed policy, canonical
+helper digest, baseline and all prepare/capture/recording caller bytes in the
+reviewed inputs. Consumers obtain both the trusted binding and original baseline
+source record from the frozen inputs, never from a receipt's choice of policy
+or baseline. The explicit `preserved_v2(facts, binding, baseline_source_record)`
+API requires exact agreement with that original record. Rehearse the actual future baseline,
+capture and all three M2/M3/M5 consumers together before live use. A new actual
+native readiness cycle and separately authorized live plan remain prerequisites.
+
+Retain complete normalized before/current snapshots, full raw and canonical
+source digests, source metadata and the recomputed three-field change audit.
+Compare a separate fixed projection; never write baseline bytes as the current
+capture or discard the complete audit. Re-read the current actual source at
+consumption: even an otherwise permitted change after capture invalidates that
+observation. No caller-defined exclusion list is accepted.
+
+This versions the native settings comparison only, not the signed HTTP journey
+policy. `preserved(facts)` remains byte-strict, and absent/v1, unknown or mixed
+contracts cannot opt into v2. Historical helpers, receipts and the failed
+v3.1.112 qualification retain their original interpretation and outcome. This
+offline correction supplies no live pass or publication authority.
+
 ## Karing input and bounded correction
 
 For the initial `mvp-subscription` import, focus the currently rendered link

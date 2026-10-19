@@ -110,6 +110,24 @@ matching sing-box's omitted-field default. Explicit empty encoding disables that
 behavior and is refused. Historical run copies and failed records remain frozen;
 this local correction supplies no live qualification or publication authority.
 
+For new, explicitly pre-bound preparations, the same module owns the
+[fixed native settings v2 comparison](../../docs/acceptance/http-subscription-live.md#future-native-settings-comparison).
+`settings_binding()` reads the supported actual app identity and helper digest;
+freeze that returned contract before dispatch. `settings_readback(binding)`
+produces the full private baseline snapshot. `compare_settings(before, after,
+binding)` validates both snapshots and derives the three permitted differences.
+`capture_settings(baseline_source_record, fresh_current_path, binding)` writes
+the actual current snapshot exclusively and returns the settings facts.
+M2/M3/M5 capture and recording callers must all use
+`preserved_v2(facts, binding, baseline_source_record)` with both trusted inputs
+from the frozen preparation. Never select either input from the receipt.
+`preserved(facts)` remains the strict v1 API.
+The producer and consumer share the comparison and current-source provenance
+checks. The timing-only handoff and receipt envelope are unchanged. Full-store
+profile preservation and exact native URL/node checks remain separate required
+caller checks. `test_native_settings.py` exercises the producer/consumer file
+boundary and refusal cases using public fixtures, including Python 3.9.
+
 The shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
 `STATUS-RECOVERY-REQUIRED` lifecycle review code exactly once before its exact
 confirmation prompt. The ordinary action path and interruption controller use

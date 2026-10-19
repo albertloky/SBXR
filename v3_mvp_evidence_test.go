@@ -20,8 +20,10 @@ func TestMVPEvidenceAssemblyFixtures(t *testing.T) {
 }
 
 func TestNativeKaringReceiptReadbacks(t *testing.T) {
-	if output, err := exec.Command("python3", "-B", ".github/scripts/test_native_receipts.py").CombinedOutput(); err != nil {
-		t.Fatalf("native Karing readback regression: %v\n%s", err, output)
+	for _, path := range []string{".github/scripts/test_native_receipts.py", ".github/scripts/test_native_settings.py"} {
+		if output, err := exec.Command("python3", "-B", path).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", path, err, output)
+		}
 	}
 }
 
