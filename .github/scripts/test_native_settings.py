@@ -38,7 +38,8 @@ class NativeSettingsFixture(unittest.TestCase):
         self.root.chmod(0o700)
         self.native = self.root / "karing_setting.json"
         self.info = self.root / "Info.plist"
-        self.executable = self.root / "karing"
+        self.executable = self.root / "Karing"
+        self.original_app_executable = RECEIPTS.NATIVE_APP_EXECUTABLE
         self.settings = {
             "window": {"x": 64, "y": 128, "width": 1000, "height": 720, "widget": "home"},
             "dns": {
@@ -61,7 +62,7 @@ class NativeSettingsFixture(unittest.TestCase):
                            "connected": True, "tun_enabled": True}
         self.write(self.native, canonical(self.settings))
         self.write(self.info, plistlib.dumps({
-            "CFBundleIdentifier": "com.nebula.karing", "CFBundleExecutable": "karing",
+            "CFBundleIdentifier": "com.nebula.karing", "CFBundleExecutable": "Karing",
             "CFBundleShortVersionString": "1.2.25", "CFBundleVersion": "2802",
         }), 0o644)
         self.write(self.executable, b"PUBLIC SYNTHETIC APP EXECUTABLE\n", 0o755)
@@ -107,6 +108,27 @@ class FrozenV1SettingsTests(NativeSettingsFixture):
                 facts["settings"]["current"] = record(current)
                 with self.assertRaisesRegex(ValueError, "complete settings"):
                     RECEIPTS.preserved(facts)
+
+
+class NativeAppIdentityTests(NativeSettingsFixture):
+    def test_official_macos_executable_case_and_bytes_are_bound(self):
+        binding = RECEIPTS.settings_binding()
+        self.assertEqual(self.original_app_executable,
+                         Path('/Applications/karing.app/Contents/MacOS/Karing'))
+        self.assertEqual(binding['app'], {
+            'version': '1.2.25', 'build': '2802',
+            'executable_sha256': hashlib.sha256(self.executable.read_bytes()).hexdigest(),
+            'info_plist_sha256': hashlib.sha256(self.info.read_bytes()).hexdigest(),
+        })
+
+    def test_other_executable_case_spellings_are_rejected(self):
+        original = plistlib.loads(self.info.read_bytes())
+        for value in ['karing', 'KARING', 'KaRiNg', 'other']:
+            with self.subTest(executable=value):
+                info = dict(original, CFBundleExecutable=value)
+                self.write(self.info, plistlib.dumps(info), 0o644)
+                with self.assertRaisesRegex(ValueError, 'Unsupported Karing identity'):
+                    RECEIPTS.settings_binding()
 
 
 class NativeSettingsV2Tests(NativeSettingsFixture):
@@ -518,7 +540,7 @@ spec = importlib.util.spec_from_file_location('receipts_child', module)
 r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
 r.NATIVE_APP_INFO = root / 'Info.plist'
-r.NATIVE_APP_EXECUTABLE = root / 'karing'
+r.NATIVE_APP_EXECUTABLE = root / 'Karing'
 r.NATIVE_SETTINGS_SOURCE = root / 'karing_setting.json'
 def write(path, value):
     raw = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()

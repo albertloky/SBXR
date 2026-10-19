@@ -25,7 +25,7 @@ import urllib.parse
 NATIVE_SUBSCRIPTION_SOURCE = Path('/Users/Albert/Library/Group Containers/group.com.nebula.karing/karing_subscribe.json')
 NATIVE_SETTINGS_SOURCE = NATIVE_SUBSCRIPTION_SOURCE.with_name('karing_setting.json')
 NATIVE_APP_INFO = Path('/Applications/karing.app/Contents/Info.plist')
-NATIVE_APP_EXECUTABLE = Path('/Applications/karing.app/Contents/MacOS/karing')
+NATIVE_APP_EXECUTABLE = Path('/Applications/karing.app/Contents/MacOS/Karing')
 SETTINGS_POLICY = 'sbxr-karing-settings-preservation-v2'
 _PERMITTED_PATHS = (('window', 'x'), ('window', 'y'), ('dns', 'client_subnet_latest_update'))
 
@@ -183,7 +183,7 @@ def settings_binding():
     executable, _ = _native_bytes(NATIVE_APP_EXECUTABLE, app=True)
     info = plistlib.loads(info_raw)
     require(isinstance(info, dict) and info.get('CFBundleIdentifier') == 'com.nebula.karing' and
-            info.get('CFBundleExecutable') == 'karing' and
+            info.get('CFBundleExecutable') == 'Karing' and
             info.get('CFBundleShortVersionString') == '1.2.25' and
             info.get('CFBundleVersion') == '2802', 'Unsupported Karing identity for settings v2')
     return {'schema': 'sbxr-karing-settings-binding-v2', 'policy': SETTINGS_POLICY,
