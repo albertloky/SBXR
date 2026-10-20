@@ -20,7 +20,7 @@ func TestMVPEvidenceAssemblyFixtures(t *testing.T) {
 }
 
 func TestNativeKaringReceiptReadbacks(t *testing.T) {
-	for _, path := range []string{".github/scripts/test_native_receipts.py", ".github/scripts/test_native_settings.py"} {
+	for _, path := range []string{".github/scripts/test_native_receipts.py", ".github/scripts/test_native_settings.py", ".github/scripts/test_native_profiles.py"} {
 		if output, err := exec.Command("python3", "-B", path).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", path, err, output)
 		}

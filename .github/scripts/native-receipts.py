@@ -10,9 +10,12 @@ Fresh operator preparation copies this canonical module alongside its native
 capture/recording helpers before freezing inputs. Historical copies stay frozen.
 Settings v2 is an explicit future API with a trusted pre-dispatch binding;
 the existing preserved(facts) API keeps its byte-strict v1 interpretation.
+Profiles v3 separately compares original profiles against frozen native rules
+and independently captured observation times; it never selects its own policy.
 """
 import datetime as dt
 import hashlib
+import io
 import json
 import math
 import os
@@ -21,12 +24,15 @@ import plistlib
 import re
 import stat
 import urllib.parse
+from zoneinfo import ZoneInfo
 
 NATIVE_SUBSCRIPTION_SOURCE = Path('/Users/Albert/Library/Group Containers/group.com.nebula.karing/karing_subscribe.json')
 NATIVE_SETTINGS_SOURCE = NATIVE_SUBSCRIPTION_SOURCE.with_name('karing_setting.json')
 NATIVE_APP_INFO = Path('/Applications/karing.app/Contents/Info.plist')
 NATIVE_APP_EXECUTABLE = Path('/Applications/karing.app/Contents/MacOS/Karing')
+NATIVE_TIMEZONE_SOURCE = Path('/etc/localtime')
 SETTINGS_POLICY = 'sbxr-karing-settings-preservation-v2'
+ORIGINAL_PROFILES_POLICY = 'original-profiles-refresh-cache-v3'
 _PERMITTED_PATHS = (('window', 'x'), ('window', 'y'), ('dns', 'client_subnet_latest_update'))
 
 
@@ -191,6 +197,132 @@ def settings_binding():
                     'executable_sha256': hashlib.sha256(executable).hexdigest(),
                     'info_plist_sha256': hashlib.sha256(info_raw).hexdigest()},
             'helper_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+
+
+def native_timezone_binding():
+    """Bind the native source, not the process TZ or an independently named zone."""
+    resolved = NATIVE_TIMEZONE_SOURCE.resolve(strict=True)
+    path = str(resolved)
+    require('/zoneinfo/' in path, 'Native timezone is not an explicit zoneinfo source')
+    name = path.split('/zoneinfo/', 1)[1]
+    require(name and not name.startswith('/') and '..' not in name.split('/'),
+            'Native timezone identity differs')
+    raw, _ = _native_bytes(resolved, app=True)
+    require(NATIVE_TIMEZONE_SOURCE.resolve(strict=True) == resolved,
+            'Native timezone changed during readback')
+    return {'name': name, 'resolved_source_path': path,
+            'sha256': hashlib.sha256(raw).hexdigest()}
+
+
+def _profile_window_utc(value):
+    require(isinstance(value, str) and re.fullmatch(
+        r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
+        r'(?:\.[0-9]{1,6})?(?:Z|\+00:00)', value),
+        'An explicit UTC profile observation time is required')
+    return dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def _profile_native_time(value, zone):
+    require(isinstance(value, str) and re.fullmatch(
+        r'[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
+        r'(?:\.[0-9]{1,6})?', value), 'Changed updateTime must retain its native datetime format')
+    naive = dt.datetime.fromisoformat(value)
+    candidates = set()
+    for fold in (0, 1):
+        utc = naive.replace(tzinfo=zone, fold=fold).astimezone(dt.timezone.utc)
+        if utc.astimezone(zone).replace(tzinfo=None) == naive:
+            candidates.add(utc)
+    require(len(candidates) == 1, 'Changed updateTime is ambiguous or nonexistent in the bound native timezone')
+    return candidates.pop()
+
+
+def _profile_differences(before, after, path=()):
+    """Retain every changed path/value, including additions and type changes."""
+    if _canonical(before) == _canonical(after):
+        return []
+    if isinstance(before, dict) and isinstance(after, dict):
+        changes = []
+        for key in sorted(set(before) | set(after)):
+            if key in before and key in after:
+                changes += _profile_differences(before[key], after[key], path + (key,))
+            else:
+                changes.append({'path': list(path + (key,)),
+                                'before': dict(present=key in before, **({'value': before[key]} if key in before else {})),
+                                'after': dict(present=key in after, **({'value': after[key]} if key in after else {}))})
+        return changes
+    if isinstance(before, list) and isinstance(after, list) and len(before) == len(after):
+        return [change for index, (old, new) in enumerate(zip(before, after))
+                for change in _profile_differences(old, new, path + (index,))]
+    return [{'path': list(path), 'before': {'present': True, 'value': before},
+             'after': {'present': True, 'value': after}}]
+
+
+def original_profiles_audit_v3(before, after, *, timezone, tzif_record, window_start, window_end):
+    """Compare complete original profiles using only independently frozen authority.
+
+    Fresh run producers supply their own UTC read times and retained exact native
+    TZif bytes. Consumers recompute this immutable audit, then separately re-read
+    current native sources. This static function never reads current app state.
+    A failed comparison still returns the complete private diff; callers must
+    retain it before requiring passed=True. Authority errors refuse outright.
+    """
+    require(isinstance(timezone, dict) and set(timezone) ==
+            {'name', 'resolved_source_path', 'sha256'} and
+            isinstance(timezone['name'], str) and timezone['name'] and
+            not timezone['name'].startswith('/') and '..' not in timezone['name'].split('/') and
+            isinstance(timezone['resolved_source_path'], str) and
+            timezone['resolved_source_path'].endswith('/zoneinfo/' + timezone['name']),
+            'Frozen native timezone identity is required')
+    raw = source_file(tzif_record)
+    require(timezone['sha256'] == hashlib.sha256(raw).hexdigest(), 'Bound native timezone bytes differ')
+    try:
+        zone = ZoneInfo.from_file(io.BytesIO(raw), key=timezone['name'])
+    except Exception:
+        raise ValueError('Invalid bound native timezone rules') from None
+    start, end = _profile_window_utc(window_start), _profile_window_utc(window_end)
+    require(start <= end, 'Profile observation window regresses')
+    refusals = []
+    for profiles in (before, after):
+        valid = isinstance(profiles, list) and len(profiles) == 2 and all(
+            isinstance(item, dict) and isinstance(item.get('groupid'), str) and item['groupid']
+            for item in profiles)
+        valid = valid and len({item['groupid'] for item in profiles}) == 2 and any(
+            item['groupid'] == 'custom' for item in profiles)
+        if not valid:
+            refusals.append('Exactly two unique original profiles including the built-in custom are required')
+    changes = _profile_differences(before, after)
+    for change in changes:
+        path, old, new = change['path'], change['before'], change['after']
+        allowed, reason = False, 'Original field, structure, type or order changed'
+        if not refusals and path and type(path[0]) is int and 0 <= path[0] < len(before):
+            if before[path[0]]['groupid'] == 'custom':
+                reason = 'The built-in custom profile must match exactly'
+            elif old['present'] and new['present']:
+                if path[1:] == ['updateTime']:
+                    try:
+                        previous = _profile_native_time(old['value'], zone)
+                        current = _profile_native_time(new['value'], zone)
+                        allowed = previous < current and start <= current <= end
+                        reason = ('Forward refresh timestamp within the captured observation window' if allowed
+                                  else 'Changed updateTime regresses or lies outside the captured observation window')
+                    except (ValueError, OverflowError) as error:
+                        reason = ('Changed updateTime is outside the supported UTC range'
+                                  if isinstance(error, OverflowError) else str(error))
+                elif (len(path) == 4 and path[1] == 'servers' and type(path[2]) is int
+                      and path[3] == 'latency'):
+                    allowed = all(isinstance(value, str) and re.fullmatch('[0-9]+', value) and
+                                  any(char != '0' for char in value)
+                                  for value in (old['value'], new['value']))
+                    reason = ('Positive ASCII-decimal latency cache change' if allowed else
+                              'Changed latency requires two positive ASCII-decimal strings')
+        change.update(allowed=bool(allowed), reason=reason)
+    return {'schema': 'sbxr-original-profiles-comparison-v3', 'policy': ORIGINAL_PROFILES_POLICY,
+            'timezone': timezone, 'tzif_record': tzif_record,
+            'window': {'not_before': window_start, 'observed_at': window_end},
+            'baseline_profiles_canonical_sha256': hashlib.sha256(_canonical(before)).hexdigest(),
+            'current_profiles_canonical_sha256': hashlib.sha256(_canonical(after)).hexdigest(),
+            'changes': changes, 'refusals': refusals,
+            'passed': not refusals and all(change['allowed'] for change in changes)}
 
 
 def _normalized(value):

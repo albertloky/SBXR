@@ -128,6 +128,22 @@ profile preservation and exact native URL/node checks remain separate required
 caller checks. `test_native_settings.py` exercises the producer/consumer file
 boundary and refusal cases using public fixtures, including Python 3.9.
 
+The separate [future original-profile v3 policy](../../docs/acceptance/http-subscription-live.md#future-original-profile-comparison)
+uses `original_profiles_audit_v3(before_profiles, after_profiles, timezone=...,
+tzif_record=..., window_start=..., window_end=...)`. It returns the complete
+private path/value diff and `passed`; callers retain the audit before requiring
+that result. Only the fixed timestamp and latency-cache changes can pass, and
+the built-in `custom` profile stays exact. `native_timezone_binding()` reads the
+native zone identity; fresh preparation must also retain and freeze its exact
+TZif bytes. The comparator reads those retained bytes, never process `TZ` or
+current native state. Producers record their own baseline/current UTC read times,
+not UI-selected windows. M2/M3/same-link/M5 consumers recompute the immutable audit
+and separately verify current actual readbacks. Keep policy, baseline, timezone,
+observation and caller provenance in the normal frozen input closure; generic
+failure cleanup uses static retained authority. `test_native_profiles.py` covers
+the fixed exceptions, strict fields, UTC windows and ambiguous/nonexistent local
+times. No effective subscription timer model is a prerequisite of this policy.
+
 The shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
 `STATUS-RECOVERY-REQUIRED` lifecycle review code exactly once before its exact
 confirmation prompt. The ordinary action path and interruption controller use

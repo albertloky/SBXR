@@ -155,6 +155,53 @@ contracts cannot opt into v2. Historical helpers, receipts and the failed
 v3.1.112 qualification retain their original interpretation and outcome. This
 offline correction supplies no live pass or publication authority.
 
+## Future original-profile comparison
+
+The Owner approved this prospective policy on 2026-10-20 for explicitly versioned
+future preparations. Bind `original-profiles-refresh-cache-v3` separately from
+settings v2. The built-in original profile with group ID `custom` must still match
+exactly. For the other original profile, permit differences only at its immediate
+`updateTime` and existing `servers[index].latency` fields:
+
+- A changed timestamp requires both values to be valid native date/time strings,
+  parsed unambiguously using the retained exact native TZif rules. Reject a local
+  time in a DST gap or fold. The new value must advance and lie within the actual
+  recorded baseline-to-current observation window. Empty, malformed, regressing
+  or out-of-window changes refuse.
+- A changed latency requires both values to be positive ASCII-decimal strings.
+  It proves no successful refresh, traffic or journey outcome.
+
+Profile/node identities, count/order, URLs, credentials, TLS/REALITY/Vision,
+routes, all other fields and all non-item store fields remain exact. The existing
+settings policy, selected connection, connection state and TUN checks remain
+required. Any observed selection change fails. Latency may affect automatic
+selection; before/after observations cannot prove every intermediate choice.
+
+Fresh preparation freezes the supported app/helper identity, fixed profile
+policy, complete original store, producer-recorded baseline UTC observation,
+native timezone identity and retained TZif bytes, selected connection and every
+prepare/capture/recording consumer. Do not infer an effective refresh timer from
+raw null/default values; no all-profile timer proof is a prerequisite here.
+The producer independently records the current UTC read time and retains the
+complete actual raw store plus the full private before/after change audit,
+including refusals, before producing any passing receipt. Neither a UI observation
+nor a receipt may choose or widen the comparison window or its baseline.
+
+`original_profiles_audit_v3` recomputes the comparison from those retained inputs.
+Consumers reuse the captured immutable window, then separately re-read actual
+current sources; a permitted change after capture invalidates that observation.
+Bind policy, timezone, window and complete audit provenance through the normal
+producer, finalizer, verifier and candidate closure. Generic failure cleanup
+validates static retained authority and must remain reachable if the current app
+or timezone changes. Full M2/M3 stores contain the test credentials: normal and
+failure cleanup must remove or redact those owned captures while preserving
+complete original-profile data, raw source digests and the private change audit.
+Later M5/cleanup validation must not depend on already removed test secrets.
+
+The historical strict APIs, helpers and receipts retain their meaning. The failed
+v3.1.113 result stays failed. This policy changes no signed HTTP journey requirement
+and supplies no live qualification, new-attempt or publication authority.
+
 ## Karing input and bounded correction
 
 For the initial `mvp-subscription` import, focus the currently rendered link
