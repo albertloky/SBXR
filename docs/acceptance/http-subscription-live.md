@@ -346,36 +346,94 @@ or burned attempt cannot resume or become passed through this procedure.
 
 ## Attended Karing response windows
 
-For a future attempt, explicitly declare `karing_response_limit_seconds: 3600`
-and `attended_finish_by` (an actual RFC3339 UTC attendance cutoff) in the
-unsigned declaration and verify both in the signed manifest. This opt-in is
-limited to ordinary HTTP MVP qualification. An omitted field preserves the old
-request, observation and deadline contract exactly. It cannot extend or qualify
-an expired attempt, including r02 / v3.1.86.
+On 2026-10-04 the Owner replaced the full-hour response guarantee for future
+SBXR tests with short, present-user checks. A response window is a **timeout**
+for a required manual client action, never a mandatory wait or an extra approval
+for every scenario. Continue immediately after the actual result is observed.
+Historical signed attempts retain their original timing interpretation.
 
-The unchanged 30-minute technical budget (two hours for `mvp-subscription`)
-counts preparation, automated checks and submission preparation. Only the
-actual interval waiting for an attended Karing response pauses that budget.
-Each eligible handoff gives the Owner a full hour after the link is ready and
-readiness has actually been communicated. A copied clipboard link alone does
-not start the response clock. The five-minute validation/submission limits,
-signed attendance cutoff and six-hour transport/job ceilings remain. Refuse a
-handoff if its full response hour cannot fit; arrange a future session before
-another approved attempt rather than extending the current session.
+Use **five minutes for a simple prepared client action, ten minutes for a grouped
+import/latency/manual-refresh check** while the Owner is present. Prepare commands,
+private links and evidence callbacks before notifying. Start the timeout when
+readiness is actually communicated, not when a link is copied. If the exact real
+client can be operated and observed through an already authorized, working tool,
+record that direct evidence without requesting a redundant Owner reply. A tool's
+availability alone does not prove that client interaction is working.
+
+The operator performs supported objective checks directly: package/installed
+identity, public-menu operations, safe lifecycle refusal/no-recovery results,
+outside HTTP/REALITY probes, artifact/credential comparisons, resource inventories,
+and cleanup. Inspect their actual outputs before recording each result. The
+recorder and assembler only record/validate evidence; they do not execute or
+prove the checks. All five scenario records remain required and sequential.
+
+| Scenario | Client attendance that may need a manual handoff |
+|---|---|
+| Install | None if the outside REALITY probe is operator-controlled; actual outside traffic still required. |
+| Subscription | One prepared client visit for import, fresh latency, manual refresh and settings/selection preservation; record every required check. |
+| Credentials | Identity rotation/unchanged-link refresh is operator-verifiable with the outside client; request help only where direct observation is unavailable. Then prove actual Karing replacement latency after link rotation. Keep the two mutations ordered, and establish the old outside session before rotation. |
+| Serving | None: ordinary serving restart and outside HTTP/proxy checks are operator-controlled. |
+| Removal | Remove only test profiles/secrets and verify preserved client settings; combine the final client tasks in one visit. Product/process/transport cleanup remains operator work. |
+
+Plan three client visits when the operator can prove unchanged-link identity
+refresh directly: subscription import/refresh, replacement-link refresh, and
+test-profile cleanup. If that identity refresh needs a client reply, add its
+`credential-refresh` handoff before rotating the link. These are observations,
+not separate scenario approvals. Group nearby actions only where the required
+state exists. Do not overlap waits, perform later-scenario checks
+early, reuse an earlier observation, or infer browsing from node latency.
+For subscription, one actual `profile-import` handoff can encompass import and
+manual refresh of that ready link; both check records remain mandatory. Open a
+separate `profile-refresh` handoff only if there is a separate actual wait;
+account for the additional handoff in the pre-attempt budget.
+
+Stop qualification mutations immediately on a failed action, or when silence
+or incomplete evidence reaches the stated short timeout. Preserve the original
+incomplete/failed result. Use the existing lawful recovery and cleanup path; report inaccessible cleanup as
+unproved. Do not mark checks observed, extend the timeout automatically, reset
+timestamps, continue another destructive step, or retain a running installation
+for a later reply. A later reply cannot rescue that stopped attempt. Recovery
+and cleanup access must already be available before starting; they cannot depend
+on the missing client reply.
+
+### Compatibility with the committed timing contract
+
+At `b7a6f3a69710f3aea7b9b42f3cf9f82fde8ac3e9`, the supported signed opt-in is
+still `karing_response_limit_seconds: 3600` plus an actual `attended_finish_by`.
+The recorder and Go validator accept immediate responses and deduct only actual
+recorded waiting. The allowed phase list does not require a handoff per phase
+or per scenario. Do not invent a handoff/response for a directly observed tool
+action. However, every opened handoff still requires **notification +
+60 minutes <= attended_finish_by**, and the signed finish must be within six
+hours of attempt start (and at least one hour after start; that is not a minimum
+actual session duration). Build/sign/handoff time after that start consumes the
+bound. The transport and hosted-job six-hour limits are independent.
+
+A committed-only attempt can therefore use the short **operator stop rule**
+without code changes, provided every handoff satisfies that retained one-hour
+admission guard. Keep `3600` in its declaration; do not insert `300`/`600`, claim
+machine-enforced short expiry, omit timing to evade the guard, or change a signed
+manifest. An omitted opt-in still has its original unpaused technical contract.
+The 30-minute technical scenarios, two-hour subscription ceiling and five-minute
+validation/submission limits are maxima, not planned durations. Only actual
+recorded response waits pause technical time. Machine work and coordination
+remain charged; there is no due-refresh wait.
+
+The short timeout is an operator stop rule. Runtime enforcement retains the
+original signed contract; changing it is outside this cleanup.
 
 Prepare the exact callback and final observation commands before asking for
 input. Coordinate the main assistant's visible readiness message and actual UTC
 notification timestamp with the operator. Record that timestamp promptly (within
 five minutes and while the technical request remains active); never substitute
 the link-preparation time or invent an earlier notification. The self-contained
-recorder can still be streamed through the existing SSH path. For menu/
-recovery operations after a completed wait, also stage its exact reviewed bytes
-as a root-owned `0600`, one-link file in the separately inventoried update-control
+recorder can still be streamed through the existing SSH path. For menu operations after a completed wait, also stage its exact reviewed bytes
+as a root-owned `0600`, one-link file in the separately inventoried recorder
 directory (keep the protected-menu directory's four-file inventory unchanged).
 Pass `SBXR_QUALIFICATION_CLOCK` as that absolute path,
 `SBXR_QUALIFICATION_CLOCK_SHA256` as the reviewed checkout's digest, and
 `SBXR_QUALIFICATION_DRAFT` as the current absolute draft path. All maintained
-menu, interruption and recovery drivers verify those bytes and call
+menu and packaged-action drivers verify those bytes and call
 `operation-deadline`. It refuses pending/expired/sealed handoffs before a product
 process starts. Inventory and remove the additional staged recorder during
 owned operator cleanup. Private callers must use this computed deadline, not
@@ -385,7 +443,7 @@ Record the readiness event with:
 
 ```sh
 python3 mvp-observe.py ready --request request.json --draft draft.json \
-  --phase http-profile-refresh --prepared-at "$actual_prepared_at" \
+  --phase profile-refresh --prepared-at "$actual_prepared_at" \
   --notified-at "$actual_user_notification_at"
 ```
 
@@ -407,7 +465,7 @@ then, the collector ignores only the exact sealed draft that matched its immedia
 preceding accepted scenario; altered, unsealed and older replayed drafts still
 refuse. The retained draft never extends the next request's technical deadline.
 
-This is a future tooling/procedure change, not Karing acceptance or publication.
-Before another live attempt, validate the changed collector/SSH boundary with an
-isolated Linux fixture, refresh all existing prerequisites and obtain approval
-for the exact new signed declaration and candidate.
+This procedure records no Karing acceptance or publication. Before another live
+attempt, refresh the existing prerequisites and obtain approval for the concrete
+signed declaration and candidate. If tooling changes, qualify its changed
+collector/SSH boundary in isolation before using it live.

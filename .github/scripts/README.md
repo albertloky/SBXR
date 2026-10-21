@@ -32,7 +32,6 @@ retains ordinary native, signing, attestation, failure and publication gates.
 | Window expectation proxy pin | `prepare-mvp-window.py`, `test_prepare_mvp_window.py`; derive `/usr/bin/sing-box` SHA-256 from the receipt-verified local DEB without changing host facts |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
-| Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
 | Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [startup cancellation regression](test_mvp_startup_cleanup.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md); use the driver's `--protected-wrapper` opt-in |
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh`; `release-main-review.py` binds committed candidate/main divergence to the security/evidence assessment retained by [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
@@ -143,19 +142,18 @@ failure cleanup uses static retained authority. `test_native_profiles.py` covers
 the fixed exceptions, strict fields, UTC windows and ambiguous/nonexistent local
 times. No effective subscription timer model is a prerequisite of this policy.
 
-The shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
+For historical lifecycle transcripts, the shared menu driver requires Update's `CHECK-UPDATE-AVAILABLE` or Recover's
 `STATUS-RECOVERY-REQUIRED` lifecycle review code exactly once before its exact
-confirmation prompt. The ordinary action path and interruption controller use
-the same rule. Missing, unexpected or duplicate review codes never authorize
+confirmation prompt. The ordinary action path uses the same rule. Missing, unexpected or duplicate review codes never authorize
 confirmation; final action results and original deadlines remain separate.
 `test_v3_menu_session.py` exercises success/refusal/deadline cases with actual
-subprocess input, alongside the combined terminal/lifecycle rehearsal below.
+subprocess input, while current menus expose Check and Recover.
 The shared session checks the original deadline before launch and every input,
 and when consuming output, including buffered lines and transcript writes.
 Failure cleanup retains its separate bounded quiescence budget; it does not
 extend the journey or permit late confirmation.
 
-The menu driver and packaged interruption controller share descendant cleanup.
+The menu driver and packaged helpers share descendant cleanup.
 They prefer Linux's optional task `children` list and fall back to parent IDs in
 `/proc/PID/stat` when that interface is absent. Each signal uses a process handle
 and a kernel child-ownership check, so stale IDs and unrelated siblings cannot
@@ -197,50 +195,14 @@ refusal; use separate disposable VMs if parallel execution is needed.
 
 The repaired launcher sets `umask 022` only in the child that execs the unchanged
 product; the pinned wrapper and supervisor retain private `077` state files.
-`test_mvp_released_umask.py` exercises a diagnostic test binary built from the
-frozen v3.1.81 source through that actual launcher. Copy
-`testdata/released-umask-main_test.go` into its disposable
-`internal/softwarelifecycle` package to select the four existing source tests;
-stage the unchanged `subscription-absent-schema2.json` fixture at its repository
-path. This is source-level Update/Recover evidence, not original packaged-binary
-execution. The test requires the marked disposable VM and restores its paths.
-
-`mvp-update-interrupt.py` reuses the real menu session, with an argv form only
-for the fixed wrapper/tracer process chain. The ordinary executable-string
-callers retain their behavior. It stops the real source at a successful durable
-checkpoint syscall and leaves public recovery and outside checks to the operator.
-Its separately staged controller imports the existing protected menu driver
-without writing bytecode into the four-file directory. Use the
-[historical source-update procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption).
-`test_mvp_update_interrupt.py FIXTURE` requires the marked root VM; build its
-synthetic native Go fixture from `testdata/update-interrupt-fixture`. It tests
-21 success/refusal/cancellation cases with real Linux tracing and cleanup,
-including short-lived multithreaded Go children before the menu and refusal
-when the product itself exits before any checkpoint,
-not a packaged upgrade or CA operation. `v3_update_interrupt_test.go` provides
-portable syntax checks and an opt-in `SBXR_UPDATE_CONTROL_VM=1` root VM wrapper.
-The early-deadline wrapper cleanup failure is retained in the
-[mask-repair report](../../docs/acceptance/reports/ordinary-recurring-umask-repair-2026-09-25.md);
-the separately approved [startup repair](../../docs/acceptance/reports/ordinary-recurring-cleanup-repair-2026-09-25.md)
-records its isolated resolution. Neither is live qualification or blanket
-dispatch permission; use the current procedure and fresh prerequisite gates.
-The new recorder handoff adds four actual streamed-SSH cases to the earlier 21.
-
 The read-only `mvp-inspect-window.py` replaces run-local package/window probes.
 Use its [documented SSH call and receipt inputs](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22).
 It queries the installed held package independently of the deliberately removed
 DEB and compares the Ownership Record string, not the declaration object.
 Snap images may have snapd cache hard links; root ownership, regular-file type,
 non-writable group/other permissions, no xattrs, and exact receipts are still
-required. Other protected files keep the one-link rule, except the exact
-source/prior executable relationship admitted by `recovery-precommit`:
-independently bound bytes, root:root `0755`, the same inode and exactly two links.
-`recovery-postcommit` requires distinct one-link active/prior executables.
-Both phases require the original active request and verified manifest digest,
-exact schema-2 transaction/ownership and all ordinary package/window checks.
-They are only for Recover after successful controlled interruption; ordinary
-`running` refuses any transaction residue. See the
-[recovery SSH handoff](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md#controlled-update-recovery-windows).
+required. Other protected files retain the one-link rule; ordinary `running`
+refuses update transaction residue.
 `test_mvp_inspect_window.py` covers portable contracts and, when run as root on
 Linux, real snap/cache hard links and metadata/content refusals;
 `test_mvp_inspect_window_linux.py VERIFIED_DEB` exercises the exact documented
@@ -251,21 +213,6 @@ root amd64 Linux VM with absent fixture resources. SBXR records/menu and snap
 CLI/images are synthetic, with real snap/cache hard links; no CA or product
 acceptance is claimed. Keep egress
 restricted. The opt-in root Go wrapper uses `SBXR_MVP_OBSERVER_DEB`.
-
-`test_mvp_recovery_window.py` adds exact bound-file, hard-link relationship,
-request/deadline, schema and race refusals; filesystem cases require root Linux.
-With optional `SOURCE_FIXTURE CANDIDATE_FIXTURE` arguments, the Linux observer
-suite also runs `test_mvp_window_recovery_linux.py` inside that same isolated
-dpkg/SSH environment. Build both diagnostic executables from
-`testdata/window-recovery-fixture`; for the unchanged-source comparison, copy
-only that fixture into a disposable archive of v3.1.81 and build it there.
-The real terminal and lifecycle Update/Recover execute through SSH, the
-controller and protected windows. Release, proxy admission/runtime and snap
-seams are synthetic; no trusted target is fabricated for a live attempt.
-The root Go wrapper builds the current fixture and accepts an optional
-`SBXR_MVP_RECOVERY_SOURCE` frozen diagnostic binary. The fixture is **not** the
-unchanged packaged source binary and cannot establish release/network trust,
-real subscription runtime, outside traffic or live qualification.
 
 The asset reader uses `gh api` and makes at most one fresh GET after a TCP read
 reset, the failure observed in the unsigned `v3.1.73` draft download. It discards

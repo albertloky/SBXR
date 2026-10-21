@@ -2,6 +2,13 @@
 
 Accepted for future explicitly declared ordinary HTTP MVP attempts, 2026-10-02.
 
+**Prospective planning amendment — 2026-10-04:** the Owner withdrew the full-hour
+response guarantee for future tests. Use the [short-window procedure](../acceptance/http-subscription-live.md#attended-karing-response-windows):
+advance on actual evidence, request a reply only for a required manual action,
+and stop after a short unanswered timeout. The original decision below explains
+historical declarations and the unchanged `3600` runtime contract; this amendment
+does not change executable enforcement or authorize another attempt.
+
 The Owner requested a full one-hour Karing response window beginning after a
 link is prepared and readiness is communicated. r02 timed out because the
 operator attempted to record the Owner's timely response after the existing

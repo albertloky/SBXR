@@ -49,7 +49,7 @@ def write(path, body, mode=0o600):
     path.chmod(mode)
 
 
-def main(deb, recovery_binaries=()):
+def main(deb):
     if sys.flags.optimize:
         raise RuntimeError('fixture-requires-enabled-assertions')
     marker = Path('/run/sbxr-isolated-test-host')
@@ -216,7 +216,7 @@ LogLevel ERROR
         # retained wrapper state untouched if restoration itself refuses.
         package_attempted = False
         def purge():
-            # A failed inner recovery fixture must not lose the very wrapper,
+            # A failed wrapped fixture must not lose the wrapper,
             # log child or product material needed to assess retained state.
             if retained_window():
                 return
@@ -333,11 +333,6 @@ LogLevel ERROR
         finally:
             drift.rmdir()
         check(reason='Expecting value', extra_options=['-o', 'StdinNull=yes'])
-        if recovery_binaries:
-            from test_mvp_window_recovery_linux import rehearse
-            recovery_work = work / 'recovery'
-            recovery_work.mkdir(mode=0o700)
-            rehearse(recovery_work, *recovery_binaries, expected, options)
         # No window is opened on any failed observer call; successful windows
         # return before re-observation and the complete purge window is bounded.
         assert observer.log_observation() == {k: expected[k] for k in ('log_parent', 'log_children')}
@@ -374,5 +369,5 @@ if __name__ == '__main__':
         raise KeyboardInterrupt
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, interrupted)
-    assert len(sys.argv) in (2, 4), 'supply verified pinned amd64 DEB and optional source/candidate diagnostic binaries'
-    main(Path(sys.argv[1]).resolve(), tuple(Path(p).resolve() for p in sys.argv[2:]))
+    assert len(sys.argv) == 2, 'supply verified pinned amd64 DEB'
+    main(Path(sys.argv[1]).resolve())
