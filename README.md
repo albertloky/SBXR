@@ -47,9 +47,9 @@ sudo sbxr
 ```
 
 Every screen shows fresh proxy, subscription, and Software Lifecycle status.
-The same menu lists legal Proxy Installation Actions plus `Check`, `Update`, and
-`Recover`. Update is unsupported in this clean-install-only product and refuses
-without replacement. Recover retains proved transaction recovery; it does not
+The same menu lists legal Proxy Installation Actions plus `Check` and `Recover`.
+New software updates are unsupported and Update is absent from the menu.
+Recover retains proved transaction recovery; it does not
 start legacy transport migration. Only `y` approves a supported action's effects.
 Empty input or `n` cancels. Changed facts require a fresh review.
 
@@ -76,8 +76,8 @@ and new client setup. The installer refuses remaining authority or resources and
 retains exact removal-finisher restoration. An already absent host needs no old
 source installation or removal.
 
-There is no background software updater. Explicit Update refuses in the current
-product. Existing transaction rollback/forward completion, installation recovery,
+There is no background software updater or Update menu action. Existing
+transaction rollback/forward completion, installation recovery,
 proxy/subscription operation recovery and Complete removal keep their original
 proved directions. Local regression tests do not establish a live release.
 
@@ -109,11 +109,11 @@ installer over existing state. Without that proof, keep the candidate non-Latest
 passing the five journeys alone cannot establish update compatibility.
 
 The former [V4 operator producer](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator),
-its [25-scenario procedure](docs/acceptance/historical/v4-operator-procedures.md), and its
+its [25-scenario procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/historical/v4-operator-procedures.md), and its
 evidence guides are historical for their named attempts. The producer is retired
 from the working tree; historical Go readers and validators remain so existing
 records retain their meaning. Dated reports in [docs/acceptance](docs/acceptance)
-describe individual attempts. The [Installer-Updater release-pair procedure](docs/acceptance/historical/installer-updater-release.md)
+describe individual attempts. The [Installer-Updater release-pair procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/historical/installer-updater-release.md)
 is also historical.
 
 `v3.1.0` / Release Sequence `83` has an

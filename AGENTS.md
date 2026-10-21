@@ -26,4 +26,4 @@ every guide by default.
 | Issue tracker: GitHub | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) | Before reading, creating, updating, or closing issues or PRDs. |
 | Triage labels | [docs/agents/triage-labels.md](docs/agents/triage-labels.md) | Before triaging issues or changing labels; use the default five-label vocabulary. |
 | Domain documentation | [docs/agents/domain.md](docs/agents/domain.md) | Before changing module behavior, describing domain decisions, or editing domain documentation; this repository uses a single-context layout. |
-| Current MVP live acceptance | [docs/acceptance/mvp-live-acceptance.md](docs/acceptance/mvp-live-acceptance.md) | Before planning, running, or assessing current MVP live qualification. |
+| Current MVP live acceptance | [docs/acceptance/http-subscription-live.md](docs/acceptance/http-subscription-live.md) | Before planning, running, or assessing current MVP live qualification. |

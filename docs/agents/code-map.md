@@ -11,8 +11,9 @@ behind these paths.
 `cmd/sbxr` selects the platform entry point and private runtime roles. Normal
 zero-argument execution reaches the numbered menu in the Proxy Installation
 terminal adapter. That menu calls `Review`/`Execute` for proxy actions and
-Software Lifecycle for `Check`/`Update`/`Recover`. The current clean-install-only
-production constructor refuses new Update; historical transaction recovery remains.
+Software Lifecycle for `Check`/`Recover`. Update is absent from the menu; the
+compatibility Interface refuses new Update while historical transaction recovery
+remains.
 
 | Task | Start here | Follow into / focused tests |
 |---|---|---|
@@ -21,9 +22,8 @@ production constructor refuses new Update; historical transaction recovery remai
 | Proxy actions and setup/removal orchestration | [proxyinstallation.go](../../internal/proxyinstallation/proxyinstallation.go) | [Proxy Installation map](../../internal/proxyinstallation/README.md); `go test ./internal/proxyinstallation` |
 | Ownership Record decoding, compatibility, or resource admission | [ownership.go](../../internal/proxyinstallation/ownership.go) | `proxyinstallation_test.go`, `software_update_test.go`, and adjacent feature tests |
 | Proxy status details | [details.go](../../internal/proxyinstallation/details.go) | Module tests plus terminal rendering tests |
-| Reviewed certificate replacement and fault repair | [repair.go](../../internal/proxyinstallation/repair.go), [host renewal](../../internal/proxyinstallation/adapter/host/renewal.go) | `repair_test.go`, `renewal_process_test.go`; [replacement procedure](../acceptance/mvp-live-acceptance.md#certificate-replacement-procedure) |
+| Reviewed certificate replacement and fault repair | [repair.go](../../internal/proxyinstallation/repair.go), [host renewal](../../internal/proxyinstallation/adapter/host/renewal.go) | `repair_test.go`, `renewal_process_test.go`; [replacement procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md#certificate-replacement-procedure) |
 | Certificate snapshot publication, mismatch recovery, and ordinary-start coordination | [activation.go](../../internal/proxyinstallation/activation.go), [certificate_state.go](../../internal/proxyinstallation/adapter/host/certificate_state.go), [runtime_start.go](../../internal/proxyinstallation/adapter/host/runtime_start.go) | Adjacent certificate-state/runtime tests; [isolated Linux checks and recovery plan](../acceptance/reports/certificate-start-coordination-repair-2026-09-19.md) |
-| One-time v3.1.75 snapshot maintenance handoff | [standalone helper](../../.github/scripts/sbxr-snapshot-recovery/main.go), [executable driver](../../.github/scripts/sbxr-snapshot-recovery/rehearse.py), [protected log-parent wrapper](../../.github/scripts/sbxr-snapshot-recovery/with-protected-log-parent.sh), [command supervisor](../../.github/scripts/sbxr-snapshot-recovery/protected_command_supervisor.py), [snapshot_recovery.go](../../internal/proxyinstallation/snapshot_recovery.go) | Tagged Linux executable rehearsal in `snapshot_recovery_linux_test.go`; adjacent [wrapper VM qualification](../../.github/scripts/sbxr-snapshot-recovery/with-protected-log-parent-test.sh) and [runbook comparison regression](../../.github/scripts/sbxr-snapshot-recovery/test_runbook.py); [exact VPS runbook](../acceptance/v3.1.75-snapshot-recovery-runbook.md) |
 | Volatile whole-host lock creation after reboot | [lock_provision.go](../../internal/proxyinstallation/lock_provision.go), [host lock provisioning](../../internal/proxyinstallation/adapter/host/lock_provision.go), [mutation lock primitive](../../internal/softwarelifecycle/mutation_lock.go) | Adjacent `lock_provision_test.go` and `mutation_lock_test.go`, plus private-role dispatch in `cmd/sbxr/run_test.go`; `go test ./internal/proxyinstallation/... ./internal/softwarelifecycle ./cmd/sbxr` |
 | Ubuntu filesystem, packages, systemd, locks, or processes | [host/host.go](../../internal/proxyinstallation/adapter/host/host.go), [mutation.go](../../internal/proxyinstallation/adapter/host/mutation.go) | Named host feature files and adjacent tests; `go test ./internal/proxyinstallation/adapter/host` |
 | Subscription firewall command and enablement-link ownership | [subscription_firewall.go](../../internal/proxyinstallation/adapter/host/subscription_firewall.go), [subscription_http.go](../../internal/proxyinstallation/adapter/host/subscription_http.go) | `subscription_firewall_test.go`; `go test ./internal/proxyinstallation/adapter/host` |
@@ -45,7 +45,7 @@ deadline failure, inspect the driver and operator wrapper.
 | Task | Implementation | Checks / procedure |
 |---|---|---|
 | Packaging, index, bootstrap installer, or tool dispatch | [cmd/sbxr-release/main.go](../../cmd/sbxr-release/main.go), [bootstrap.go](../../cmd/sbxr-release/bootstrap.go) | Adjacent `main_test.go` / `installer_test.go`; `go test ./cmd/sbxr-release` |
-| Qualification decisions and accepted wire formats | [Release stage map](../../cmd/sbxr-release/README.md), [qualification.go](../../cmd/sbxr-release/qualification.go), [scope](../../cmd/sbxr-release/qualification_scope.go), [recurring](../../cmd/sbxr-release/qualification_recurring.go), [MVP](../../cmd/sbxr-release/qualification_mvp.go) | Corresponding `qualification*_test.go`; [MVP acceptance](../acceptance/mvp-live-acceptance.md) describes `mvp-live-v1`, while historical scopes retain their interpretation |
+| Qualification decisions and accepted wire formats | [Release stage map](../../cmd/sbxr-release/README.md), [qualification.go](../../cmd/sbxr-release/qualification.go), [scope](../../cmd/sbxr-release/qualification_scope.go), [recurring](../../cmd/sbxr-release/qualification_recurring.go), [MVP](../../cmd/sbxr-release/qualification_mvp.go) | Corresponding `qualification*_test.go`; [HTTP acceptance](../acceptance/http-subscription-live.md) describes the current five journeys; historical scopes retain their interpretation |
 | Candidate delivery transport | [gateway.go](../../cmd/sbxr-release/gateway.go), [v3-qualification-transport.sh](../../.github/scripts/v3-qualification-transport.sh) | `gateway_test.go`, `release_transport_test.go` |
 | Authenticated release asset downloads | [download-release-asset.py](../../.github/scripts/download-release-asset.py), [recheck-qualified-release.sh](../../.github/scripts/recheck-qualified-release.sh) | `test_download_release_asset.py`, `release_asset_download_test.go`; requires `gh`, `python3`, `jq`, and `sha256sum` |
 | Native CI / pinned actions | [.github/workflows](../../.github/workflows), [script map](../../.github/scripts/README.md) | `release_workflow_test.go` |
@@ -54,20 +54,12 @@ deadline failure, inspect the driver and operator wrapper.
 | Collector request or result submission | [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | `release_collector_test.go` |
 | Real SSH fixture readiness, account isolation, or transport boundaries | [test_ssh_boundary.py](../../.github/scripts/test_ssh_boundary.py) | Adjacent `test_ssh_boundary_account.py` locks the caller account and proves success/failure preservation; root `v3_ssh_boundary_test.go` runs both on root Linux |
 | Packaged menu results, protected-footprint inventory, interruptions, cleanup, or downloads | [v3-packaged-live.sh](../../.github/scripts/v3-packaged-live.sh), [v3-menu-session.py](../../.github/scripts/v3-menu-session.py) | `release_packaged_driver_test.go`, including exact absence and broken-link checks |
-| Current MVP observation assembly and submission | [v3-mvp-evidence.py](../../.github/scripts/v3-mvp-evidence.py), [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | [MVP evidence handoff](../acceptance/mvp-live-acceptance.md#evidence-handoff), `test_mvp_evidence.py`, and `v3_mvp_evidence_test.go` |
-| Retained recurring upgrade scope and incremental observations | [qualification_mvp.go](../../cmd/sbxr-release/qualification_mvp.go), [mvp-observe.py](../../.github/scripts/mvp-observe.py) | `qualification_mvp_recurring_test.go`, `qualification_mvp_assembly_test.go`, `recurring_mvp_test.go`, `test_mvp_observe.py`; [retained recurring procedure](../acceptance/ordinary-recurring-live.md) |
+| Current MVP observation assembly and submission | [v3-mvp-evidence.py](../../.github/scripts/v3-mvp-evidence.py), [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | [HTTP evidence handoff](../acceptance/http-subscription-live.md#recording-the-five-journeys), `test_mvp_evidence.py`, and `v3_mvp_evidence_test.go` |
+| Retained recurring upgrade scope and incremental observations | [qualification_mvp.go](../../cmd/sbxr-release/qualification_mvp.go), [mvp-observe.py](../../.github/scripts/mvp-observe.py) | `qualification_mvp_recurring_test.go`, `qualification_mvp_assembly_test.go`, `recurring_mvp_test.go`, `test_mvp_observe.py`; [retained recurring procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md) |
 | Controlled update checkpoints and creation-mask compatibility | [mvp-update-interrupt.py](../../.github/scripts/mvp-update-interrupt.py), [mvp-protected-menu.sh](../../.github/scripts/mvp-protected-menu.sh), [update_transaction.go](../../internal/softwarelifecycle/update_transaction.go) | `update_umask_test.go`, `test_mvp_update_interrupt.py`, `test_mvp_released_umask.py`, `v3_update_interrupt_test.go`; [repair report](../acceptance/reports/ordinary-recurring-umask-repair-2026-09-25.md) |
 | Read-only MVP package/window observations | [mvp-inspect-window.py](../../.github/scripts/mvp-inspect-window.py), [documented SSH caller](../acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22) | Adjacent `test_mvp_inspect_window.py`, `test_mvp_recovery_window.py`, opt-in `test_mvp_inspect_window_linux.py` / `test_mvp_window_recovery_linux.py` and root `v3_mvp_window_test.go`; real pinned DEB/dpkg/SSH and diagnostic lifecycle fixtures in a marked disposable amd64 VM |
 | Temporary MVP log-parent prerequisite | [mvp-protected-menu.sh](../../.github/scripts/mvp-protected-menu.sh), [operator plan](../acceptance/mvp-protected-log-parent-2026-09-19.md) | Adjacent `test_mvp_protected_menu.py` and [isolated systemd/TLS test](../../internal/proxyinstallation/protected_log_parent_linux_test.go); uses the reviewed wrapper and [startup cancellation regression](../../.github/scripts/test_mvp_startup_cleanup.py) |
-| Retired V4 producer source | [V4 tree at commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator) | Historical readers/validators remain in `cmd/sbxr-release`; do not restore or run the producer for MVP work |
 | Current ordinary live procedure | [HTTP acceptance](../acceptance/http-subscription-live.md), [ADR-0028](../adr/0028-clean-install-only.md) | Five HTTP journeys, explicit empty incoming sources; retained recovery regressions |
-| Find a historical V4 scenario or its controls | [Retired Operator README](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/README.md) | [V4 scenario procedures](../acceptance/historical/v4-operator-procedures.md) |
-| Historical V4 evidence timing or assembly | [Retired assembly source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/assemble-evidence.py), [retired timing source](https://github.com/albertloky/SBXR/blob/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator/evidence-timing.py) | [Assembly guide](../acceptance/historical/evidence-assembly.md) |
-
-The retired operator producer grouped numbered entry scripts with
-`identity-*`, `link-*`, `managed-*`/`recorder-*`, and `test_*`/`rehearse-*`.
-Use the cited commit when interpreting a historical record. It is not part of
-the current MVP path.
 
 ## Choosing validation
 
@@ -108,9 +100,8 @@ cover architecture, dependencies, script integration, and workflow contracts;
 they are intentionally rooted here because they read repository-relative files.
 
 For current MVP qualification changes, start with the focused Go/Python tests
-and [MVP procedure](../acceptance/mvp-live-acceptance.md). Do not run the retired
-V4 rehearsal or `check-readiness.py` for an MVP candidate. To interpret a
-historical V4 record, use the cited retired source; do not restore the producer.
+and [HTTP procedure](../acceptance/http-subscription-live.md). Do not run the retired
+V4 rehearsal or `check-readiness.py` for an MVP candidate. Historical V4 records remain readable; retired producer source is available in Git history.
 Local fixtures and tests do not establish live qualification or Karing acceptance.
 
 ## Documentation and historical material
@@ -118,16 +109,12 @@ Local fixtures and tests do not establish live qualification or Karing acceptanc
 - [docs README](../README.md): documentation entry point and current/historical routing.
 - [README.md](../../README.md): product overview and navigation.
 - [CONTEXT.md](../../CONTEXT.md): the single domain glossary.
-- [HTTP acceptance](../acceptance/http-subscription-live.md) and [ADR-0028](../adr/0028-clean-install-only.md): the current five HTTP journeys with no incoming sources. [ADR-0025](../adr/0025-ordinary-recurring-live-acceptance.md) and [ordinary recurring acceptance](../acceptance/ordinary-recurring-live.md) retain their exact-source update/recovery meaning; [ADR-0023](../adr/0023-mvp-live-acceptance.md) retains the earlier five-journey HTTPS policy.
+- [HTTP acceptance](../acceptance/http-subscription-live.md) and [ADR-0028](../adr/0028-clean-install-only.md): the current five HTTP journeys with no incoming sources. [ADR-0025](../adr/0025-ordinary-recurring-live-acceptance.md) and [ordinary recurring acceptance](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md) retain their exact-source update/recovery meaning; [ADR-0023](../adr/0023-mvp-live-acceptance.md) retains the earlier five-journey HTTPS policy.
 - [acceptance README](../acceptance/README.md): current procedure and historical acceptance routing.
 - [research README](../research/README.md): investigation notes and their authority limits.
 - [ADR index](../adr/README.md): decisions grouped by applicable scope and era.
 - [Acceptance reports](../acceptance/reports/README.md): dated results, separate
   from current procedures. A report describes its named run, not current host state.
-- [Historical acceptance](../acceptance/historical/README.md): retired procedures.
-- [Installer-Updater release procedure](../acceptance/historical/installer-updater-release.md): historical Installer-Updater
-  release-pair procedure, not the current MVP procedure.
-- [Historical plans](../history/README.md): retained design and implementation plans.
 
 Local scratch and research files may contain unfinished user work. Inspect their
 Git status before reorganizing them; use tracked source and current procedures

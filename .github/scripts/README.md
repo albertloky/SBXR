@@ -6,8 +6,8 @@ empty incoming sources, described in
 [HTTP subscription acceptance](../../docs/acceptance/http-subscription-live.md).
 The producer retains `mvp-http-recurring-live-v1` and the historical HTTPS
 `mvp-live-v1` and `mvp-recurring-live-v1` policies, described in
-[ordinary recurring acceptance](../../docs/acceptance/ordinary-recurring-live.md)
-and [MVP live acceptance](../../docs/acceptance/mvp-live-acceptance.md); it records
+[ordinary recurring acceptance](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md)
+and [MVP live acceptance](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md); it records
 explicit human observations and does not run the historical V4 protocol.
 
 The approved [live89 recording correction](../../docs/adr/0029-live89-operator-recording-correction.md)
@@ -32,13 +32,12 @@ retains ordinary native, signing, attestation, failure and publication gates.
 | Window expectation proxy pin | `prepare-mvp-window.py`, `test_prepare_mvp_window.py`; derive `/usr/bin/sing-box` SHA-256 from the receipt-verified local DEB without changing host facts |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
-| Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
+| Ordinary source update interruption | `mvp-update-interrupt.py`, `test_mvp_update_interrupt.py`; [controlled interruption](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption) |
 | Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [startup cancellation regression](test_mvp_startup_cleanup.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md); use the driver's `--protected-wrapper` opt-in |
 | Candidate transport | `v3-qualification-transport.sh` |
 | Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh`; `release-main-review.py` binds committed candidate/main divergence to the security/evidence assessment retained by [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Qualified publication retry | `publication-recovery.py`, `test_publication_recovery.py`; authenticate an existing prepublication burn and its certified workflow invocation, preserving the full failed record before metadata-only recovery under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Authenticated release asset reads | `download-release-asset.py` |
-| One-time v3.1.75 maintenance (outside release dispatch) | [helper](sbxr-snapshot-recovery/main.go), [executable driver](sbxr-snapshot-recovery/rehearse.py), [protected log-parent wrapper](sbxr-snapshot-recovery/with-protected-log-parent.sh), [command supervisor](sbxr-snapshot-recovery/protected_command_supervisor.py), [wrapper VM qualification](sbxr-snapshot-recovery/with-protected-log-parent-test.sh), [runbook comparison regression](sbxr-snapshot-recovery/test_runbook.py), and [runbook](../../docs/acceptance/v3.1.75-snapshot-recovery-runbook.md) |
 
 `v3-packaged-live.sh` inventories the complete protected candidate footprint and
 proves its absence after public cleanup, including the owned mutation-lock boot
@@ -166,7 +165,7 @@ kernel child list, including an unowned list entry; signals, escaped processes,
 locks and reaping remain real. No extra runtime file is needed in staged bundles.
 
 For the current MVP's installed-candidate check, use the
-[documented SSH handoff](../../docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh).
+[documented SSH handoff](../../docs/acceptance/http-subscription-live.md#checking-the-installed-candidate-over-ssh).
 It streams this module and calls only `exact_candidate`; the current transport
 does not stage `/run/sbxr-qualification/v3-packaged-live.sh`. The existing four-file
 temporary-menu staging is unchanged. `release_candidate_handoff_test.go` covers
@@ -212,7 +211,7 @@ callers retain their behavior. It stops the real source at a successful durable
 checkpoint syscall and leaves public recovery and outside checks to the operator.
 Its separately staged controller imports the existing protected menu driver
 without writing bytecode into the four-file directory. Use the
-[current operator procedure](../../docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption).
+[historical source-update procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption).
 `test_mvp_update_interrupt.py FIXTURE` requires the marked root VM; build its
 synthetic native Go fixture from `testdata/update-interrupt-fixture`. It tests
 21 success/refusal/cancellation cases with real Linux tracing and cleanup,
@@ -267,11 +266,6 @@ The root Go wrapper builds the current fixture and accepts an optional
 `SBXR_MVP_RECOVERY_SOURCE` frozen diagnostic binary. The fixture is **not** the
 unchanged packaged source binary and cannot establish release/network trust,
 real subscription runtime, outside traffic or live qualification.
-
-`python3 .github/scripts/sbxr-snapshot-recovery/test_runbook.py` executes the
-runbook's actual listener-comparison program against preservation and refusal
-fixtures. Set `TMPDIR` to an absolute temporary directory under the current
-local acceptance run; each test removes its fixture directory on success or failure.
 
 The asset reader uses `gh api` and makes at most one fresh GET after a TCP read
 reset, the failure observed in the unsigned `v3.1.73` draft download. It discards

@@ -1,6 +1,6 @@
 # Software Lifecycle
 
-Software Lifecycle is one of SBXR's two product Modules. Its Owner-facing Interface remains exactly:
+Software Lifecycle is one of SBXR's two product Modules. Its Module Interface retains these methods for compatibility:
 
 ```go
 Status(context.Context) Result
@@ -9,7 +9,7 @@ Update(context.Context, ProgressReporter) Result
 Recover(context.Context, ProgressReporter) Result
 ```
 
-The Module owns installed-state proof, GitHub's qualified Latest release, Release Sequence ordering, the mutation lock, two-checkpoint update, rollback, forward completion, and recovery. The V3 numbered terminal menu calls Proxy Installation for proxy Actions and Software Lifecycle for Check/Update/Recover.
+The Module owns installed-state proof, GitHub's qualified Latest release, Release Sequence ordering, the mutation lock, two-checkpoint update, rollback, forward completion, and recovery. The V3 numbered terminal menu calls Proxy Installation for proxy Actions and Software Lifecycle for Check/Recover; it does not offer Update.
 
 Production construction uses `NewInstalledWithUpdateRuntime` in clean-install-only
 mode: Check does not offer Update and Update refuses before candidate preparation
@@ -31,8 +31,8 @@ only its product child the ordinary `022` mask. See `update_umask_test.go` and t
 The public GitHub Adapter admits exactly four release assets and keeps
 `github.com/sigstore/sigstore-go` plus `github.com/klauspost/compress` behind that
 boundary. Use the [code map](../../docs/agents/code-map.md) to locate lifecycle
-entry points and tests, and the [current operator procedure](../../docs/acceptance/mvp-live-acceptance.md)
-for live qualification. [The historical Installer-Updater release procedure](../../docs/acceptance/historical/installer-updater-release.md)
+entry points and tests, and the [current operator procedure](../../docs/acceptance/http-subscription-live.md)
+for live qualification. [The historical Installer-Updater release procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/historical/installer-updater-release.md)
 documents the historical Installer-Updater release-pair procedure.
 
 Native release verification accepts one or more equivalent proofs for the
@@ -54,8 +54,8 @@ refusal must be proved before recommending Latest.
 
 There is no background software updater. The historical transaction machinery,
 repair authority readers and exact removal-finisher restoration remain for their
-existing recovery meanings. Automatic root-start and lifecycle-completion legacy
-migration are disabled in production. Local tests do not qualify a live release.
+existing recovery meanings. Legacy migration writers and entrypoints are removed.
+Local tests do not qualify a live release.
 
 ## Retained subscription update contract (#355)
 
@@ -70,7 +70,7 @@ alongside the three existing source `Scenario:` references, so v3.1.81 can read
 them without changing its released bytes. New readers validate all eight
 references. Compatibility tests do not prove an actual packaged update.
 
-The existing menu includes `Check`, `Update`, and `Recover`. `ConfirmReview`
+Historical release menus included `Check`, `Update`, and `Recover`. `ConfirmReview`
 privately binds the displayed source/target or proved recovery direction; it adds
 no operation to the Interface. Empty input and `n` cancel. Changed release or
 recovery facts require a new review. Unproved recovery direction permits no effect.
@@ -117,16 +117,10 @@ ownership before transaction cleanup reopens renewal. Recovery observes an
 already completed restart. Diagnostic renewal evidence is never recovery authority
 and is not cleared by update.
 
-For HTTP-capable successors, the optional `AfterComplete` runtime callback runs
-only after journal cleanup and runtime-exclusion release, while the whole-host
-mutation lock remains held. It performs the mandatory legacy HTTPS-to-HTTP
-handoff and retains historical certificate cleanup authority. Failure keeps the
-committed release; the new root launch or journal-free Recover resumes forward.
-Prepared rollback never invokes it. Frozen v3.1.81 cannot invoke this callback:
-exit its completed old menu and launch the new `sudo sbxr` once. Candidate
-admission requires HTTP and, for TLS sources or retained cleanup, retirement
-capability markers in addition to the attested support contract. See
-[ADR-0026](../../docs/adr/0026-http-subscription.md).
+Historical HTTPS retirement and unfinished migration records remain readable for
+reviewed removal and recovery. The current product has no transport-conversion
+writer or lifecycle-completion migration callback. These readers do not add an
+incoming update or migration route.
 
 The first subscription release admits no incoming update from `v3.0.21` or any
 other release. Existing Owners must use reviewed Complete removal and its exact

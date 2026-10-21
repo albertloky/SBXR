@@ -60,7 +60,7 @@ was no candidate workflow, signed manifest, or Acceptance Record yet.
 
 The prepared next step was to obtain the requested Karing readiness observation,
 refresh stale readiness facts, and dispatch exactly one candidate using the
-[current MVP procedure](../mvp-live-acceptance.md). That attempt is now stopped;
+[current MVP procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md). That attempt is now stopped;
 do not resume it or dispatch another under the earlier single-candidate scope.
 Stable publication remains separate and has not occurred.
 

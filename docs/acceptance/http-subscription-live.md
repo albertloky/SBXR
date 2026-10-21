@@ -27,7 +27,7 @@ Use exactly these five journeys in order:
 
 1. `mvp-install`: prove owned absence, then clean packaged candidate install/setup
    and genuinely outside REALITY proxy traffic. Exercise lifecycle status and
-   Check/Update refusal without replacement. An already absent host needs no old
+   Check without replacement; Update is absent from the menu. An already absent host needs no old
    source setup or removal.
 2. `mvp-subscription`: confirm HTTP enablement and its interception/tampering
    disclosure. Prove outside authenticated HTTP on the emitted TCP 8443 link,
@@ -75,22 +75,26 @@ host cleanliness or a successful packaged live run.
 
 ## Retained safeguards and limits
 
-Apply the non-certificate prerequisites, operator/outside/Karing attendance,
-temporary qualification transport and protected-log-parent procedure, 30-minute technical scenarios, two-hour subscription journey,
-five-minute submission/validation, no-prefix-publication rule, stop/cleanup handling
-and actual safety/final cleanup from
-[ordinary recurring acceptance](ordinary-recurring-live.md). Qualification
-transport TLS, GitHub/asset TLS and software attestations remain separate.
-The pre-effect input correction below is the only exception to stopping on a
-recoverable UI input error; failed or incomplete required checks still stop.
+Use the exact verified package on a disposable Ubuntu Server 24.04 amd64 host,
+with a genuinely outside client and actual Karing. Before dispatch, confirm fresh
+host/package/SSH readiness, operator and client availability, and time for final
+cleanup. Review the existing [temporary log-parent procedure](mvp-protected-log-parent-2026-09-19.md)
+where applicable; it adds no journey or permission to change another host.
 
-Apply the non-certificate artifact, client, credential, disclosure and evidence
-handling requirements from [MVP acceptance](mvp-live-acceptance.md). Its old
-certificate-replacement procedure and trusted-subscription-TLS requirements
-apply to legacy HTTPS policies only. Do not run CA dry runs, replacement or
-renewal actions for a fresh HTTP candidate. Root-only isolated Linux/systemd
-fixtures and native CI remain required where applicable; local fixtures do not
-prove the VPS, outside route, real Karing's HTTP acceptance, or a live release.
+The technical scenario limit is 30 minutes, or two hours for subscription/Karing;
+validation and submission retain five minutes. Arrange attended response windows
+before dispatch using the policy below. Keep all work and cleanup inside the
+approved transport window. Failed or incomplete required checks stop the attempt;
+only the documented pre-effect Karing correction permits input correction.
+
+Use the packaged public menu for product effects. Keep credentials, links,
+client configuration and raw captures private; retain secret-safe observations
+with original timestamps. Preserve unrelated resources, the existing client
+connection/settings and SSH. Finish reviewed product removal and verify owned
+absence, outside rejection, client restoration, stopped clients and removal of
+temporary secrets, transport, trust and routing. A workflow conclusion alone does
+not prove cleanup. Qualification transport TLS and software attestations remain
+required. Fresh HTTP subscriptions need no CA dry run, replacement or renewal.
 
 After all required tests and actual host/client/secret cleanup pass, the exact
 unchanged candidate qualifies for stable publication under
@@ -109,6 +113,99 @@ Bearer-token protection prevents unauthenticated retrieval at the server.
 Plain HTTP still lets a network observer steal the link and proxy UUID or alter
 the downloaded configuration. No claim of secret containment on the network is
 made. Preserve protections for local files, logs and retained evidence.
+
+## Checking the installed candidate over SSH
+
+The manifest-v3 workflow stages its transport under
+`/root/sbxr-qualification-v3`. It does **not** stage
+`/run/sbxr-qualification/v3-packaged-live.sh`. Do not assume that historical
+helper location exists or add another host-side copy to work around its absence.
+
+Use the unchanged `exact_candidate` function from the reviewed source checkout.
+Before installation, confirm the local `.github/scripts/v3-packaged-live.sh`
+is present and passes `bash -n`. After the packaged installer succeeds, run the
+following from that checkout's repository root, before Start setup. Reuse the
+authenticated `acceptance_host` and `ssh_options` Bash array from the reviewed
+connection; the array must not contain `-n` or `StdinNull=yes`, because this call
+carries the module on standard input.
+
+<!-- mvp-exact-candidate-ssh -->
+```sh
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  "${ssh_options[@]}" "$acceptance_host" \
+  'bash -c "set -euo pipefail; source /dev/stdin; exact_candidate"' \
+  < .github/scripts/v3-packaged-live.sh
+```
+
+Require exit 0 before proceeding. The remote Bash sources the complete module
+without entering its standalone journey dispatcher, then runs only its read-only
+identity check. It reads the current collector request, its bound manifest, the
+Installed Record and executable at their existing paths; it neither stages a
+helper nor executes the product. No candidate identity is inherited from a
+previous SSH shell. Missing source/input, failed transport or an identity
+mismatch stops the handoff; retain the original failure rather than bypassing
+the check or continuing setup.
+
+This check binds the installation to the **already verified** candidate. It does
+not replace artifact/attestation review, complete `mvp-install`, or authorize a
+new attempt. It needs no log-parent permission window. The later public menu
+processes still use the applicable [log-parent plan](mvp-protected-log-parent-2026-09-19.md).
+
+## Recording the five journeys
+
+The existing JSON handoff remains supported. Prefer the small repository-owned
+recorder to avoid hand-editing timestamps. It does not drive the product, assert
+checks on its own, or accept caller-supplied times. It binds a private draft to
+the exact request bytes and refuses stale requests, duplicate checks, incomplete
+submission, expiry and overwritten evidence.
+
+From the reviewed checkout, with the authenticated `acceptance_host` and
+`ssh_options` array (no `-n`/`StdinNull=yes`), stream the recorder without staging
+another host helper:
+
+<!-- mvp-incremental-observer-ssh -->
+```sh
+mvp_observe() {
+  ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    "${ssh_options[@]}" "$acceptance_host" python3 - "$@" \
+    --request /root/sbxr-qualification-evidence/request.json \
+    --draft /root/mvp-observation-draft.json \
+    < .github/scripts/mvp-observe.py
+}
+mvp_observe start
+mvp_observe status
+```
+
+After **actually observing** one required outcome, record that check immediately:
+
+```sh
+# Example for mvp-install only, after the packaged installation was observed:
+mvp_observe observe --check packaged-install
+```
+
+Never loop over the checklist to mark everything observed. For human-only
+observations, wait for the actual observation/confirmation and record its real
+time. Arrange that availability before dispatch, not after the deadline.
+
+After all required outcomes and the journey's cleanup are actually observed:
+
+```sh
+mvp_observe finish --output /root/sbxr-qualification-evidence/observation.json
+```
+
+`finish` seals the draft before atomically publishing mode-0600 observation JSON.
+The collector still assembles and validates it with the real release validator
+before submission. Require its accepted scenario receipt; file creation is not
+acceptance. After acceptance, remove only this sealed draft before the next
+journey. If publication/transport is interrupted, inspect the sealed draft,
+output and collector receipt instead of rerunning `finish` or editing times.
+The final Acceptance Record requires all five HTTP journeys; no prefix can publish.
+
+Failed or incomplete journeys use the existing typed failure and safety-cleanup
+path. Never mark an unobserved check as observed. A disconnected product action
+has an uncertain outcome: inspect its state before further action. Do not retry
+mutations to replace the original failure. Keep the accepted scenario receipts;
+only the complete five-journey result can qualify the candidate.
 
 ## Future native settings comparison
 

@@ -15,7 +15,7 @@ The failed operator command expected
 workflow does not stage that helper. It installed SBXR successfully, then the
 missing-helper command returned 127 before setup began.
 
-The [current procedure](../mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
+The [current procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
 now gives one explicit command: stream the reviewed checkout's complete
 `v3-packaged-live.sh` over authenticated SSH, source it using `/dev/stdin` in a
 fresh Bash process, and invoke only its existing read-only `exact_candidate`

@@ -56,12 +56,10 @@ Fresh Enable subscription uses HTTP on fixed TCP 8443 with the existing bearer
 credential and artifact contract. Its explicit HTTP authority owns no certificate,
 Certbot dependency, renewal writer or TCP 80 firewall contribution. Legacy HTTPS
 records and retired-resource authority retain their historical repair/removal
-meaning. [ADR-0028](../../docs/adr/0028-clean-install-only.md) disables automatic
-root-start and lifecycle-completion migration in the current product. The private
-historical migration implementation in
-[subscription_transport.go](subscription_transport.go) remains covered by its
-existing regressions; its presence is not a supported incoming path. Reviewed
-Complete removal still owns exact retained-resource cleanup.
+meaning. [ADR-0028](../../docs/adr/0028-clean-install-only.md) limits the current
+product to clean installation. Transport-conversion writers and automatic migration
+entrypoints are removed. Readers still recognize existing legacy and unfinished
+transport authority so reviewed Complete removal can clean only its owned resources.
 
 Subscription enablement and recorded resource removal prove the canonical main
 firewall file, absence of foreign fragments and drop-ins, and the effective

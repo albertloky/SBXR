@@ -9,7 +9,7 @@ Keep SBXR-owned files inside this repository's workspace, not in `~/.codex`.
 | Local test-run outputs, logs, captures, downloads and handoffs | `.scratch/acceptance/<run>/` |
 | Readable acceptance reports | `docs/acceptance/reports/`, indexed in its README, with links to the local run directory when needed |
 | Current and fixed-path acceptance procedures | `docs/acceptance/`; check workflow and test callers before moving them |
-| Historical procedures, research and plans | `docs/acceptance/historical/`, `docs/research/`, and `docs/history/plans/`; keep their named scope explicit |
+| Current dependency research | `docs/research/`; retired procedures and plans remain in Git history |
 | Project backups and Git bundles | `.scratch/archives/` |
 | Unadopted local drafts retained during cleanup | `.scratch/archives/<cleanup>/local-drafts/`; preserve originals, do not promote them to policy |
 

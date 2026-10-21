@@ -35,7 +35,7 @@ and reused evidence rather than claim a fresh five-journey live pass.
 
 ## Implementation boundary
 
-The ordinary [MVP procedure](mvp-live-acceptance.md) still has no retroactive
+The ordinary [MVP procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md) still has no retroactive
 timed-pass path. [ADR-0017](../adr/0017-one-release-owner-exception.md)
 is restricted to v3.1.0/83 and is not reusable. The current gate requires a
 successful candidate workflow and a valid exact-identity Acceptance Record.

@@ -8,7 +8,7 @@ SBXR is a single-owner proxy product for one Ubuntu Server. Software Lifecycle i
 The one person who exclusively controls one SBXR installation.
 
 ### Software Lifecycle
-The Module that owns installed-software status, qualified stable release discovery and historical update transaction rollback, forward completion, and recovery. The current product refuses new Update operations.
+The Module that owns installed-software status, qualified stable release discovery and historical update transaction rollback, forward completion, and recovery. The current product has no Update menu action and refuses new Update operations.
 
 ### Proxy Installation
 The review-first V3 journey that adds and manages SBXR proxy capability after Software Lifecycle has installed the executable and safely completes removal of the whole installation.
@@ -68,7 +68,7 @@ A server-side secret that is never disclosed through a Client Configuration, sta
 The root-owned durable authority that proves which exact resources V3 created and therefore may remove, and which unfinished proxy or subscription change direction is legal.
 
 ### Retired HTTPS Authority
-The exact historical certificate and quarantined renewal-resource cleanup authority retained after HTTP migration. It authorizes reviewed Complete removal, not serving, renewal or CA operations. Its resource creators remain recorded; the unfinished transport-migration direction is separate and disappears on completion.
+The exact historical certificate and quarantined renewal-resource cleanup authority retained after HTTP migration. It authorizes reviewed Complete removal, not serving, renewal or CA operations. Its resource creators remain recorded; unfinished historical transport-migration authority remains readable for removal, without a conversion writer.
 
 ### Creating Release Identity
 The Release Identity that created an installation or an owned resource, retained as provenance across compatible software updates.

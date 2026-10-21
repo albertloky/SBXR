@@ -28,11 +28,9 @@ source. The historical repair scope's exact baseline is unchanged. See
 
 The current producer is the ordinary collector described in
 [HTTP subscription acceptance](../../docs/acceptance/http-subscription-live.md).
-The HTTPS policies retain their meaning in
-[ordinary recurring acceptance](../../docs/acceptance/ordinary-recurring-live.md),
-with the retained [five-journey procedure](../../docs/acceptance/mvp-live-acceptance.md).
-Historical V4 producer code is retired; its records remain readable through the
-current validators and the source can be retrieved from commit `0859e96`.
+Historical HTTPS, recurring and V4 records remain readable through the existing
+validators. Retired procedures and producer source remain in Git history; they
+add no source-update or certificate journeys to the current HTTP scope.
 
 ## Public release verification
 

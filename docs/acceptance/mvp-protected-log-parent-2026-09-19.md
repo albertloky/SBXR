@@ -1,7 +1,7 @@
 # Temporary log-parent windows for MVP — 2026-09-19
 
 This is the bounded operator plan for the existing `/var/log` protected-parent
-prerequisite. It adds no journey to [MVP live acceptance](mvp-live-acceptance.md)
+prerequisite. It adds no journey to [MVP live acceptance](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md)
 and changes no product trust rule, package, service unit, timer or tmpfiles rule.
 The September 19 maintenance restored the original root:syslog 0775 mode. Its
 retained VPS observations are historical; this document does not establish a
@@ -235,7 +235,7 @@ Do not use `running` for this state. After Recover succeeds, return to `running`
 which requires no update transaction material and keeps the one-link rule.
 
 Keep the same independently reviewed five-field interruption expectation from
-[ordinary recurring acceptance](ordinary-recurring-live.md#controlled-update-interruption)
+[ordinary recurring acceptance](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md#controlled-update-interruption)
 as `recovery_expectation_file`. Add `qualification_manifest_sha256` to the normal
 window expectation from the already verified signed manifest. Never derive
 expected source/candidate digests from transaction staging. The recovery observer
@@ -302,7 +302,7 @@ not the historical v3.1.75 maintenance receipt:
 The launcher itself pins the wrapper hash; the wrapper pins its supervisor.
 Neither establishes the installed candidate identity. Complete the normal
 packaged candidate/attestation checks independently before any menu action.
-Use the [current streamed SSH identity check](mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
+Use the [current streamed SSH identity check](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md#checking-the-installed-candidate-over-ssh)
 after installation; it needs no additional staged file or permission window.
 
 For example, the reviewed replacement remains one menu-driver call:

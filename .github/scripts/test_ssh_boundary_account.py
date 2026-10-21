@@ -67,13 +67,11 @@ class LockedAccountTests(unittest.TestCase):
                 shutil.copyfile(SOURCE / filename, scripts / filename)
             docs = root / "checkout/docs/acceptance"
             docs.mkdir(parents=True)
-            shutil.copyfile(SOURCE.parents[1] / "docs/acceptance/ordinary-recurring-live.md",
-                            docs / "ordinary-recurring-live.md")
-            target = docs / "mvp-live-acceptance.md"
+            target = docs / "http-subscription-live.md"
             if fail_after_ready:
                 target.write_text("Deliberately missing the handoff example.\n")
             else:
-                shutil.copyfile(SOURCE.parents[1] / "docs/acceptance/mvp-live-acceptance.md", target)
+                shutil.copyfile(SOURCE.parents[1] / "docs/acceptance/http-subscription-live.md", target)
             command = ["unshare", "--mount", "--pid", "--fork", "--mount-proc",
                        "--kill-child=KILL", sys.executable, str(Path(__file__).resolve()),
                        "--locked-caller", str(root)]

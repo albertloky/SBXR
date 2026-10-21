@@ -5,7 +5,7 @@
 Implemented the Owner-approved **five ordinary journeys plus three packaged
 upgrade/recovery checks**, initially scoped to v3.1.81 to the next release.
 See [ADR-0025](../../adr/0025-ordinary-recurring-live-acceptance.md) and the
-[operator procedure](../ordinary-recurring-live.md).
+[operator procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md).
 
 This is local implementation/regression evidence on macOS, based on main
 `9e4c71f3a04ad955e51e5162572404f0e4f7d629`, with the changes in the working tree.

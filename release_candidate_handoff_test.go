@@ -98,7 +98,7 @@ exact_candidate manifest request installed sbxr`, "stream-check", dir)
 }
 
 func TestMVPCandidateHandoffDocumentsStreamedSource(t *testing.T) {
-	procedure, err := os.ReadFile("docs/acceptance/mvp-live-acceptance.md")
+	procedure, err := os.ReadFile("docs/acceptance/http-subscription-live.md")
 	if err != nil {
 		t.Fatal(err)
 	}

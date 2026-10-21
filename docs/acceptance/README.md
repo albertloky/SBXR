@@ -1,86 +1,36 @@
 # Acceptance documentation
 
-Fresh HTTP subscription candidates follow [HTTP live qualification](http-subscription-live.md)
-under [ADR-0028](../adr/0028-clean-install-only.md), with HTTP behavior from
-[ADR-0026](../adr/0026-http-subscription.md). Historical HTTPS evidence
-retains its policy and cannot qualify changed HTTP candidate bytes.
-
-[Qualified publication and retry](../adr/0032-qualified-publication-retry.md)
-permits stable publication after successful exact-candidate tests and cleanup,
-starting automatically when the official main-branch qualification completes
-successfully, without a second human publication approval. Main divergence still
-requires exact review. A publishing failure preserves that qualification for
-transparent retry; authentication and exact bytes are rechecked.
-The narrow legacy prepublication-failure recovery retains the original burn/audit.
-
-## Recorded release state
-
-[v3.1.81 / 159 stable publication — 2026-09-25](reports/v3.1.81-stable-publication-2026-09-25.md)
-records successful immutable Latest publication. Read it with
-[qualification — 2026-09-24](reports/v3.1.81-exception-qualification-2026-09-24.md)
-and [ADR-0024](../adr/0024-r24-late-confirmation-supplement.md): prior live evidence
-was reused under the exact one-target exception, not replaced by a fresh live run.
-Refresh remote state before acting; this index is not a readiness receipt.
-
 ## Current procedure
 
-[HTTP live qualification](http-subscription-live.md) is the current procedure:
-`subscription-clean-install-only`, empty incoming sources and `mvp-http-live-v1`.
-Retain install, subscription/Karing, credential rotation, serving restart and
-removal. No source setup or subscription certificate issuance is needed.
+[HTTP live qualification](http-subscription-live.md) defines the five current
+journeys: install, subscription/Karing, credentials, serving restart and removal.
+Use `subscription-clean-install-only`, empty incoming sources and `mvp-http-live-v1`
+under [ADR-0028](../adr/0028-clean-install-only.md). No source upgrade or subscription
+certificate issuance is required. Preparation and local tests do not prove a live pass.
 
-[The live89 operator-recording correction](../adr/0029-live89-operator-recording-correction.md)
-is restricted to fresh v3.1.90/168. It reuses the accepted five HTTP journeys with
-unchanged product source and executable payloads, preserves the original failed
-workflow/burn and null cleanup callback, and requires fresh automated qualification.
-Its historical separate approval requirement is refined by ADR-0032 for current
-publication. It does not schedule another live attempt or
-change the ordinary procedure for other candidates.
+The procedure includes the exact-candidate SSH handoff and incremental observation
+recorder. The [temporary log-parent procedure](mvp-protected-log-parent-2026-09-19.md)
+applies only to the existing host shape with that prerequisite and requires fresh
+host evidence. It adds no journey or general host authorization.
 
-[Ordinary recurring live acceptance](ordinary-recurring-live.md) and
-[MVP live acceptance](mvp-live-acceptance.md) retain the historical recurring and
-HTTPS repair policies. Their source and certificate requirements do not expand
-the current scope. Approval of scope is not a live pass or host authorization.
+[ADR-0032](../adr/0032-qualified-publication-retry.md) permits publication after
+successful exact-candidate qualification and cleanup, without a second publication
+approval. Main divergence still needs exact review; publication rechecks authentication
+and unchanged bytes. Failed publication preserves qualification for transparent retry.
 
-[Temporary MVP log-parent windows](mvp-protected-log-parent-2026-09-19.md)
-records the bounded operator plan for the existing protected-parent prerequisite
-on the retained Ubuntu host shape. It requires fresh host evidence and review,
-adds no MVP journey, and does not establish current readiness or acceptance.
+## Dated evidence and historical contracts
 
-## Reports and bounded maintenance
+The [report index](reports/README.md) records release attempts and investigations.
+Its latest recorded stable publication is [v3.1.81 / 159](reports/v3.1.81-stable-publication-2026-09-25.md),
+using the bounded [ADR-0024 exception](../adr/0024-r24-late-confirmation-supplement.md).
+Refresh remote state before release work; dated reports do not establish present readiness.
 
-Use the [report index](reports/README.md) for release attempts, preflights,
-repair results and investigations. Reports keep their original dates, scope
-and limitations; a preparation report is not authorization to rerun its plan.
+Historical policies and one-target exceptions keep their meanings in the
+[ADR index](../adr/README.md) and existing Go readers. Retired V4, HTTPS, recurring,
+Installer-Updater and one-time maintenance procedures remain in Git history.
+They add no requirements to the current five journeys.
 
-[GitHub CI review — 2026-09-24](reports/github-ci-review-2026-09-24.md) distinguishes
-automated test results from live-qualification failures.
-[Approved late-confirmation exception](late-confirmation-exception-2026-09-24.md)
-records the bounded Owner decision, archival validator and exact v3.1.81/159
-release exception. The ordinary live-result gate
-is unchanged.
-
-[Certificate-state and startup repairs — 2026-09-19](reports/certificate-start-coordination-repair-2026-09-19.md)
-records local regression and isolated systemd validation, plus the
-[maintenance handoff](v3.1.75-snapshot-recovery-runbook.md) for the retained
-generation mismatch. The report distinguishes exact original-executable
-rehearsals, source-level coverage and live observations. Its current status and
-remaining gates are recorded there; the handoff adds no MVP journey.
-
-## Historical and fixed-path material
-
-The [historical index](historical/README.md) routes to the retired V4 procedures,
-evidence guides and Installer-Updater release-pair procedure. Do not run them as
-the current MVP checklist. Historical readers remain in Go; the producer source
-is retained at [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator).
-
-The following paths deliberately remain here rather than being moved for tidiness:
-
-| File | Why the path remains |
-|---|---|
-| [installer-updater-vps.md](installer-updater-vps.md) | Historical checklist whose bytes/path are consumed by release workflows |
-| [v3-packaged-live.md](v3-packaged-live.md) | Versioned historical contracts and workflow checklist digest input |
-| [Source-upgrade investigation](344-packaged-source-upgrade-investigation.md) | Linked by the unchanged packaged checklist; historical negative evidence |
-| [Snapshot recovery runbook](v3.1.75-snapshot-recovery-runbook.md) | Exact one-time maintenance procedure exercised by a regression test |
-| [Retained MVP procedure](mvp-live-acceptance.md), [log-parent plan](mvp-protected-log-parent-2026-09-19.md) | Historical HTTPS procedure and executable handoffs consumed by tests |
-| [Late-confirmation decision](late-confirmation-exception-2026-09-24.md) | Exact exception context linked by ADR-0024 |
+The two versioned checklist paths remain because workflows bind their exact bytes:
+[installer-updater-vps.md](installer-updater-vps.md) and
+[v3-packaged-live.md](v3-packaged-live.md). Historical checklist links resolve to
+the preserved revision; these files do not replace the current HTTP procedure.

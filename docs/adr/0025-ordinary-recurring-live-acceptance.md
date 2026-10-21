@@ -78,7 +78,7 @@ and five journey references. Stable publication still reproduces the complete
 record from validated evidence. Reader compatibility is not packaged upgrade
 proof, and does not relax the source's runtime admission rules.
 
-See the [ordinary recurring procedure](../acceptance/ordinary-recurring-live.md).
+See the [ordinary recurring procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md).
 Implementation/tests do not establish current host readiness, a live pass, or
 permission to consume a CA budget. The interruption mechanism must be rehearsed
 against the actual execution boundary before a new release attempt, not tried

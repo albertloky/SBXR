@@ -23,7 +23,7 @@ point and updates the current procedure without weakening its replacement check.
   ownership schema, new transaction, qualification gate, evidence format, or
   acceptance checklist was introduced.
 - The terminal and staged menu driver both recognize the new action and exact
-  confirmation prompt. The current [MVP procedure](../mvp-live-acceptance.md#certificate-replacement-procedure)
+  confirmation prompt. The current [MVP procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md#certificate-replacement-procedure)
   uses it instead of treating a successful ordinary renewal invocation as proof
   of replacement.
 

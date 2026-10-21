@@ -4,10 +4,10 @@ Implemented on `main`, based on `cf2e89aae5cfa56ae316505d24f16d50b8a25069`.
 The initial local-only phase below is repair validation, not release acceptance.
 During that phase the VPS was not contacted or changed, no CA certificate was
 requested, and no candidate or release workflow was dispatched. The later
-Owner-authorized continuation is recorded in the next section. The current [MVP procedure](../mvp-live-acceptance.md)
+Owner-authorized continuation is recorded in the next section. The current [MVP procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md)
 and its five journeys are unchanged. Existing untracked reports were preserved.
 The follow-up handoff work is recorded below and in
-[the exact VPS runbook](../v3.1.75-snapshot-recovery-runbook.md).
+[the exact VPS runbook](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/v3.1.75-snapshot-recovery-runbook.md).
 
 [Run artifacts](../../../.scratch/acceptance/c19/) contain the before/after logs,
 source overlays used to reproduce the original defects, VM observations, and
@@ -212,7 +212,7 @@ DNS listeners; every other preservation comparison had passed. This was an
 overly strict runbook assertion. The corrected comparison permits only that
 PID-1 descriptor renumbering on preserved port-22 rows after an identical SSH
 service fingerprint. The adjacent
-[runbook regression](../../../.github/scripts/sbxr-snapshot-recovery/test_runbook.py)
+[runbook regression](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/.github/scripts/sbxr-snapshot-recovery/test_runbook.py)
 executes the real documented Python program: the original predicate fails the
 captured case, the corrected predicate passes, and changed processes, endpoints,
 queues, SSH descriptors, non-SSH descriptors, unit fingerprints, and extra or
@@ -361,7 +361,7 @@ synthetic installed records are never deployment artifacts.
 ## One-time executable recovery handoff — local follow-up
 
 The standalone maintenance helper is implemented under
-[`.github/scripts/sbxr-snapshot-recovery`](../../../.github/scripts/sbxr-snapshot-recovery/main.go).
+[`.github/scripts/sbxr-snapshot-recovery`](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/.github/scripts/sbxr-snapshot-recovery/main.go).
 It is build-tag isolated from the installed product and pins the retained verified
 v3.1.75 amd64 executable. A canonical protected plan binds the Installed Record,
 complete Ownership Record, exact source snapshot and exact target hash. The
@@ -476,7 +476,7 @@ Its disk, temporary fixtures, test executable, duplicate input assets and
 ephemeral keys were removed. Useful logs and the blocked private handoff remain;
 see the [local run notes](../../../.scratch/acceptance/c19h/README.md).
 
-The [future VPS runbook](../v3.1.75-snapshot-recovery-runbook.md) contains fresh
+The [future VPS runbook](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/v3.1.75-snapshot-recovery-runbook.md) contains fresh
 read-only preflight checks, pinned identities, protected backups, exact invocation,
 interruption recovery, postchecks, original-menu Complete removal and final
 preservation/cleanup checks. Its operational objective is removal without first

@@ -106,7 +106,7 @@ def clean_results(base):
 def recorder_handoff(base, source):
     """Replay the current documented streamed recorder call, not a mock SSH."""
     examples = re.findall(r"<!-- mvp-incremental-observer-ssh -->\n```sh\n(.*?)\n```",
-                          (source / 'ordinary-recurring-live.md').read_text(), re.DOTALL)
+                          (source / 'http-subscription-live.md').read_text(), re.DOTALL)
     if len(examples) != 1:
         raise Refused('recorder-handoff-example')
     repository = source / 'recorder-checkout'
@@ -183,7 +183,7 @@ def candidate_handoff(base, source):
     """Execute the documented command with real SSH and unchanged helper bytes."""
     examples = re.findall(
         r"<!-- mvp-exact-candidate-ssh -->\n```sh\n(.*?)\n```",
-        (source / "mvp-live-acceptance.md").read_text(), re.DOTALL)
+        (source / "http-subscription-live.md").read_text(), re.DOTALL)
     if len(examples) != 1:
         raise Refused("candidate-handoff-example")
     repository = source / "operator-checkout"
@@ -565,10 +565,8 @@ def outer():
         for filename in ("v3-packaged-live.sh", "v3-menu-session.py",
                          "v3-recurring-evidence.sh", "mvp-observe.py"):
             shutil.copyfile(source_dir / filename, copied / filename)
-        shutil.copyfile(source_dir.parents[1] / "docs/acceptance/mvp-live-acceptance.md",
-                        copied / "mvp-live-acceptance.md")
-        shutil.copyfile(source_dir.parents[1] / "docs/acceptance/ordinary-recurring-live.md",
-                        copied / "ordinary-recurring-live.md")
+        shutil.copyfile(source_dir.parents[1] / "docs/acceptance/http-subscription-live.md",
+                        copied / "http-subscription-live.md")
         command = ["unshare", "--mount", "--pid", "--fork", "--mount-proc",
                    "--kill-child=KILL", sys.executable, str(script), "--inside", name]
         parent_pid = os.getpid()

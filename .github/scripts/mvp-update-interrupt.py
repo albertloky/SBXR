@@ -4,7 +4,7 @@
 Linux/root operator control, not an updater or an acceptance recorder. The
 expected hashes come from independently verified source/candidate material.
 Never writes product files, changes syscall results, or repairs a failed run.
-See docs/acceptance/ordinary-recurring-live.md before use.
+Historical procedure: https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md
 """
 
 import argparse
