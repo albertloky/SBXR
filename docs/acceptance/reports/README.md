@@ -101,6 +101,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Repairs, readiness and investigations
 
+- [Mac executor EPERM: sanitized support diagnostic — 2026-10-18](mac-executor-eperm-2026-10-18.md)
+  — historical process-spawn and loopback failures; cause unresolved, not live qualification.
+
 - [Ordinary recurring startup-cancellation cleanup repair — 2026-09-25](ordinary-recurring-cleanup-repair-2026-09-25.md)
 
 - [Ordinary recurring mask repair; rehearsal stopped on startup cleanup — 2026-09-25](ordinary-recurring-umask-repair-2026-09-25.md)
