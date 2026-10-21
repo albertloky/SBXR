@@ -203,8 +203,6 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	for _, required := range []string{
 		"--draft=false --prerelease --latest=false",
 		"post-sign-qualification-failure",
-		"defect-issue.json",
-		`{is_pull_request:has("pull_request"),state,url:.html_url}`,
 		"Publish the rechecked burned releases as failed prereleases",
 		"fully recorded unsigned drafts",
 		`stage:"candidate-failure-finalization"`,

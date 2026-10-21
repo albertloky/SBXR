@@ -30,7 +30,8 @@ Historical policies and one-target exceptions keep their meanings in the
 Installer-Updater and one-time maintenance procedures remain in Git history.
 They add no requirements to the current five journeys.
 
-The two versioned checklist paths remain because workflows bind their exact bytes:
-[installer-updater-vps.md](installer-updater-vps.md) and
-[v3-packaged-live.md](v3-packaged-live.md). Historical checklist links resolve to
-the preserved revision; these files do not replace the current HTTP procedure.
+The current [V3 checklist](v3-packaged-live.md) stays at its fixed path because
+release workflows bind its exact bytes. Stable replay reads the
+[historical Installer-Updater checklist](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/installer-updater-vps.md)
+from the original candidate Git revision. These checklists do not replace the
+current HTTP procedure.

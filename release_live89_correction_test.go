@@ -189,11 +189,11 @@ func TestLive89CorrectionSkipsOnlyFreshKaringMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, script, found := strings.Cut(string(data), "            if ! jq -e '.live89_correction_review != null' <<<\"$V3_ATTEMPT\" >/dev/null; then\n")
+	_, script, found := strings.Cut(string(data), "          if ! jq -e '.live89_correction_review != null' <<<\"$V3_ATTEMPT\" >/dev/null; then\n")
 	if !found {
 		t.Fatal("fresh Karing check guard missing")
 	}
-	script, _, found = strings.Cut(script, "            baseline=")
+	script, _, found = strings.Cut(script, "          baseline=")
 	if !found {
 		t.Fatal("Karing metadata boundary missing")
 	}

@@ -1,7 +1,6 @@
 package architecture_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,58 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestQualificationGatewayReadinessIsBoundedAndObservable(t *testing.T) {
-	script, err := filepath.Abs(".github/scripts/qualification-gateway-readiness.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range []struct {
-		name, child, curl, timeout, want string
-		wantSuccess                      bool
-	}{
-		{name: "delayed healthy gateway", child: "sleep 10", curl: "sleep .2\nexit 0", timeout: "5", wantSuccess: true},
-		{name: "exited gateway", child: "exit 23", curl: "while test \"$#\" -gt 0; do if test \"$1\" = --max-time; then shift; sleep \"$1\"; exit 1; fi; shift; done\nexit 1", timeout: "30", want: "qualification gateway exited before readiness\nlistener-fact"},
-		{name: "live gateway timeout", child: "sleep 10", curl: "exit 1", timeout: "1", want: "qualification gateway readiness timed out\nlistener-fact"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			bin := filepath.Join(directory, "bin")
-			if err := os.Mkdir(bin, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(bin, "curl"), []byte("#!/bin/sh\n"+test.curl+"\n"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(bin, "ss"), []byte("#!/bin/sh\nprintf 'listener-fact\\n'\n"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			log := filepath.Join(directory, "gateway.log")
-			pidFile := filepath.Join(directory, "gateway.pid")
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			command := exec.CommandContext(ctx, "bash", script, "https://gateway.test/ready", log, pidFile, test.timeout, "sh", "-c", test.child)
-			command.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
-			output, runErr := command.CombinedOutput()
-			if ctx.Err() != nil {
-				t.Fatalf("readiness exceeded its test deadline: %v\n%s", ctx.Err(), output)
-			}
-			if pid, readErr := os.ReadFile(pidFile); readErr == nil {
-				if value, parseErr := strconv.Atoi(strings.TrimSpace(string(pid))); parseErr == nil {
-					_ = exec.Command("kill", strconv.Itoa(value)).Run()
-				}
-			}
-			if (runErr == nil) != test.wantSuccess {
-				t.Fatalf("readiness error = %v, output = %s", runErr, output)
-			}
-			if !strings.Contains(string(output), test.want) {
-				t.Fatalf("readiness output = %q, want %q", output, test.want)
-			}
-		})
-	}
-}
 
 func TestQualificationRoutingInspectionFailsClosed(t *testing.T) {
 	script, err := filepath.Abs(".github/scripts/v3-qualification-transport.sh")

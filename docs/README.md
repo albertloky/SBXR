@@ -57,8 +57,9 @@ For low-noise implementation searches, begin in `cmd/`, `internal/`, or
 `rg` for the working tree; avoid unrestricted searches through `.scratch/`.
 Search reports and historical material explicitly when that is the task.
 
-The two versioned checklist files remain at the acceptance root because release
-workflows bind their paths and bytes. Retired procedures and plans remain in Git
+The current V3 checklist remains at the acceptance root because release
+workflows bind its path and bytes. Stable replay reads a historical checklist
+from the exact candidate Git revision. Retired procedures and plans remain in Git
 history. A file's location or an old `accepted` header
 does not broaden its scope. Follow current task guidance and the applicable
 ADR; a historical report cannot add requirements or certify current state.

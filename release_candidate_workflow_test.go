@@ -60,8 +60,6 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 		{"declaration-scope", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"later-failure", accepted, "fetch source tags", "completed", "accepted", 0, 37},
 		{"diagnostic-write-failure", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
-		{"normal", "", "", "not started", "missing", 0, 0},
-		{"rescue", "", "", "not started", "missing", 0, 0},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -91,7 +89,7 @@ exit "$VERIFIER_STATUS"
 					t.Fatal(err)
 				}
 			}
-			attempt, mode := declaration, "v3"
+			attempt := declaration
 			switch fixture.name {
 			case "clean-install-only":
 				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-repair", "subscription-clean-install-only")
@@ -101,8 +99,6 @@ exit "$VERIFIER_STATUS"
 				attempt += " "
 			case "declaration-scope":
 				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-repair", "unknown")
-			case "normal", "rescue":
-				mode = fixture.name
 			}
 			// Success must reach the next operation. The later-failure case
 			// runs the full step, stopping at the external git subprocess.
@@ -113,7 +109,7 @@ exit "$VERIFIER_STATUS"
 			command := exec.CommandContext(t.Context(), "bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry)
 			command.Dir = directory
 			command.Env = []string{
-				"PATH=" + directory + ":" + os.Getenv("PATH"), "MODE=" + mode,
+				"PATH=" + directory + ":" + os.Getenv("PATH"),
 				"V3_CHECKLIST=unused", "V3_ATTEMPT=" + attempt, "GH_TOKEN=" + token,
 				"SIGNED_URL=https://release-assets.githubusercontent.com/fixture?" + signedQuery,
 				"RESULT=" + fixture.result, "FIXTURE=" + fixture.name,
@@ -225,14 +221,6 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 	workflow := string(body)
 	for _, required := range []string{
 		"workflow_dispatch:",
-		"type: choice",
-		"- normal",
-		"- rescue",
-		"failed_normal_run_id:",
-		"defect_issue_url:",
-		`gh run download "$FAILED_RUN" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest`,
-		`gh attestation verify failed-normal-boundary/qualification-manifest.json`,
-		`.mode == "normal"`,
 		"group: installer-updater-release",
 		"cancel-in-progress: false",
 		"github.ref == 'refs/heads/main'",
@@ -243,12 +231,10 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"candidate-preflight-decision.json",
 		`.facts_sha256 == $facts_sha256`,
 		`select(.type == "build-release")`,
-		`select(.type == "use-source-release")`,
 		"prepare-burn-tag.sh",
 		"git push --atomic origin",
 		"releases/latest",
 		"gh attestation verify",
-		`stage:"acceptance-vps-result"`,
 		"ubuntu-24.04",
 		"ubuntu-24.04-arm",
 		"go run ./cmd/sbxr-release verify-package",
@@ -308,30 +294,6 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 	}
 }
 
-func TestCandidateNativelyVerifiesTheMenuForEachMode(t *testing.T) {
-	body, err := os.ReadFile(".github/workflows/candidate.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	build := string(body)
-	build = build[strings.Index(build, "  build:"):strings.Index(build, "  drafts:")]
-	const verification = `          case "$MODE" in
-            v3)
-              grep -F 'SBXR V3' menu.transcript
-              grep -F 'Proxy status: Not set up' menu.transcript
-              grep -F 'Code: PROXY-INSTALLATION-STATUS-NOT-SET-UP' menu.transcript
-              grep -F 'Start setup' menu.transcript
-              ;;
-            normal|rescue)
-              grep -F 'Recovery required' menu.transcript
-              grep -F 'Start recovery' menu.transcript
-              ;;
-          esac`
-	if !strings.Contains(build, "MODE: ${{ inputs.mode }}") || !strings.Contains(build, verification) {
-		t.Fatal("candidate native verification is not mode-aware")
-	}
-}
-
 func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservations(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
@@ -350,8 +312,7 @@ func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservatio
 		`python3 "$GITHUB_WORKSPACE/.github/scripts/download-release-asset.py" "$repository" "$id" "downloaded/$tag/$name"`,
 		`stage:"candidate-draft-verification"`,
 		`go run ./cmd/sbxr-release qualification < candidate-draft-verification-facts.json > candidate-draft-verification-decision.json`,
-		`jq -c '.verified_releases' candidate-draft-verification-decision.json > verified-drafts.json`,
-		`jq -cnS --argjson source "$SOURCE_A" --slurpfile verified verified-drafts.json`,
+		`jq -c '.verified_releases' candidate-draft-verification-decision.json > drafts.json`,
 	} {
 		if !strings.Contains(drafts, required) {
 			t.Fatalf("candidate draft Adapter omitted %q", required)
@@ -366,98 +327,6 @@ func TestCandidateDraftAdapterUsesOnlyCanonicalQualificationActionsAndObservatio
 			t.Fatalf("candidate draft Adapter retained policy %q", forbidden)
 		}
 	}
-}
-
-func TestCandidateQualifiesTheManifestBoundTwoReleaseJourneyOnTheAcceptanceVPS(t *testing.T) {
-	body, err := os.ReadFile(".github/workflows/candidate.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	script, err := os.ReadFile(".github/scripts/installer-updater-vps.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	readiness, err := os.ReadFile(".github/scripts/qualification-gateway-readiness.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	acceptanceSources := string(body) + string(script) + string(readiness)
-	for _, required := range []string{
-		"  acceptance-vps:",
-		"needs: [preflight, sign]",
-		"environment: acceptance-vps",
-		"ACCEPTANCE_VPS_HOST",
-		"ACCEPTANCE_VPS_HOST_KEY",
-		"ACCEPTANCE_VPS_SSH_PRIVATE_KEY",
-		"StrictHostKeyChecking=yes",
-		"gh attestation verify qualification-manifest.json",
-		`expected_state="$(jq -c --arg tag "$tag" '.[] | select(.tag == $tag) | {draft,immutable,prerelease}' drafts.json)"`,
-		`.draft == $state.draft and .prerelease == $state.prerelease and (.immutable // false) == $state.immutable`,
-		"go build -o handoff/sbxr-release ./cmd/sbxr-release",
-		"install -m 0700 /run/sbxr-qualification/sbxr-release /root/sbxr-qualification-gateway",
-		`nohup "$@"`,
-		"/usr/bin/bash /run/sbxr-qualification/installer-updater-vps.sh",
-		"command -v strace >/dev/null",
-		"printf '\\n127.0.0.1 api.github.com github.com\\n' >> /etc/hosts",
-		"rm -f /root/sbxr-qualification-gateway",
-		"acceptance-vps-diagnostics-${{ github.run_id }}",
-		"qualification-failure-evidence.tgz",
-		`/usr/bin/bash /run/sbxr-qualification/v3-packaged-live.sh remote-failure-cleanup "$tag" "$sequence" "$commit" "$index"`,
-		"curl -fsSL https://github.com/albertloky/SBXR/releases/latest/download/install.sh | sudo bash",
-		"SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE",
-		"grep -F \"Latest stable version: $B_TAG\" check-b.transcript",
-		"start_update \"$transcript\" early",
-		"UPDATE_TRACE=\"$transcript.strace\"",
-		"menu 2 120 \"$UPDATE_TRACE\"",
-		"strace -qq -f -yy -e trace=fsync,rename,renameat,renameat2 -e inject=fsync:delay_exit=100ms",
-		"durable_update_count()",
-		"durable_activation_count()",
-		"usr\\/local\\/bin>.*\"sbxr\"",
-		"= 0( \\(DELAYED\\))?$",
-		"syncing[$1]=1",
-		"<\\.\\.\\. fsync resumed>\\).* = 0( \\(DELAYED\\))?$",
-		"current_executable=$(sha256sum /usr/local/bin/sbxr | cut -d' ' -f1)",
-		"prepared:Prepared:$A_TAG:$prior_executable:1:0",
-		"activated:Prepared:$B_TAG:$candidate_executable:1:1",
-		"committed:Committed:$B_TAG:$candidate_executable:2:1",
-		"test \"$mode\" = early && return 0",
-		"UPDATE_WRAPPER=$(pgrep -P \"$UPDATE_DRIVER\" -x script)",
-		"kill -CONT \"$UPDATE_WRAPPER\" 2>/dev/null || true",
-		"grep -F 'Checking the qualified latest release' \"$transcript\" >/dev/null 2>&1 && return 0",
-		"if test ! -e /var/lib/sbxr/update.json; then",
-		"grep -F 'Checking the qualified latest release' \"$transcript\" >/dev/null 2>&1 && break",
-		"SOFTWARE-LIFECYCLE-INSTALL-CONCURRENT-MUTATION",
-		"SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE",
-		"prepared:Prepared:$A_TAG",
-		"committed:Committed:$B_TAG",
-		"/var/lib/sbxr/installed.json",
-		"/run/lock/sbxr.lock",
-		"update-ca-certificates --fresh",
-		`stage:"acceptance-vps-result"`,
-		"go run ./cmd/sbxr-release qualification < acceptance-vps-result-facts.json > acceptance-vps-result-decision.json",
-		"facts_sha256=\"$(sha256sum acceptance-vps-result-facts.json | cut -d' ' -f1)\"",
-		"prior_decision_sha256=\"$(sha256sum handoff/qualification-manifest.json | cut -d' ' -f1)\"",
-		`"a": release("A")`,
-		`"b": release("B")`,
-		`"qualification_manifest_sha256": manifest_sha256`,
-		`observed_at="$(jq -r .observed_at handoff/acceptance-vps-evidence.json)"`,
-		`jq -jr --arg tag "$tag" '.records[] | select(.tag == $tag) | .body' acceptance-vps-result-decision.json > "$record"`,
-		"retention-days: 90",
-	} {
-		if !strings.Contains(acceptanceSources, required) {
-			t.Fatalf("candidate.yml omitted Acceptance VPS contract %q", required)
-		}
-	}
-	if strings.Contains(string(script), "if test ! -e /var/lib/sbxr/update.json; then\n        kill -CONT") {
-		t.Fatal("candidate VPS loop signals the updater before a durable record exists")
-	}
-	acceptance := string(body)[strings.Index(string(body), "  acceptance-vps:"):strings.Index(string(body), "  cleanup-unqualified:")]
-	for _, forbidden := range []string{`canonical="$(jq -cnS`, `echo '# SBXR Installer-Updater Acceptance Record'`, `.github/scripts/release-role.sh`, `source_state="$(jq -r .source_state qualification-manifest.json)"`, "              REMOTE\n"} {
-		if strings.Contains(acceptance, forbidden) {
-			t.Fatalf("candidate Acceptance VPS Adapter retained record policy %q", forbidden)
-		}
-	}
-	assertActionsPinned(t, acceptanceSources)
 }
 
 func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
@@ -481,14 +350,9 @@ func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 		`go run ./cmd/sbxr-release qualification < candidate-preflight-facts.json > candidate-preflight-decision.json`,
 		`go run ./cmd/sbxr-release qualification-declaration < candidate-declaration-facts.json > candidate-declaration-decision.json`,
 		`.schema == "sbxr-release-qualification-decision-v1"`,
-		`if .type == "build-release" then`,
-		`elif .type == "use-source-release" then`,
-		`else false end`,
 		`--slurpfile fact release-fact.json`,
 		`--slurpfile releases release-facts.json`,
 		`.sequence == (.sequence | floor)`,
-		`gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > source-a-release.json`,
-		`test "$(sha256sum "source-a/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"`,
 	} {
 		if !strings.Contains(preflight, required) {
 			t.Fatalf("candidate preflight omitted Adapter contract %q", required)
@@ -527,13 +391,9 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	}
 	stable := string(stableBody)
 	for _, required := range []string{
-		"- v3",
 		"v3-clean",
 		"docs/acceptance/v3-packaged-live.md",
-		".github/scripts/v3-packaged-live.sh",
-		".github/scripts/v3-menu-session.py",
 		"v3-packaged-live-evidence.json",
-		`stage:"v3-packaged-live-result"`,
 		"v3-packaged-live-result-facts.json",
 		"v3-packaged-live-result-decision.json",
 		`curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_Gz0vP/sing-box_1.14.3_linux_amd64.deb -o "$client_deb"`,
@@ -552,7 +412,7 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 		"'Removal committed'",
 		"ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
-		"RELEASE-V3-PACKAGED-LIVE-QUALIFICATION",
+		"RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION",
 		`(.records | length) == 1`,
 		`tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3`,
 	} {
@@ -586,31 +446,6 @@ func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testin
 	}
 	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
 		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
-	}
-	for _, required := range []string{
-		".github/scripts/qualification-gateway-readiness.sh",
-		`/usr/bin/bash /run/sbxr-qualification/qualification-gateway-readiness.sh https://api.github.com/repos/albertloky/SBXR/releases/latest /run/sbxr-qualification/gateway.log /run/sbxr-qualification/gateway.pid 60 /root/sbxr-qualification-gateway gateway`,
-		`-listen 127.0.0.1:8443`,
-		`redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'`,
-		`owned_redirect="-A OUTPUT -d 127.0.0.1/32 -p tcp -m tcp --dport 443 -m comment --comment $redirect_comment -j REDIRECT --to-ports 8443"`,
-		`rules="$(iptables -t nat -S OUTPUT)"`,
-		`! grep -Eq -- '^-A OUTPUT -d 127\.0\.0\.1/32 .*--dport 443( .*)? -j REDIRECT --to-ports 8443$' <<<"$rules"`,
-		`iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443`,
-		`grep -Fqx -- "$owned_redirect" <<<"$rules"`,
-		`iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443`,
-	} {
-		if !strings.Contains(workflow, required) {
-			t.Fatalf("candidate.yml omitted bounded observable gateway readiness %q", required)
-		}
-	}
-	if strings.Count(workflow, `iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 443 -m comment --comment "$redirect_comment" -j REDIRECT --to-ports 8443`) < 2 {
-		t.Fatal("candidate.yml does not remove the qualification redirect on success and failure")
-	}
-	if strings.Count(workflow, `redirect_comment='sbxr-qualification-${{ github.run_id }}-${{ github.run_attempt }}'`) < 3 || strings.Count(workflow, `rules="$(iptables -t nat -S OUTPUT)"`) < 5 {
-		t.Fatal("candidate.yml does not use run-specific ownership with observable setup and cleanup checks")
-	}
-	if strings.Contains(workflow, `redirect.owned`) {
-		t.Fatal("candidate.yml uses a non-atomic filesystem marker for redirect ownership")
 	}
 	for _, mode := range []string{"remote-failure-safety", "remote-setup-and-disclose", "remote-secret-safe", "remote-remove"} {
 		if !strings.Contains(v3Path, "/usr/bin/bash $WORK/v3-packaged-live.sh "+mode) {

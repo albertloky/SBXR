@@ -26,5 +26,5 @@ if test "$mode" = check; then exit 0; fi
 current=$(gh api repos/albertloky/SBXR/git/ref/heads/main --jq .object.sha)
 jq -e --arg current "$current" '.commit == $current and .remote_main == $current and .candidate.mode == "v3"' "$work/preflight.json" >/dev/null
 jq -cn --slurpfile preflight "$work/preflight.json" --rawfile attempt "$work/attempt.json" \
-  '{mode:"v3",a_tag:"",a_sequence:"0",b_tag:$preflight[0].candidate.b_tag,b_sequence:($preflight[0].candidate.b_sequence|tostring),v3_attempt:$attempt}' > "$work/inputs.json"
+  '{b_tag:$preflight[0].candidate.b_tag,b_sequence:($preflight[0].candidate.b_sequence|tostring),v3_attempt:$attempt}' > "$work/inputs.json"
 gh workflow run candidate.yml --repo albertloky/SBXR --ref main --json < "$work/inputs.json"

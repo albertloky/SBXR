@@ -28,6 +28,9 @@ source. The historical repair scope's exact baseline is unchanged. See
 
 The current producer is the ordinary collector described in
 [HTTP subscription acceptance](../../docs/acceptance/http-subscription-live.md).
+Candidate dispatch accepts one V3 candidate; the normal/rescue two-release
+producer is retired. Stable replay still reads historical manifests, records
+and checklist bytes from their original Git revisions.
 Historical HTTPS, recurring and V4 records remain readable through the existing
 validators. Retired procedures and producer source remain in Git history; they
 add no source-update or certificate journeys to the current HTTP scope.

@@ -34,9 +34,10 @@ retains ordinary native, signing, attestation, failure and publication gates.
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
 | Temporary MVP log-parent window | [launcher](mvp-protected-menu.sh), [driver integration test](test_mvp_protected_menu.py), [startup cancellation regression](test_mvp_startup_cleanup.py), [operator plan](../../docs/acceptance/mvp-protected-log-parent-2026-09-19.md); use the driver's `--protected-wrapper` opt-in |
 | Candidate transport | `v3-qualification-transport.sh` |
-| Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`, `qualification-gateway-readiness.sh`; `release-main-review.py` binds committed candidate/main divergence to the security/evidence assessment retained by [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
+| Release history and publication support | `release-history.sh`, `prepare-burn-tag.sh`, `recheck-qualified-release.sh`; `release-main-review.py` binds committed candidate/main divergence to the security/evidence assessment retained by [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Qualified publication retry | `publication-recovery.py`, `test_publication_recovery.py`; authenticate an existing prepublication burn and its certified workflow invocation, preserving the full failed record before metadata-only recovery under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Authenticated release asset reads | `download-release-asset.py` |
+| Release metadata observations | `observe-github-resource.py`; only an explicit HTTP404 proves absence; authentication, server and transport failures stop cleanup |
 
 `v3-packaged-live.sh` inventories the complete protected candidate footprint and
 proves its absence after public cleanup, including the owned mutation-lock boot

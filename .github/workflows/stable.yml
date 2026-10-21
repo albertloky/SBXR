@@ -632,7 +632,8 @@ jobs:
             printf '%s\n' "$release" > "failure/$tag.json"
             tag_commit=null
             if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then test "$object" = "$commit"; tag_commit="$(jq -cn --arg commit "$object" '$commit')"; fi
-            if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1; then
+            release_observation="$(python3 "$GITHUB_WORKSPACE/.github/scripts/observe-github-resource.py" "repos/$GITHUB_REPOSITORY/releases/$release_id")"
+            if test "$(jq -r .state <<<"$release_observation")" = present; then
               .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/rechecked/$tag" failure/release.json
               publicly_verified=false
               if test "$tag_commit" != null && jq -e '.draft == false and .prerelease == false and (.immutable // false) == true' failure/release.json >/dev/null && go run ./cmd/sbxr-release verify-public-release -tag "$tag" > "failure/$tag.public-verification.json" && jq -e --argjson expected "$release" '.outcome == "accepted" and .release_identity == $expected.release_identity and .sequence == $expected.sequence' "failure/$tag.public-verification.json" >/dev/null; then
@@ -713,7 +714,8 @@ jobs:
             mv failure/verified-burns.next failure/verified-burns.json
             tag_commit=null
             if object="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then tag_commit="$(jq -cn --arg commit "$object" '$commit')"; fi
-            if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1; then
+            release_observation="$(python3 "$GITHUB_WORKSPACE/.github/scripts/observe-github-resource.py" "repos/$GITHUB_REPOSITORY/releases/$release_id")"
+            if test "$(jq -r .state <<<"$release_observation")" = present; then
               .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/verified/$tag" failure/verified-release.json
               observation="$(jq -cnS --argjson expected "$action" --slurpfile actual failure/verified-release.json --argjson tag_commit "$tag_commit" '{assets:$expected.assets,body:$actual[0].body,commit:$expected.commit,draft:$actual[0].draft,immutable:($actual[0].immutable // false),prerelease:$actual[0].prerelease,publicly_verified:false,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:true,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
             else
