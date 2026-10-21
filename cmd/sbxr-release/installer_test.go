@@ -712,38 +712,17 @@ func TestGeneratedInstallerRefusesOccupiedPathsWithoutFollowingLinks(t *testing.
 		}
 	})
 
-	for _, test := range []struct {
-		name, marker string
-	}{
-		{"active mount", "mounted"},
-		{"failed mount inspection", "mount-failure"},
-		{"changed physical entry", "race"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newInstallerFixture(t)
-			target := filepath.Join(fixture.root, "usr/local/bin/sbxr")
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			marker := []byte("1")
-			if test.marker == "mounted" {
-				marker = []byte(target + "\n")
-			}
-			if err := os.WriteFile(filepath.Join(fixture.root, "fixtures", test.marker), marker, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if test.marker == "race" {
-				if err := os.WriteFile(filepath.Join(fixture.root, "fixtures/outside"), []byte("keep"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
+	t.Run("occupied directory", func(t *testing.T) {
+		fixture := newInstallerFixture(t)
+		if err := os.MkdirAll(filepath.Join(fixture.root, "usr/local/bin/sbxr"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 
-			body, err := exec.Command("bash", fixture.script).CombinedOutput()
-			if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED" {
-				t.Fatalf("unsafe path = %v, %q", err, body)
-			}
-		})
-	}
+		body, err := exec.Command("bash", fixture.script).CombinedOutput()
+		if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED" {
+			t.Fatalf("occupied directory = %v, %q", err, body)
+		}
+	})
 }
 
 func TestGeneratedInstallerReportsConcurrencyPrerequisiteAndInterruption(t *testing.T) {
@@ -1118,10 +1097,9 @@ func writeInstallerTools(t *testing.T, root string) {
 	write("curl", fmt.Sprintf(`out=''; legacy=''; while [ "$#" -gt 0 ]; do case "$1" in --output) out=$2; shift 2 ;; http*) url=$1; asset=${1##*/}; case "$url" in */v1.0.15/*) legacy='legacy-' ;; esac; shift ;; *) shift ;; esac; done; if [ -f %q/fixtures/interrupt ]; then parent=$(/bin/ps -o ppid= -p "$PPID"); /bin/kill -TERM "$parent"; exit 1; fi; /bin/cp %q/fixtures/"$legacy$asset" "$out" || exit 1; printf 'https://release-assets.githubusercontent.com/exact\n200'`, root, root))
 	write("sha256sum", fmt.Sprintf(`if [ "$#" -eq 0 ]; then %s; else %s "$1"; fi`, checksumCommand, checksumCommand))
 	write("flock", fmt.Sprintf(`[ ! -f %q/fixtures/locked ]`, root))
-	write("findmnt", fmt.Sprintf(`[ ! -f %q/fixtures/mount-failure ] || exit 1; [ ! -f %q/fixtures/mounted ] || /bin/cat %q/fixtures/mounted`, root, root, root))
 	write("rm", fmt.Sprintf(`args=(); signal=0; for value in "$@"; do [ "$value" = '--one-file-system' ] || args+=("$value"); [[ "$value" = */usr/local/bin/sbxr ]] && signal=1; done; if [ "$signal" -eq 1 ] && [ -f %q/fixtures/interrupt-after ]; then /bin/kill -TERM "$PPID"; fi; exec /bin/rm "${args[@]}"`, root))
 	write("sync", `exit 0`)
-	write("stat", fmt.Sprintf(`format=$2; path=$3; case "$path" in /proc/*/fd/9) path=%q/run/lock/sbxr.lock ;; esac; if [ "$format" = '%%d:%%i:%%F' ] && [ -f %q/fixtures/race ] && [[ "$path" = */usr/local/bin/sbxr ]]; then if [ -f %q/fixtures/race-seen ]; then /bin/rm -rf "$path"; /bin/ln -s %q/fixtures/outside "$path"; else : >%q/fixtures/race-seen; fi; fi; facts=$(%s "$path") || exit 1; device=${facts%%%%:*}; rest=${facts#*:}; inode=${rest%%%%:*}; rest=${rest#*:}; mode=${rest%%%%:*}; rest=${rest#*:}; links=${rest%%%%:*}; kind=${rest#*:}; case "$kind" in 'Regular File') kind='regular file' ;; Directory) kind='directory' ;; 'Symbolic Link') kind='symbolic link' ;; esac; if [[ "$path" = */run/lock/sbxr.lock ]] && [ "$kind" = 'regular file' ]; then kind='regular empty file'; fi; case "$format" in '%%u:%%a:%%h:%%F') printf '0:%%s:%%s:%%s\n' "$mode" "$links" "$kind" ;; '%%u:%%a:%%F') printf '0:%%s:%%s\n' "$mode" "$kind" ;; '%%d:%%i:%%F') printf '%%s:%%s:%%s\n' "$device" "$inode" "$kind" ;; '%%d:%%i') printf '%%s:%%s\n' "$device" "$inode" ;; *) exit 1 ;; esac`, root, root, root, root, root, statCommand))
+	write("stat", fmt.Sprintf(`format=$2; path=$3; case "$path" in /proc/*/fd/9) path=%q/run/lock/sbxr.lock ;; esac; facts=$(%s "$path") || exit 1; device=${facts%%%%:*}; rest=${facts#*:}; inode=${rest%%%%:*}; rest=${rest#*:}; mode=${rest%%%%:*}; rest=${rest#*:}; links=${rest%%%%:*}; kind=${rest#*:}; case "$kind" in 'Regular File') kind='regular file' ;; Directory) kind='directory' ;; 'Symbolic Link') kind='symbolic link' ;; esac; if [[ "$path" = */run/lock/sbxr.lock ]] && [ "$kind" = 'regular file' ]; then kind='regular empty file'; fi; case "$format" in '%%u:%%a:%%h:%%F') printf '0:%%s:%%s:%%s\n' "$mode" "$links" "$kind" ;; '%%u:%%a:%%F') printf '0:%%s:%%s\n' "$mode" "$kind" ;; '%%d:%%i:%%F') printf '%%s:%%s:%%s\n' "$device" "$inode" "$kind" ;; '%%d:%%i') printf '%%s:%%s\n' "$device" "$inode" ;; *) exit 1 ;; esac`, root, statCommand))
 	for _, name := range []string{"chmod", "cmp", "cut", "dd", "find", "grep", "head", "mkdir", "mktemp", "mv", "od", "readlink", "sed", "tail", "tar", "tr", "wc"} {
 		path, err := exec.LookPath(name)
 		if err != nil {

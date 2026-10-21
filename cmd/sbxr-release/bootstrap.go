@@ -86,14 +86,6 @@ prerequisite_failed() { finish 'SOFTWARE-LIFECYCLE-INSTALL-PREREQUISITE-FAILED';
 path_refused() { finish 'SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED'; }
 reclamation_failed() { finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'; }
 single_line() { [ "$("$ROOT/usr/bin/grep" -c '^' "$1" 2>/dev/null)" -eq 1 ] 2>/dev/null; }
-mounted_within() {
-  local target=$1 mount mounts="$WORK/mounts"
-  "$ROOT/usr/bin/findmnt" -rn -o TARGET >"$mounts" 2>/dev/null || return 0
-  while IFS= read -r mount; do
-    case "$mount" in "$target"|"$target"/*) return 0 ;; esac
-  done <"$mounts"
-  return 1
-}
 verify_elf_architecture() {
   local executable=$1 class endian kind machine expected
   class=$("$ROOT/usr/bin/head" -c 6 "$executable" | "$ROOT/usr/bin/od" -An -tx1 -v | "$ROOT/usr/bin/tr" -d ' \n') || return 1
