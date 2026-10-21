@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
@@ -304,131 +303,12 @@ func (adapter Adapter) subscriptionDependencies(ctx context.Context, facts Subsc
 }
 
 func (adapter Adapter) PrepareSubscription(ctx context.Context, input SubscriptionEnableInput) SubscriptionEnableResult {
-	if input.Serving.HTTP {
-		return adapter.prepareHTTPSubscription(ctx, input)
-	}
-	decoded, err := base64.RawURLEncoding.Strict().DecodeString(string(input.Credential))
-	if err != nil || len(input.Credential) != 43 || len(decoded) != 32 || input.Serving.CertificateGeneration != 0 || input.Serving.LinkID == "" || input.Serving.CredentialSHA256 != digest(input.Credential) || !input.Renewal.Valid() || input.Renewal.PublicIPv4 != input.PublicIPv4 {
-		return SubscriptionEnableResult{}
-	}
-	facts := adapter.PreflightSubscription(ctx, input.PublicIPv4)
-	if !facts.TCP80.Accepted || !facts.TCP8443.Accepted || !facts.Clock.Accepted || !facts.PackageLocks.Accepted || !facts.RenewalIdle.Accepted || !facts.Dependencies.Accepted || !facts.Firewall.Accepted || !facts.RecorderDirectory.Accepted {
-		return SubscriptionEnableResult{}
-	}
-	runOK := func(name string, arguments ...string) bool {
-		return adapter.subscriptionPreparationCommand(ctx, name, arguments...)
-	}
-	authorize := func(checkpoint int, serving *ServingAuthority) bool {
-		return input.Authorize != nil && input.Authorize(checkpoint, serving)
-	}
-	resources := SubscriptionResourcesForEnablement(input.PublicIPv4, facts)
-	if input.Resources != resources || !resources.Valid() || !adapter.subscriptionFirewallFilesSafe(false, false) {
-		return SubscriptionEnableResult{}
-	}
-	unit := subscriptionFirewallUnit(input.PublicIPv4)
-	if input.Report != nil {
-		input.Report("Preparing subscription resources")
-	}
-	if !authorize(1, nil) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !facts.SnapdInstalled && !runOK("apt-get", "update") {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !authorize(2, nil) || !facts.SnapdInstalled && !runOK("apt-get", "install", "-y", "snapd") {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !authorize(3, nil) || !facts.CertbotInstalled && !runOK("snap", "install", "certbot", "--classic") {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !adapter.officialRenewalRoute() {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !authorize(4, nil) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !adapter.publishSubscriptionFile(SubscriptionFirewallUnitPath, []byte(unit), 0644) || !authorize(5, nil) || !runOK("systemctl", "daemon-reload") {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if safe, _ := adapter.subscriptionFirewallEffective(ctx, resources, false); !safe || !adapter.subscriptionFirewallFilesSafe(true, false) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !authorize(6, nil) || !runOK("systemctl", "enable", "--now", "sbxr-subscription-firewall.service") || !adapter.subscriptionFirewallFilesSafe(true, true) || !adapter.exactSubscriptionFirewall(input.PublicIPv4) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if input.Report != nil {
-		input.Report("Obtaining subscription certificate")
-	}
-	if !authorize(7, nil) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	issued := runOK("/snap/bin/certbot", "certonly", "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--standalone", "--preferred-challenges", "http", "--no-directory-hooks", "--cert-name", "sbxr-subscription", "--required-profile", "shortlived", "--ip-address", input.PublicIPv4)
-	if protected := adapter.protectOwnedLineageDirectories(input.Renewal); !issued || !protected {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	generation, ok := adapter.renewalLineageTarget(input.Renewal)
-	certificateGeneration, valid := renewalLineageGeneration(input.Renewal, generation)
-	if !ok || !valid || !adapter.validRenewalCertificate(input.Renewal, certificateGeneration) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	serving := input.Serving
-	serving.CertificateGeneration = certificateGeneration
-	for index, name := range certificateNames {
-		mode := os.FileMode(0644)
-		if name == "privkey" {
-			mode = 0600
-		}
-		body, err := adapter.protectedServingFile(servingArchive+"/"+name+strconv.Itoa(certificateGeneration)+".pem", mode, "")
-		if err != nil {
-			return SubscriptionEnableResult{Resources: resources}
-		}
-		serving.CertificateSHA256[index] = digest(body)
-	}
-	if !authorize(8, &serving) {
-		return SubscriptionEnableResult{Serving: serving, Renewal: input.Renewal, Resources: resources}
-	}
-	if input.Report != nil {
-		input.Report("Preparing subscription credential")
-	}
-	if !adapter.prepareServingStaging() || !authorize(9, &serving) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	credential := append(bytes.Clone(input.Credential), '\n')
-	state := servingStateBytes(serving)
-	if !adapter.publishSubscriptionFile(SubscriptionCandidateTokenPath, credential, 0600) || !authorize(10, &serving) || !adapter.publishSubscriptionFile(SubscriptionCandidateStatePath, state, 0600) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if token, err := adapter.protectedServingFile(SubscriptionCandidateTokenPath, 0600, digest(credential)); err != nil || !bytes.Equal(token, credential) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if candidate, err := adapter.protectedServingFile(SubscriptionCandidateStatePath, 0600, digest(state)); err != nil || !bytes.Equal(candidate, state) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if !authorize(11, &serving) || !adapter.publishSubscriptionFile(ServingTokenPath, credential, 0600) || !authorize(12, &serving) || !adapter.publishSubscriptionFile(ServingStatePath, state, 0600) || !authorize(13, &serving) || !adapter.publishSubscriptionFile(ServingUnitPath, []byte(ServingUnit), 0644) || !authorize(14, &serving) || !adapter.removeFile(SubscriptionCandidateTokenPath).OK || !authorize(15, &serving) || !adapter.removeFile(SubscriptionCandidateStatePath).OK || !adapter.servingDirectory(ServingStagingPath, nil, false) {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	if input.Report != nil {
-		input.Report("Preparing subscription serving state")
-	}
-	evidence, err := json.Marshal(RenewalEvidence{Schema: 1, RecorderID: input.Renewal.RecorderID, EstablishedAt: time.Now().UTC().Format(time.RFC3339Nano)})
-	if err != nil {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	evidence = append(evidence, '\n')
-	for index, file := range renewalManagedFiles {
-		if !authorize(16+index, &serving) || index == 0 && !adapter.prepareRecorderDirectory(resources) || !adapter.publishSubscriptionFile(file.path, []byte(file.body), file.mode) {
-			return SubscriptionEnableResult{Resources: resources}
-		}
-	}
-	if !authorize(21, &serving) || !adapter.publishSubscriptionFile(RenewalEvidencePath, evidence, 0600) || !authorize(22, &serving) || !runOK("systemctl", "daemon-reload") {
-		return SubscriptionEnableResult{Resources: resources}
-	}
-	return SubscriptionEnableResult{Serving: serving, Renewal: input.Renewal, Resources: resources, Prepared: true}
+	return adapter.prepareHTTPSubscription(ctx, input)
 }
 
 func (adapter Adapter) subscriptionPreparationCommand(ctx context.Context, name string, arguments ...string) bool {
 	if adapter.subscriptionCommand == nil {
-		// Issuance and dependency changes use the existing bounded mutation runner.
+		// Subscription mutations use the existing bounded mutation runner.
 		return adapter.command(ctx, name, arguments...).OK
 	}
 	_, code, observed := adapter.subscriptionCommand(ctx, name, arguments...)
@@ -446,17 +326,6 @@ func (adapter Adapter) inspectRecorderDirectory() (bool, Observation) {
 	}
 	stat, ok := infoSys(info)
 	return false, observation(err == nil && ok && info.IsDir() && info.Mode().Perm() == 0755 && stat.Uid == adapter.ownerUID(), err == nil)
-}
-
-func (adapter Adapter) prepareRecorderDirectory(authority SubscriptionResourceAuthority) bool {
-	path := filepath.Dir(RenewalDropInPath)
-	if authority.RecorderDirectoryCreated {
-		if adapter.safeParents(path) != nil || os.Mkdir(adapter.path(path), 0755) != nil || os.Chmod(adapter.path(path), 0755) != nil || adapter.syncOwnershipDirectory(adapter.path(path)) != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
-			return false
-		}
-	}
-	absent, inspected := adapter.inspectRecorderDirectory()
-	return !absent && inspected.Accepted
 }
 
 func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os.FileMode) bool {
