@@ -95,6 +95,14 @@ type menuLifecycle struct {
 	updates, checks, recoveries int
 }
 
+func (m *menuLifecycle) Status(context.Context) softwarelifecycle.Result {
+	r := m.constructionLifecycle.Status(context.Background())
+	r.State = softwarelifecycle.RecoveryRequiredState
+	r.Code = softwarelifecycle.StatusRecoveryRequired
+	r.RecoveryDirection = "Finish committed installation"
+	return r
+}
+
 func (m *menuLifecycle) Check(context.Context, softwarelifecycle.ProgressReporter) softwarelifecycle.Result {
 	m.checks++
 	r := m.Status(context.Background())
@@ -119,12 +127,12 @@ func TestProductionMenuLifecycleConfirmation(t *testing.T) {
 			run(t.Context(), nil, strings.NewReader("0\n"), &frame, &frame, lifecycle)
 			choice := ""
 			for _, line := range strings.Split(frame.String(), "\n") {
-				if strings.HasSuffix(line, ". Update") {
-					choice = strings.TrimSuffix(line, ". Update")
+				if strings.HasSuffix(line, ". Recover") {
+					choice = strings.TrimSuffix(line, ". Recover")
 				}
 			}
-			if choice == "" || !strings.Contains(frame.String(), ". Check\n") || !strings.Contains(frame.String(), ". Recover\n") {
-				t.Fatalf("missing lifecycle choices: %s", frame.String())
+			if choice == "" || !strings.Contains(frame.String(), ". Check\n") || strings.Contains(frame.String(), ". Update\n") {
+				t.Fatalf("unexpected lifecycle choices: %s", frame.String())
 			}
 			var output bytes.Buffer
 			code := run(t.Context(), nil, strings.NewReader(choice+"\n"+answer+"\n0\n"), &output, &output, lifecycle)
@@ -132,7 +140,7 @@ func TestProductionMenuLifecycleConfirmation(t *testing.T) {
 			if answer == "y" {
 				want = 1
 			}
-			if code != 0 || lifecycle.updates != want || lifecycle.checks != 1 || !strings.Contains(output.String(), "v3.0.22") || !strings.Contains(output.String(), "Update SBXR? [y/N]") {
+			if code != 0 || lifecycle.updates != 0 || lifecycle.recoveries != want || lifecycle.checks != 0 || !strings.Contains(output.String(), "Finish committed installation") || !strings.Contains(output.String(), "Recover SBXR? [y/N]") {
 				t.Fatalf("code=%d lifecycle=%+v output=%s", code, lifecycle, output.String())
 			}
 		})
@@ -153,18 +161,18 @@ func TestProductionMenuOutputFailurePreventsApproval(t *testing.T) {
 	run(t.Context(), nil, strings.NewReader("0\n"), &frame, &frame, lifecycle)
 	choice := ""
 	for _, line := range strings.Split(frame.String(), "\n") {
-		if strings.HasSuffix(line, ". Update") {
-			choice = strings.TrimSuffix(line, ". Update")
+		if strings.HasSuffix(line, ". Recover") {
+			choice = strings.TrimSuffix(line, ". Recover")
 		}
 	}
 	if choice == "" {
-		t.Fatal("missing update choice")
+		t.Fatal("missing recovery choice")
 	}
-	for _, needle := range []string{"Target:", "Update SBXR? [y/N]"} {
+	for _, needle := range []string{"Recovery direction:", "Recover SBXR? [y/N]"} {
 		var errors bytes.Buffer
 		code := run(t.Context(), nil, strings.NewReader(choice+"\ny\n0\n"), failingMenuOutput{needle}, &errors, lifecycle)
-		if code != 1 || lifecycle.updates != 0 {
-			t.Fatalf("output failure authorized update: code=%d updates=%d", code, lifecycle.updates)
+		if code != 1 || lifecycle.recoveries != 0 || lifecycle.updates != 0 {
+			t.Fatalf("output failure authorized recovery: code=%d recoveries=%d", code, lifecycle.recoveries)
 		}
 	}
 }

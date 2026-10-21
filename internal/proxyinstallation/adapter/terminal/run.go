@@ -329,7 +329,7 @@ func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyi
 		if err := writeLifecycleResult(output, lifecycle.Status(ctx)); err != nil {
 			return err
 		}
-		for index, label := range []string{"Check", "Update", "Recover"} {
+		for index, label := range []string{"Check", "Recover"} {
 			if _, err := fmt.Fprintf(output, "%d. %s\n", len(review.LegalActions)+index+1, label); err != nil {
 				return err
 			}
