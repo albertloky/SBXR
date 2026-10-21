@@ -472,10 +472,13 @@ func exactLatestAssets(baseURL string, assets []githubAsset) (map[string]assetMe
 func validLatestAssetURL(baseURL, address string) bool {
 	base, baseErr := url.Parse(baseURL)
 	parsed, parseErr := url.Parse(address)
+	if baseErr != nil || parseErr != nil {
+		return false
+	}
 	prefix := "/repos/" + softwarelifecycle.Repository + "/releases/assets/"
 	id := strings.TrimPrefix(parsed.Path, prefix)
 	assetID, idErr := strconv.ParseUint(id, 10, 64)
-	return baseErr == nil && parseErr == nil && parsed.Scheme == base.Scheme && parsed.Host == base.Host && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Path == parsed.EscapedPath() && idErr == nil && assetID > 0 && strconv.FormatUint(assetID, 10) == id
+	return parsed.Scheme == base.Scheme && parsed.Host == base.Host && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && parsed.Path == parsed.EscapedPath() && idErr == nil && assetID > 0 && strconv.FormatUint(assetID, 10) == id
 }
 
 func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMetadata) (string, uint64, bool) {
