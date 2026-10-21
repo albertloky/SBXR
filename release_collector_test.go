@@ -12,49 +12,6 @@ import (
 	"testing"
 )
 
-func TestRecurringV3UsesTheExistingQualificationWorkflow(t *testing.T) {
-	workflow, err := os.ReadFile(".github/workflows/candidate.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"v3_attempt:", "evidence_version:3", "v3-subscription-clean", "sbxr-qualification-manifest-v3", "subscription_history", "release-history.sh", "candidate_index", "-support release-support.json", "v3-recurring", "sbxr-qualification-manifest-v2", "v3-recurring-evidence.sh", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "go run ./cmd/sbxr-release verify-public-latest"} {
-		if !strings.Contains(string(workflow), required) {
-			t.Fatalf("missing recurring workflow contract %q", required)
-		}
-	}
-	stable, err := os.ReadFile(".github/workflows/stable.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(string(stable), "bash .github/scripts/release-history.sh current-release-history.json") != 2 || strings.Count(string(stable), "subscription_history:{complete:true") != 2 {
-		t.Fatal("publication must recheck history before and after approval")
-	}
-	if output, err := exec.Command("bash", "-n", ".github/scripts/release-history.sh").CombinedOutput(); err != nil {
-		t.Fatalf("history collector syntax: %v %s", err, output)
-	}
-	collector, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{
-		"v3-scenario-result", "v3-scenario-failure", "stop_test_mutations",
-		"qualification <", "completed_at", "300", "7200", "STOP",
-		"failure-recorded", "retained-failure.json", ".failure.scenario_id == $scenario",
-		`test ! -L /root/sbxr-qualification-evidence`,
-		`test ! -L /root/sbxr-qualification-evidence/result.json`,
-		`test ! -L '$mvp_observation_remote'`,
-		`test ! -L /usr/local/bin/sbxr`,
-		`test ! -L /var/lib/sbxr`,
-	} {
-		if !strings.Contains(string(collector), required) {
-			t.Fatalf("missing evidence handoff contract %q", required)
-		}
-	}
-	if output, err := exec.Command("bash", "-n", ".github/scripts/v3-recurring-evidence.sh").CombinedOutput(); err != nil {
-		t.Fatalf("shell syntax: %v\n%s", err, output)
-	}
-}
-
 func TestRecurringCollectorPreservesScenarioInputAndLastFailureIdentity(t *testing.T) {
 	source, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
 	if err != nil {

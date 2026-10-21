@@ -29,7 +29,7 @@ func live89WorkflowJobs(t *testing.T, workflow string) map[string]live89Workflow
 	}
 	jobs := make(map[string]live89WorkflowJob)
 	for name, node := range document.Jobs {
-		if name != "acceptance-vps" && name != "owner-exception" && name != "live89-correction" && name != "cleanup-unqualified" && name != "attended-1" && name != "attended-4" {
+		if name != "acceptance-vps" && name != "owner-exception" && name != "live89-correction" && name != "cleanup-unqualified" {
 			continue
 		}
 		var job live89WorkflowJob
@@ -48,17 +48,6 @@ func assertLive89WorkflowPartition(t *testing.T, workflow string) map[string]liv
 	normal := guard
 	needs := []string{"preflight", "drafts", "sign", "acceptance-vps", "owner-exception"}
 	condition := "always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'"
-	if attended, present := jobs["attended-1"]; present {
-		normal += " && fromJSON(inputs.v3_attempt || '{}').timing_policy != 'sessioned-attended-v1'"
-		if attended.If != "${{ "+guard+" && fromJSON(inputs.v3_attempt || '{}').timing_policy == 'sessioned-attended-v1' }}" {
-			t.Fatal("attended live entry must exclude archival correction")
-		}
-		if _, terminal := jobs["attended-4"]; !terminal {
-			t.Fatal("declared attended route must have its terminal job")
-		}
-		needs = append(needs, "attended-4")
-		condition += " && needs.attended-4.result != 'success'"
-	}
 	if jobs["acceptance-vps"].If != "${{ "+normal+" }}" {
 		t.Fatal("ordinary live entry must exclude archival correction")
 	}

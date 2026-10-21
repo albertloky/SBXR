@@ -34,10 +34,7 @@ func TestLateConfirmationWorkflowBinding(t *testing.T) {
 	if strings.Count(workflow, `python3 .github/scripts/late-confirmation-review.py "$GITHUB_SHA"`) != 2 {
 		t.Fatal("preflight and result must independently reproduce source review")
 	}
-	// Existing job partition keeps the exception out of VPS/CA/Karing execution.
-	if !strings.Contains(workflow, `if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}`) {
-		t.Fatal("exception would run live journey")
-	}
+	assertLive89WorkflowPartition(t, workflow)
 	data, err = os.ReadFile(".github/workflows/stable.yml")
 	if err != nil {
 		t.Fatal(err)

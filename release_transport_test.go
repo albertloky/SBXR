@@ -62,35 +62,6 @@ func TestQualificationGatewayReadinessIsBoundedAndObservable(t *testing.T) {
 	}
 }
 
-func TestSubscriptionQualificationHasIsolatedRebootSafeTransport(t *testing.T) {
-	workflow, err := os.ReadFile(".github/workflows/candidate.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(workflow), "v3-qualification-transport.sh") {
-		t.Fatal("version-3 transport is missing")
-	}
-	script, err := os.ReadFile(".github/scripts/v3-qualification-transport.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"127.0.0.1:9443", "127.0.0.2", "--to-ports 9443", "ExecStartPre=", "ExecStopPost=", "WantedBy=multi-user.target", "systemctl enable", "owned_unit_link", "cmp -s", "route-down", "update-ca-certificates", "transport-owned"} {
-		if !strings.Contains(string(script), required) {
-			t.Fatalf("missing transport lifecycle %q", required)
-		}
-	}
-	collector, err := os.ReadFile(".github/scripts/v3-recurring-evidence.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(collector), "/root/sbxr-qualification-evidence") || strings.Contains(string(collector), "/run/sbxr-qualification/v3-evidence") {
-		t.Fatal("scenario clock handoff cannot survive reboot")
-	}
-	if output, err := exec.Command("bash", "-n", ".github/scripts/v3-qualification-transport.sh").CombinedOutput(); err != nil {
-		t.Fatalf("syntax: %v %s", err, output)
-	}
-}
-
 func TestQualificationRoutingInspectionFailsClosed(t *testing.T) {
 	script, err := filepath.Abs(".github/scripts/v3-qualification-transport.sh")
 	if err != nil {

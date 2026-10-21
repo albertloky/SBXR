@@ -199,10 +199,8 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 		t.Fatal(err)
 	}
 	candidate, stable, recheck, burn := string(candidateBody), string(stableBody), string(recheckBody), string(burnBody)
+	assertLive89WorkflowPartition(t, candidate)
 	for _, required := range []string{
-		"needs: [preflight, drafts, sign, acceptance-vps, owner-exception, live89-correction]",
-		"needs.acceptance-vps.result != 'success'",
-		"needs.live89-correction.result != 'success'",
 		"--draft=false --prerelease --latest=false",
 		"post-sign-qualification-failure",
 		"defect-issue.json",
