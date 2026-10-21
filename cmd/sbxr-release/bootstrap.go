@@ -119,6 +119,52 @@ verify_executable_identity() {
   identity_pattern='^\{"schema":1,"repository":"{{.Repository}}","tag":"v[0-9]+\.[0-9]+\.[0-9]+","commit":"[0-9a-f]{40}","sequence":[1-9][0-9]*,"architecture":"(amd64|arm64)","payload_sha256":"'"$payload_sha"'"\}$'
   single_line "$output" && "$ROOT/usr/bin/grep" -Eqx "$identity_pattern" "$output"
 }
+# A committed removal authorizes restoration of one exact finisher. Its
+# hash-derived destination-side staging may contain only that target's prefix.
+# Unknown bytes, links, metadata, and other staging identities remain refused.
+restoration_stage_safe() {
+  local source=$1 stage=$2 mode=$3 size source_size facts
+  if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then return 0; fi
+  [ ! -L "$stage" ] || return 1
+  facts=$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$stage" 2>/dev/null) || return 1
+  case "$facts" in '0:600:1:regular file'|'0:600:1:regular empty file'|"0:$mode:1:regular file") ;; *) return 1 ;; esac
+  size=$("$ROOT/usr/bin/wc" -c <"$stage" | "$ROOT/usr/bin/tr" -d ' \n') && source_size=$("$ROOT/usr/bin/wc" -c <"$source" | "$ROOT/usr/bin/tr" -d ' \n') || return 1
+  [ "$size" -le "$source_size" ] 2>/dev/null || return 1
+  if [ "$facts" = '0:755:1:regular file' ]; then [ "$size" -eq "$source_size" ] || return 1; fi
+  if [ "$size" -eq 0 ]; then
+    : >"$WORK/restoration-prefix" || return 1
+  else
+    "$ROOT/usr/bin/head" -c "$size" "$source" >"$WORK/restoration-prefix" || return 1
+  fi
+  "$ROOT/usr/bin/cmp" -s "$WORK/restoration-prefix" "$stage"
+}
+restore_file() {
+  local source=$1 stage=$2 destination=$3 directory=$4 mode=$5 stage_identity directory_identity
+  restoration_stage_safe "$source" "$stage" "$mode" || path_refused
+  if [ -e "$destination" ]; then
+    if [ -e "$stage" ]; then
+      "$ROOT/usr/bin/rm" -f -- "$stage" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+      "$ROOT/usr/bin/sync" "$directory" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+    fi
+    return
+  fi
+  if [ ! -e "$stage" ]; then
+    (set -o noclobber; : >"$stage") 2>/dev/null || path_refused
+  fi
+  restoration_stage_safe "$source" "$stage" "$mode" || path_refused
+  if ! "$ROOT/usr/bin/cmp" -s "$source" "$stage"; then
+    "$ROOT/usr/bin/dd" if="$source" of="$stage" >/dev/null 2>&1 || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  fi
+  "$ROOT/usr/bin/cmp" -s "$source" "$stage" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/chmod" "$mode" "$stage" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/sync" "$stage" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  stage_identity=$("$ROOT/usr/bin/stat" -c '%d:%i' "$stage") && directory_identity=$("$ROOT/usr/bin/stat" -c '%d:%i' "$directory") || path_refused
+  [ "${stage_identity%%:*}" = "${directory_identity%%:*}" ] || path_refused
+  # Both paths share a filesystem, so mv publishes with rename rather than
+  # copying partial bytes into the final executable or Installed Record.
+  "$ROOT/usr/bin/mv" -n "$stage" "$destination" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  [ ! -e "$stage" ] && [ ! -L "$stage" ] || path_refused
+}
 successful_finish() {
   local code=$1
   trap - EXIT
@@ -207,6 +253,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     [ -n "$retirement" ] || path_refused
     removal_subject=$(printf '%s\n' "$removal_subject" | "$ROOT/usr/bin/sed" 's/,"https_retirement":.*}$/}/')
   fi
+` + bootstrapRecoveryPrelude + `
   # Committed records are canonical JSON. Match the complete supported contract,
   # never a prefix that could hide an unknown operation or conflicting identity.
   identity='\{"Repository":"{{.Repository}}","Tag":"v[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?","Commit":"[0-9a-f]{40}","IndexSHA256":"[0-9a-f]{64}"\}'
@@ -347,7 +394,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     if [ "$http_serving" -eq 1 ]; then
       printf '%s\n' "$subscription" | "$ROOT/usr/bin/grep" -Eqx '\{"http":true,"public_ipv4":"'"$ip"'","firewall_sha256":"[0-9a-f]{64}","snapd_created":false,"certbot_created":false\}' || path_refused
     else
-      printf '%s\n' "$subscription" | "$ROOT/usr/bin/grep" -Eqx '\{"public_ipv4":"'"$ip"'","firewall_sha256":"[0-9a-f]{64}","snapd_created":(true|false),"certbot_created":(true|false)\}' || path_refused
+      printf '%s\n' "$subscription" | "$ROOT/usr/bin/grep" -Eqx '\{"public_ipv4":"'"$ip"'","firewall_sha256":"[0-9a-f]{64}","snapd_created":(true|false),"certbot_created":(true|false)(,"recorder_directory_created":true)?\}' || path_refused
     fi
     firewall_sha=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -n 's/.*"firewall_sha256":"\([0-9a-f]*\)".*/\1/p')
     [ "$firewall_sha" != 0000000000000000000000000000000000000000000000000000000000000000 ] || path_refused
@@ -359,6 +406,10 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
       certbot=$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" -nE 's/.*"certbot_created":(true|false).*/\1/p'); [ "$certbot" = true ] && certbot=created || certbot=reused
       resources=${resources%]}',"/etc/systemd/system/sbxr-subscription-firewall.service root:root 0644 one-link sha256:'"$firewall_sha"'","iptables filter INPUT '"$ip"'/32 tcp/80 comment=sbxr-subscription exact-owned","iptables filter INPUT '"$ip"'/32 tcp/8443 comment=sbxr-subscription exact-owned","snapd dependency '"$snapd"'","official Certbot snap dependency '"$certbot"'"]'
       provenance_count=$((provenance_count + 5))
+      if [[ "$subscription" = *',"recorder_directory_created":true}' ]]; then
+        resources=${resources%]}',"/etc/systemd/system/snap.certbot.renew.service.d root:root 0755 SBXR-created empty-after-drop-in-removal"]'
+        provenance_count=$((provenance_count + 1))
+      fi
     fi
     subscription_suffix=',"subscription_resources":'$(printf '%s' "$subscription" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
   fi
@@ -393,6 +444,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     fi
     retirement_suffix=',"https_retirement":'$(printf '%s' "$retirement" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
   fi
+` + bootstrapRecoveryResources + `
   startup_suffix=''
   if "$ROOT/usr/bin/grep" -Fq '"proxy_startup":' <<<"$removal_subject"; then
     [ "$schema" -eq 2 ] && [ -n "$config_sha" ] || path_refused
@@ -424,6 +476,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     done
     provenance_count=$((provenance_count + 4))
   fi
+` + bootstrapRecoveryClient + `
   # Escape literal contract text for ERE; no caller-controlled regular expression.
   resource_pattern=$(printf '%s' "$resources" | "$ROOT/usr/bin/sed" 's/[][\\.^$*+?(){}|]/\\&/g')
   suffix=',"permitted_resources":'"$resource_pattern"',"cleanup_checkpoint":0,"removal_checkpoint":'"$checkpoints"
@@ -432,7 +485,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     suffix=$suffix',"resource_creating_releases":\['"$identity"'(,'"$identity"'){'"$((provenance_count - 1))"'}\],"finishing_release_identity":'"$identity"
     selector='finishing_release_identity'
   fi
-  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$repair_suffix$subscription_suffix$startup_suffix$lock_provisioning_suffix$retirement_suffix"'\}$' "$removal_record" || path_refused
+  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$activation_suffix$enablement_suffix$rotation_suffix$repair_suffix$compromised_suffix$subscription_suffix$startup_suffix$lock_provisioning_suffix$client_suffix$retirement_suffix"'\}$' "$removal_record" || path_refused
   if [ "$removal_record" = "$final_removal_record" ]; then
     final_checkpoint=3
     [ -z "$config_sha" ] || final_checkpoint=11
@@ -510,7 +563,7 @@ active="$ROOT/usr/local/bin/sbxr"
 installed_directory="$ROOT/var/lib/sbxr"
 installed_record="$installed_directory/installed.json"
 [ ! -L "$active" ] || path_refused
-if [ -f "$active" ] && [ ! -L "$active" ] && [ -d "$installed_directory" ] && [ ! -L "$installed_directory" ] && [ -f "$installed_record" ] && [ ! -L "$installed_record" ] \
+if [ "$RESTORING_REMOVAL" -eq 0 ] && [ -f "$active" ] && [ ! -L "$active" ] && [ -d "$installed_directory" ] && [ ! -L "$installed_directory" ] && [ -f "$installed_record" ] && [ ! -L "$installed_record" ] \
   && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$active" 2>/dev/null)" = '0:755:1:regular file' ] \
   && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$installed_directory" 2>/dev/null)" = '0:700:directory' ] \
   && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] \
@@ -533,6 +586,8 @@ if [ -f "$active" ] && [ ! -L "$active" ] && [ -d "$installed_directory" ] && [ 
         finish 'SOFTWARE-LIFECYCLE-INSTALL-DOWNGRADE-REFUSED'
       fi
       if [ "$current_tag:$current_commit:$current_index:$current_sequence:$current_arch:$current_sha" = "$TAG:$COMMIT:$index_sha:$SEQUENCE:$ARCH:$EXPECTED_EXECUTABLE_SHA256" ]; then
+        "$ROOT/usr/bin/sync" "$active" "$installed_record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+        "$ROOT/usr/bin/sync" "$installed_directory" "$ROOT/usr/local/bin" "$ROOT/var/lib" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
         successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-ALREADY-CURRENT'
       fi
     fi
@@ -555,7 +610,7 @@ single_line "$WORK/candidate-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candi
 [ "$RESTORING_REMOVAL" -eq 1 ] || [ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused 'executable/sha256 expected=embedded observed=mismatch'
 
 if [ "$RESTORING_REMOVAL" -eq 1 ]; then
-  if [ "$http_serving" -eq 1 ]; then
+  if [ "$http_serving" -eq 1 ] || [ "${pending_http:-0}" -eq 1 ]; then
     "$ROOT/usr/bin/grep" -aFq 'SBXR-SUBSCRIPTION-HTTP-V1' "$candidate" || release_refused
   fi
   if [ -n "$retirement" ]; then
@@ -564,29 +619,39 @@ if [ "$RESTORING_REMOVAL" -eq 1 ]; then
   active="$ROOT/usr/local/bin/sbxr"
   installed_directory="$ROOT/var/lib/sbxr"
   installed_record="$installed_directory/installed.json"
-  [ ! -e "$active" ] && [ ! -L "$active" ] || path_refused
+  [ ! -L "$active" ] || path_refused
   if [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ]; then
     "$ROOT/usr/bin/mkdir" "$installed_directory" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
     "$ROOT/usr/bin/chmod" 0700 "$installed_directory" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   fi
   [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$installed_directory" 2>/dev/null)" = '0:700:directory' ] || path_refused
-  unexpected=$("$ROOT/usr/bin/find" "$installed_directory" -mindepth 1 -maxdepth 1 ! -name proxy-ownership.json ! -name installed.json -print -quit 2>/dev/null) || path_refused
+  record_stage="$installed_record.sbxr-restore-$executable_sha"
+  executable_stage="$active.sbxr-restore-$executable_sha"
+  unexpected=$("$ROOT/usr/bin/find" "$installed_directory" -mindepth 1 -maxdepth 1 ! -name proxy-ownership.json ! -name installed.json ! -name "installed.json.sbxr-restore-$executable_sha" -print -quit 2>/dev/null) || path_refused
   [ -z "$unexpected" ] || path_refused
   restored_record=$(printf '{"schema":1,"repository":"%s","tag":"%s","commit":"%s","release_index_sha256":"%s","sequence":%s,"architecture":"%s","executable_sha256":"%s"}' "$REPOSITORY" "$TAG" "$COMMIT" "$index_sha" "$SEQUENCE" "$ARCH" "$executable_sha")
   if [ -e "$installed_record" ] || [ -L "$installed_record" ]; then
     [ ! -L "$installed_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Fqx "$restored_record" "$installed_record" || path_refused
   fi
-  "$ROOT/usr/bin/mv" -n "$candidate" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-  "$ROOT/usr/bin/chmod" 0755 "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-  "$ROOT/usr/bin/sync" "$active" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-  if [ ! -e "$installed_record" ] && [ ! -L "$installed_record" ]; then
-    printf '{"schema":1,"repository":"%s","tag":"%s","commit":"%s","release_index_sha256":"%s","sequence":%s,"architecture":"%s","executable_sha256":"%s"}\n' "$REPOSITORY" "$TAG" "$COMMIT" "$index_sha" "$SEQUENCE" "$ARCH" "$executable_sha" >"$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-    "$ROOT/usr/bin/chmod" 0600 "$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-    "$ROOT/usr/bin/sync" "$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-    "$ROOT/usr/bin/mv" -n "$WORK/installed.json" "$installed_record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  # A prior restoration may have published the complete pair before a final
+  # sync failed. Admit only that exact pair, never executable-only residue.
+  if [ -e "$active" ]; then
+    [ -e "$installed_record" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$active" 2>/dev/null)" = '0:755:1:regular file' ] || path_refused
+    [ "$("$ROOT/usr/bin/sha256sum" "$active" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$executable_sha" ] || path_refused
   fi
+  printf '%s\n' "$restored_record" >"$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/chmod" 0600 "$WORK/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  restoration_stage_safe "$WORK/installed.json" "$record_stage" 0600 && restoration_stage_safe "$candidate" "$executable_stage" 0755 || path_refused
+  restore_file "$WORK/installed.json" "$record_stage" "$installed_record" "$installed_directory" 0600
   [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$installed_record" 2>/dev/null)" = '0:600:1:regular file' ] && single_line "$installed_record" && "$ROOT/usr/bin/grep" -Fqx "$restored_record" "$installed_record" || path_refused
-  "$ROOT/usr/bin/sync" "$installed_directory" "$ROOT/usr/local/bin" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  # Publish the fully prepared executable last. Hard death before that point
+  # leaves an exact record and absent executable, which the next run can resume.
+  "$ROOT/usr/bin/sync" "$installed_record" "$installed_directory" "$ROOT/var/lib" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  restore_file "$candidate" "$executable_stage" "$active" "$ROOT/usr/local/bin" 0755
+  [ ! -L "$active" ] && [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$active" 2>/dev/null)" = '0:755:1:regular file' ] || path_refused
+  [ "$("$ROOT/usr/bin/sha256sum" "$active" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$executable_sha" ] || path_refused
+  "$ROOT/usr/bin/sync" "$active" "$installed_record" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+  "$ROOT/usr/bin/sync" "$installed_directory" "$ROOT/usr/local/bin" "$ROOT/var/lib" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
   successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED'
 fi
 
@@ -619,7 +684,8 @@ single_line "$ROOT/var/lib/sbxr/installed.json" && "$ROOT/usr/bin/grep" -Eqx "$f
 [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%F' "$ROOT/var/lib/sbxr" 2>/dev/null)" = '0:700:directory' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 [ "$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$ROOT/var/lib/sbxr/installed.json" 2>/dev/null)" = '0:600:1:regular file' ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 [ "$("$ROOT/usr/bin/sha256sum" "$ROOT/usr/local/bin/sbxr" | "$ROOT/usr/bin/cut" -d' ' -f1)" = "$executable_sha" ] || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
-"$ROOT/usr/bin/sync" "$ROOT/usr/local/bin" "$ROOT/var/lib" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/sync" "$ROOT/usr/local/bin/sbxr" "$ROOT/var/lib/sbxr/installed.json" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
+"$ROOT/usr/bin/sync" "$ROOT/var/lib/sbxr" "$ROOT/usr/local/bin" "$ROOT/var/lib" || finish 'SOFTWARE-LIFECYCLE-INSTALL-FAILED'
 
 successful_finish 'SOFTWARE-LIFECYCLE-INSTALL-INSTALLED'
 `
