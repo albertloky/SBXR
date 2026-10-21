@@ -119,7 +119,7 @@ restoration_stage_safe() {
   if [ ! -e "$stage" ] && [ ! -L "$stage" ]; then return 0; fi
   [ ! -L "$stage" ] || return 1
   facts=$("$ROOT/usr/bin/stat" -c '%u:%a:%h:%F' "$stage" 2>/dev/null) || return 1
-  case "$facts" in '0:600:1:regular file'|'0:600:1:regular empty file'|"0:$mode:1:regular file") ;; *) return 1 ;; esac
+  case "$facts" in '0:600:1:regular file'|'0:600:1:regular empty file'|"0:${mode#0}:1:regular file") ;; *) return 1 ;; esac
   size=$("$ROOT/usr/bin/wc" -c <"$stage" | "$ROOT/usr/bin/tr" -d ' \n') && source_size=$("$ROOT/usr/bin/wc" -c <"$source" | "$ROOT/usr/bin/tr" -d ' \n') || return 1
   [ "$size" -le "$source_size" ] 2>/dev/null || return 1
   if [ "$facts" = '0:755:1:regular file' ]; then [ "$size" -eq "$source_size" ] || return 1; fi

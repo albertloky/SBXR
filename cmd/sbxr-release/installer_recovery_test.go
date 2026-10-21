@@ -36,8 +36,15 @@ func installerRemovalFixture(t *testing.T) installerFixture {
 }
 
 func TestInstallerRemovalRestorationSurvivesPublicationDeath(t *testing.T) {
-	for _, boundary := range []string{"installed.json", "sbxr"} {
-		t.Run(boundary, func(t *testing.T) {
+	for _, test := range []struct {
+		name, boundary string
+		beforeRename   bool
+	}{
+		{name: "installed.json", boundary: "installed.json"},
+		{name: "sbxr", boundary: "sbxr"},
+		{name: "prepared executable stage", boundary: "sbxr", beforeRename: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			fixture := installerRemovalFixture(t)
 			mv, err := exec.LookPath("mv")
 			if err != nil {
@@ -48,7 +55,7 @@ func TestInstallerRemovalRestorationSurvivesPublicationDeath(t *testing.T) {
 				t.Fatal(err)
 			}
 			marker := filepath.Join(fixture.root, "fixtures/publication-death")
-			body := fmt.Sprintf("#!/bin/bash\n%q \"$@\" || exit 1\nif [[ \"${@: -1}\" = */%s ]] && [ ! -e %q ]; then : >%q; /bin/kill -KILL \"$PPID\"; fi\n", mv, boundary, marker, marker)
+			body := fmt.Sprintf("#!/bin/bash\nif [[ \"${@: -1}\" = */%s ]] && [ ! -e %q ]; then\n  if [ %t = false ]; then %q \"$@\" || exit 1; fi\n  : >%q; /bin/kill -KILL \"$PPID\"; exit 1\nfi\nexec %q \"$@\"\n", test.boundary, marker, test.beforeRename, mv, marker, mv)
 			if err := os.WriteFile(path, []byte(body), 0755); err != nil {
 				t.Fatal(err)
 			}
@@ -59,9 +66,25 @@ func TestInstallerRemovalRestorationSurvivesPublicationDeath(t *testing.T) {
 			if _, err := os.Stat(marker); err != nil {
 				t.Fatalf("publication boundary was not reached: %s %v", output, err)
 			}
+			if test.beforeRename {
+				final := filepath.Join(fixture.root, "usr/local/bin/sbxr")
+				if _, err := os.Lstat(final); !os.IsNotExist(err) {
+					t.Fatal("pre-rename interruption published the executable")
+				}
+				digest := sha256.Sum256(fixture.executable)
+				stage := final + ".sbxr-restore-" + hex.EncodeToString(digest[:])
+				info, err := os.Stat(stage)
+				if err != nil || info.Mode().Perm() != 0755 {
+					t.Fatalf("completed stage mode = %v, %v", info, err)
+				}
+				staged, err := os.ReadFile(stage)
+				if err != nil || !bytes.Equal(staged, fixture.executable) {
+					t.Fatal("pre-rename interruption did not retain the complete staged executable")
+				}
+			}
 			output, err = exec.Command("bash", fixture.script).CombinedOutput()
 			if err != nil || !strings.Contains(string(output), "SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED") {
-				t.Fatalf("fresh restoration after %s: %s %v", boundary, output, err)
+				t.Fatalf("fresh restoration after %s: %s %v", test.name, output, err)
 			}
 			assertInstalledFixture(t, fixture.root, fixture.executable)
 		})
