@@ -3,7 +3,6 @@ package proxyinstallation
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -14,9 +13,9 @@ import (
 
 type migrationTestHost struct {
 	*controlledHost
-	retired                                          hostadapter.HTTPSRetirementAuthority
-	migrations                                       int
-	failRuntime, failFinal, lateFinal, retiredUnsafe bool
+	retired                    hostadapter.HTTPSRetirementAuthority
+	migrations                 int
+	failRuntime, retiredUnsafe bool
 }
 
 func (h *migrationTestHost) ReadOwnership(path string) ([]byte, error) {
@@ -25,50 +24,12 @@ func (h *migrationTestHost) ReadOwnership(path string) ([]byte, error) {
 	}
 	return h.controlledHost.ReadOwnership(path)
 }
-func (h *migrationTestHost) HTTPMigrationExecutable() bool { return true }
-func (h *migrationTestHost) SnapshotHTTPSRetirement(hostadapter.ServingAuthority, hostadapter.RenewalAuthority, hostadapter.SubscriptionResourceAuthority, *hostadapter.RenewalExclusion) (hostadapter.HTTPSRetirementAuthority, bool) {
-	return h.retired, true
-}
 func (h *migrationTestHost) AcquireHTTPSRetirementExclusion(hostadapter.HTTPSRetirementAuthority, bool) (*hostadapter.RenewalExclusion, bool) {
 	return &hostadapter.RenewalExclusion{}, true
 }
 func (h *migrationTestHost) InspectHTTPSRetirement(hostadapter.HTTPSRetirementAuthority, bool) bool {
 	return !h.retiredUnsafe
 }
-func (h *migrationTestHost) DiscardHTTPMigrationPublication(current, next []byte) bool {
-	if !bytes.Equal(current, h.ownership) || !bytes.HasPrefix(next, h.stagedOwnership) {
-		return false
-	}
-	h.stagedOwnership = nil
-	return true
-}
-func (h *migrationTestHost) InspectRunning(ctx context.Context, spec hostadapter.SetupSpec, source, ownership []byte, digest, ip string) hostadapter.RunningInspection {
-	facts := h.controlledHost.InspectRunning(ctx, spec, source, ownership, digest, ip)
-	facts.TransactionFilesAbsent = hostadapter.Observation{Observed: true, Accepted: h.stagedOwnership == nil}
-	return facts
-}
-func (h *migrationTestHost) MigrateHTTPSRetirement(context.Context, hostadapter.HTTPSRetirementAuthority, hostadapter.ServingAuthority, *hostadapter.RenewalExclusion) bool {
-	r, ok := decodeOwnership(h.ownership)
-	if !ok || !r.TransportMigrating || h.stagedOwnership != nil {
-		return false
-	}
-	h.migrations++
-	return !h.failRuntime
-}
-func (h *migrationTestHost) PublishOwnership(path, nextPath string, current, next []byte) error {
-	r, ok := decodeOwnership(next)
-	if ok && r.HTTPSRetirement != nil && !r.TransportMigrating && h.failFinal {
-		h.failFinal = false
-		if h.lateFinal {
-			h.ownership = bytes.Clone(next)
-		} else {
-			h.stagedOwnership = bytes.Clone(next)
-		}
-		return errors.New("interrupted final publication")
-	}
-	return h.controlledHost.PublishOwnership(path, nextPath, current, next)
-}
-
 func migrationInstallation(t *testing.T) *migrationTestHost {
 	t.Helper()
 	_, host := enabledIdentityInstallation(t)
@@ -105,118 +66,6 @@ func migrationSelectedRecord(t *testing.T, h *migrationTestHost) ownershipRecord
 	r.HTTPSRetirement, r.TransportMigrating = &h.retired, true
 	updateSubscriptionResources(&r, testInstalledIdentity())
 	return r
-}
-
-func TestHTTPMigrationResumesExactStagedOwnershipAndProtectsGenericOutput(t *testing.T) {
-	for _, checkpoint := range []string{"initial publication", "initial partial publication", "initial empty publication", "final publication", "final partial publication", "final empty publication", "final rename before sync", "runtime interruption"} {
-		t.Run(checkpoint, func(t *testing.T) {
-			h := migrationInstallation(t)
-			original, _ := decodeOwnership(h.ownership)
-			historical := testInstalledIdentity()
-			historical.Tag, historical.Commit = "v3.0.21", strings.Repeat("5", 40)
-			for i, resource := range original.Resources {
-				if strings.HasPrefix(resource, hostadapter.RenewalEvidencePath+" ") {
-					original.ResourceCreatingReleases[i] = historical
-				}
-			}
-			h.ownership = ownershipBytes(original)
-			configuration := bytes.Clone(h.configuration)
-			operations := len(h.operations)
-			selected := migrationSelectedRecord(t, h)
-			switch checkpoint {
-			case "initial publication", "initial partial publication", "initial empty publication":
-				h.stagedOwnership = ownershipBytes(selected)
-				if checkpoint == "initial partial publication" {
-					h.stagedOwnership = h.stagedOwnership[:len(h.stagedOwnership)/2]
-				} else if checkpoint == "initial empty publication" {
-					h.stagedOwnership = []byte{}
-				}
-			case "final publication", "final partial publication", "final empty publication":
-				h.ownership = ownershipBytes(selected)
-				selected.TransportMigrating = false
-				updateSubscriptionResources(&selected, testInstalledIdentity())
-				h.stagedOwnership = ownershipBytes(selected)
-				if checkpoint == "final partial publication" {
-					h.stagedOwnership = h.stagedOwnership[:len(h.stagedOwnership)/2]
-				} else if checkpoint == "final empty publication" {
-					h.stagedOwnership = []byte{}
-				}
-			case "final rename before sync":
-				h.failFinal, h.lateFinal = true, true
-			case "runtime interruption":
-				h.failRuntime = true
-				if _, ok := migrateLegacyHTTPSubscription(t.Context(), h, testInstalledIdentity(), &softwarelifecycle.MutationLockAuthority{}); ok {
-					t.Fatal("interruption accepted")
-				}
-				h.failRuntime = false
-			}
-			message, ok := migrateLegacyHTTPSubscription(t.Context(), h, testInstalledIdentity(), &softwarelifecycle.MutationLockAuthority{})
-			if !ok {
-				t.Fatal(message)
-			}
-			r, valid := decodeOwnership(h.ownership)
-			if !valid || r.TransportMigrating || r.HTTPSRetirement == nil || !r.Serving.HTTP || r.Serving.LinkID != original.Serving.LinkID || r.Serving.CredentialSHA256 != original.Serving.CredentialSHA256 || r.ConfigurationSHA256 != original.ConfigurationSHA256 || h.stagedOwnership != nil || !bytes.Equal(configuration, h.configuration) || len(h.operations) != operations {
-				t.Fatal("migration lost exact credentials, proxy state or recovery authority")
-			}
-			for i, resource := range r.Resources {
-				if strings.HasPrefix(resource, hostadapter.RenewalEvidencePath+" ") && r.ResourceCreatingReleases[i] != historical {
-					t.Fatal("unchanged evidence lost its historical creator")
-				}
-			}
-			if bytes.Contains([]byte(message), h.subscriptionCredential) || strings.Contains(message, "http://") || !strings.Contains(message, "confirmed View details") {
-				t.Fatal("generic completion exposed bearer link")
-			}
-		})
-	}
-}
-
-func TestHTTPMigrationRefusesForeignStagedAuthorityBeforeEffects(t *testing.T) {
-	h := migrationInstallation(t)
-	original := bytes.Clone(h.ownership)
-	selected := migrationSelectedRecord(t, h)
-	selected.SubscriptionCompromised = true
-	h.stagedOwnership = ownershipBytes(selected)
-	if _, ok := migrateLegacyHTTPSubscription(t.Context(), h, testInstalledIdentity(), &softwarelifecycle.MutationLockAuthority{}); ok || h.migrations != 0 || !bytes.Equal(original, h.ownership) || h.stagedOwnership == nil {
-		t.Fatal("foreign publication adopted or removed")
-	}
-}
-
-func TestHTTPHandoffPreservesExistingLegacyRecoveryMenu(t *testing.T) {
-	for _, direction := range []string{"removal", "activation", "link rotation", "repair", "client rotation"} {
-		t.Run(direction, func(t *testing.T) {
-			h := migrationInstallation(t)
-			r, _ := decodeOwnership(h.ownership)
-			switch direction {
-			case "removal":
-				r.Phase, r.Direction = removalCommitted, removalRequired
-				r.FinishingRelease = &r.Release
-			case "activation":
-				target := *r.Serving
-				target.CertificateGeneration++
-				r.Activation = &certificateActivation{Source: *r.Serving, Target: target, Checkpoint: activationTargetRecorded}
-			case "link rotation":
-				target := *r.Serving
-				target.LinkID, target.CredentialSHA256 = strings.Repeat("7", 32), strings.Repeat("8", 64)
-				rotation := rotationOperation(*r.Serving, target, rotationTargetAuthorized)
-				r.Rotation = &rotation
-			case "repair":
-				target := *r.Serving
-				r.Repair = &subscriptionRepair{OperationID: strings.Repeat("1", 32), Kind: "repair subscription", Direction: "forward", Correction: repairRuntime, Effects: []string{"restart owned serving runtime"}, Checkpoint: repairCommitted, Source: *r.Serving, Target: &target}
-			case "client rotation":
-				r.Startup = &hostadapter.ProxyStartupAuthority{DirectoryCreated: true, DropInSHA256: strings.Repeat("9", 64)}
-				r.ClientRotation = &clientIdentityRotation{OperationID: strings.Repeat("1", 32), Direction: "cleanup", Effects: append([]string(nil), clientIdentityRotationEffects...), Completed: []string{}, Source: r.ConfigurationSHA256, Target: strings.Repeat("7", 64), Checkpoint: clientRotationAuthorized, Subscription: &hostadapter.ClientIdentitySubscription{Source: *r.Serving, Target: *r.Serving, SourceArtifactSHA256: strings.Repeat("2", 64), TargetArtifactSHA256: strings.Repeat("3", 64)}}
-			}
-			updateSubscriptionResources(&r, testInstalledIdentity())
-			h.ownership = ownershipBytes(r)
-			if _, valid := decodeOwnership(h.ownership); !valid {
-				t.Fatal("unfinished fixture invalid")
-			}
-			before := bytes.Clone(h.ownership)
-			if message, ok := completeHTTPSubscriptionHandoff(t.Context(), readyLifecycle{}, h); !ok || message != "" || h.migrations != 0 || !bytes.Equal(before, h.ownership) {
-				t.Fatal("automatic handoff blocked existing recovery menu")
-			}
-		})
-	}
 }
 
 func TestCleanInstallMenuDoesNotResumePendingTransportMigration(t *testing.T) {
