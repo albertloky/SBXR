@@ -164,7 +164,7 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 	return review
 }
 
-func (module *installedInterface) inspectOwnedRemoval(ctx context.Context, record ownershipRecord, body []byte) hostadapter.RemovalInspection {
+func (module *installedInterface) inspectOwnedRemoval(ctx context.Context, record ownershipRecord, body []byte, retained ...*hostadapter.PackageLocks) hostadapter.RemovalInspection {
 	if record.HTTPSRetirement != nil {
 		host, ok := module.host.(interface {
 			InspectHTTPSRetirement(hostadapter.HTTPSRetirementAuthority, bool) bool
@@ -175,12 +175,12 @@ func (module *installedInterface) inspectOwnedRemoval(ctx context.Context, recor
 	}
 	if rotation := record.ClientRotation; rotation != nil {
 		if host, ok := module.host.(interface {
-			InspectClientIdentityRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, string, bool) hostadapter.RemovalInspection
+			InspectClientIdentityRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, string, bool, ...*hostadapter.PackageLocks) hostadapter.RemovalInspection
 		}); ok {
-			return host.InspectClientIdentityRemoval(ctx, hostSetupSpec, aptSourceBody, body, rotation.Source, rotation.Target, record.PublicIPv4, rotation.Direction == "forward")
+			return host.InspectClientIdentityRemoval(ctx, hostSetupSpec, aptSourceBody, body, rotation.Source, rotation.Target, record.PublicIPv4, rotation.Direction == "forward", retained...)
 		}
 	}
-	return module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4)
+	return module.host.InspectRemoval(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4, retained...)
 }
 
 func (module *installedInterface) finishClientIdentityRotation(ctx context.Context, authority preparedReview, progress ProgressReporter) Result {

@@ -299,14 +299,14 @@ func (adapter Adapter) InspectClientIdentityRotation(source, target, canonical s
 
 // Removal accepts either recorded canonical digest after revocation, including
 // a target rename whose following Ownership Record checkpoint did not finish.
-func (adapter Adapter) InspectClientIdentityRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, source, target, ipv4 string, forward bool) RemovalInspection {
+func (adapter Adapter) InspectClientIdentityRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, source, target, ipv4 string, forward bool, retained ...*PackageLocks) RemovalInspection {
 	selected := source
 	if forward {
 		if _, err := adapter.ReadConfiguration(ctx, spec, target); err == nil {
 			selected = target
 		}
 	}
-	facts := adapter.InspectRemoval(ctx, spec, sourceBody, ownership, selected, ipv4)
+	facts := adapter.InspectRemoval(ctx, spec, sourceBody, ownership, selected, ipv4, retained...)
 	if forward && !adapter.safelyAbsent(ClientIdentityConfigurationNextPath) {
 		group := adapter.command(ctx, "getent", "group", "sing-box")
 		gid, ok := groupID(group.Fact)

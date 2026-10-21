@@ -657,7 +657,7 @@ func (host *controlledHost) InspectActivation(ctx context.Context, spec hostadap
 	return hostadapter.ActivationInspection{RunningInspection: host.InspectRunning(ctx, spec, source, ownership, digest, publicIPv4), DestinationCompatible: true, ListenerAvailable: !host.listener}
 }
 
-func (host *controlledHost) InspectRemoval(ctx context.Context, spec hostadapter.SetupSpec, source, ownership []byte, digest, publicIPv4 string) hostadapter.RemovalInspection {
+func (host *controlledHost) InspectRemoval(ctx context.Context, spec hostadapter.SetupSpec, source, ownership []byte, digest, publicIPv4 string, _ ...*hostadapter.PackageLocks) hostadapter.RemovalInspection {
 	if host.removal != nil {
 		return *host.removal
 	}

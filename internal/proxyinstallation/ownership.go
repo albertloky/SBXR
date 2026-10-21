@@ -479,7 +479,7 @@ func validOwnership(record ownershipRecord) bool {
 	if record.Renewal != nil && (record.Serving == nil || record.Serving.HTTP || !record.Renewal.Valid() || record.Renewal.PublicIPv4 != record.PublicIPv4 || record.Phase != runningPhase && record.Phase != removalCommitted) {
 		return false
 	}
-	if record.Activation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || record.Direction != noDirection || record.Phase != runningPhase || record.Activation.Checkpoint == activationTargetRecorded && record.Activation.Source != *record.Serving || record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target != *record.Serving || !validCertificateActivation(*record.Activation)) {
+	if record.Activation != nil && (record.Schema != 2 || record.Serving == nil || record.Renewal == nil || !(record.Direction == noDirection && record.Phase == runningPhase || record.Direction == removalRequired && record.Phase == removalCommitted) || record.Activation.Checkpoint == activationTargetRecorded && record.Activation.Source != *record.Serving || record.Activation.Checkpoint == activationTargetAccepted && record.Activation.Target != *record.Serving || !validCertificateActivation(*record.Activation)) {
 		return false
 	}
 	if record.Enablement != nil && (record.Schema != 2 || record.Serving != nil || record.Renewal != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validSubscriptionEnablement(*record.Enablement)) {

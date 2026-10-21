@@ -117,7 +117,11 @@ type ActivationInspection struct {
 
 type MutationLock = softwarelifecycle.MutationLockAuthority
 
-type PackageLocks struct{ files []*os.File }
+type PackageLocks struct {
+	files []*os.File
+	root  string
+	held  bool
+}
 
 var ubuntuPackageLocks = []string{"/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock", "/var/lib/apt/lists/lock", "/var/cache/apt/archives/lock"}
 
@@ -130,10 +134,11 @@ func (locks *PackageLocks) Release() {
 		_ = file.Close()
 	}
 	locks.files = nil
+	locks.held = false
 }
 
 func (adapter Adapter) AcquirePackageLocks() (*PackageLocks, bool, error) {
-	locks := &PackageLocks{}
+	locks := &PackageLocks{root: adapter.root}
 	for _, name := range ubuntuPackageLocks {
 		file, err := os.OpenFile(adapter.path(name), os.O_RDWR|syscall.O_NOFOLLOW, 0)
 		if errors.Is(err, os.ErrNotExist) {
@@ -154,7 +159,38 @@ func (adapter Adapter) AcquirePackageLocks() (*PackageLocks, bool, error) {
 		}
 		locks.files = append(locks.files, file)
 	}
+	locks.held = true
 	return locks, false, nil
+}
+
+func (adapter Adapter) retainedPackageLocks(locks *PackageLocks) bool {
+	if locks == nil || !locks.held || locks.root != adapter.root {
+		return false
+	}
+	// POSIX locks are lost if any descriptor for their inode is closed. Inspect
+	// the retained descriptors and path identities without reopening the files.
+	for _, name := range ubuntuPackageLocks {
+		path := adapter.path(name)
+		var retained *os.File
+		for _, file := range locks.files {
+			if file.Name() == path {
+				retained = file
+				break
+			}
+		}
+		current, err := os.Lstat(path)
+		if retained == nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return false
+			}
+			continue
+		}
+		opened, statErr := retained.Stat()
+		if err != nil || statErr != nil || !os.SameFile(current, opened) {
+			return false
+		}
+	}
+	return true
 }
 
 func (adapter Adapter) AcquireMutationLock(name string) (*MutationLock, bool, error) {
@@ -689,7 +725,7 @@ func (adapter Adapter) inspectRunning(ctx context.Context, spec SetupSpec, sourc
 	}
 }
 
-func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string) RemovalInspection {
+func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourceBody, ownership []byte, configurationDigest, publicIPv4 string, retained ...*PackageLocks) RemovalInspection {
 	facts := adapter.inspectRunning(ctx, spec, sourceBody, ownership, configurationDigest, publicIPv4, false)
 	user := adapter.command(ctx, "getent", "passwd", spec.User)
 	group := adapter.command(ctx, "getent", "group", spec.Group)
@@ -732,9 +768,15 @@ func (adapter Adapter) InspectRemoval(ctx context.Context, spec SetupSpec, sourc
 		process := adapter.command(ctx, "pgrep", "-x", spec.PackageName)
 		processExclusive, processObserved = !process.OK && process.Code == 1, process.Observed
 	}
+	packageLocks := false
+	if len(retained) == 0 {
+		packageLocks = adapter.packageLocksAvailable()
+	} else if len(retained) == 1 {
+		packageLocks = adapter.retainedPackageLocks(retained[0])
+	}
 	return RemovalInspection{
 		RunningInspection:    facts,
-		PackageLocks:         observation(adapter.packageLocksAvailable(), true),
+		PackageLocks:         observation(packageLocks, true),
 		ConfigurationEntries: observation(configurationEntries, configurationObserved),
 		StateEntries:         observation(stateEntries, stateObserved),
 		IdentityExclusive:    observation(identityExclusive, identityObserved),

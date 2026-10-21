@@ -178,7 +178,7 @@ type hostInterface interface {
 	Apply(context.Context, hostadapter.OperationInput) hostadapter.OperationResult
 	InspectActivation(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, hostadapter.Destination) hostadapter.ActivationInspection
 	InspectRunning(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string) hostadapter.RunningInspection
-	InspectRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string) hostadapter.RemovalInspection
+	InspectRemoval(context.Context, hostadapter.SetupSpec, []byte, []byte, string, string, ...*hostadapter.PackageLocks) hostadapter.RemovalInspection
 }
 
 type removalLifecycle interface {
@@ -969,7 +969,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			if err != nil || !valid || !bytes.Equal(current, authority.record) {
 				return refused(ProblemDetected, "Prepared Action facts", "Restore the exact reviewed Ownership Record, then review Complete removal again.")
 			}
-			removal := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current)
+			removal := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current, packageLocks)
 			if !removalAccepted(removal) || !reflect.DeepEqual(removal, authority.removal) {
 				return refused(ProblemDetected, "Prepared Action facts", removalCorrection(removal))
 			}
@@ -1004,12 +1004,12 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		}
 		next := ownershipBytes(record)
 		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err != nil {
-			if committed, readErr := module.readOwnership(); readErr == nil {
-				if committedRecord, ok := decodeOwnership(committed); ok && bytes.Equal(committed, next) && committedRecord.Direction == removalRequired && finishingRelease(committedRecord) == authority.release {
-					return module.finishRemoval(ctx, committedRecord, committed, progress, exclusion)
-				}
+			committed, readErr := module.readOwnership()
+			committedRecord, valid := decodeOwnership(committed)
+			if readErr != nil || !valid || !bytes.Equal(committed, next) || committedRecord.Direction != removalRequired || finishingRelease(committedRecord) != authority.release {
+				return refused(authority.status, "Removal commitment", "Review Complete removal again.")
 			}
-			return refused(authority.status, "Removal commitment", "Review Complete removal again.")
+			record, next = committedRecord, committed
 		}
 		report(progress, string(removalCommitted))
 		packageLocks.Release()
@@ -1045,7 +1045,7 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			return refused(ProblemDetected, "Prepared Action facts", "Restore the exact committed Ownership Record, then review Finish removal again.")
 		}
 		if record.Package != "" && record.RemovalCheckpoint == 0 {
-			facts := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current)
+			facts := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current, packageLocks)
 			if !removalAccepted(facts) {
 				return refused(RemovalIncomplete, "Committed removal facts", removalCorrection(facts))
 			}
@@ -1213,13 +1213,12 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 		record.Phase = step.phase
 		next := ownershipBytes(record)
 		if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-			if current, readErr := module.readOwnership(); readErr == nil {
-				body = current
-				if decoded, ok := decodeOwnership(current); ok {
-					record = decoded
-				}
+			current, readErr := module.readOwnership()
+			decoded, valid := decodeOwnership(current)
+			if readErr != nil || !valid || !bytes.Equal(current, body) && !bytes.Equal(current, next) || module.host.SyncOwnership(hostSetupSpec.OwnershipPath, current) != nil {
+				return refused(ProblemDetected, "Setup checkpoint authority", "Restore the exact durable Ownership Record, then review again.")
 			}
-			return module.cleanup(ctx, record, body, progress)
+			return module.cleanup(ctx, decoded, current, progress)
 		}
 		body = next
 		if ctx.Err() != nil {
@@ -1236,12 +1235,18 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 	record.Phase, record.Direction = activationCommitted, setupRequired
 	next := ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
-		if current, readErr := module.readOwnership(); readErr == nil {
-			if currentRecord, ok := decodeOwnership(current); ok && phaseAtOrAfter(currentRecord.Phase, activationCommitted) {
-				return module.finishSetup(ctx, currentRecord, current, progress)
-			}
+		current, readErr := module.readOwnership()
+		currentRecord, valid := decodeOwnership(current)
+		if readErr != nil || !valid || !bytes.Equal(current, body) && !bytes.Equal(current, next) {
+			return refused(ProblemDetected, "Activation checkpoint authority", "Restore the exact durable Ownership Record, then review again.")
 		}
-		return module.cleanup(ctx, record, body, progress)
+		if bytes.Equal(current, next) {
+			if module.host.SyncOwnership(hostSetupSpec.OwnershipPath, current) != nil {
+				return interruptedSetup()
+			}
+			return module.finishSetup(ctx, currentRecord, current, progress)
+		}
+		return module.cleanup(ctx, currentRecord, current, progress)
 	}
 	report(progress, string(activationCommitted))
 	if ctx.Err() != nil {
@@ -1251,6 +1256,9 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 }
 
 func (module *installedInterface) finishSetup(ctx context.Context, record ownershipRecord, body []byte, progress ProgressReporter) Result {
+	if module.host.SyncOwnership(hostSetupSpec.OwnershipPath, body) != nil {
+		return interruptedSetup()
+	}
 	steps := []struct {
 		operation hostadapter.Operation
 		phase     setupPhase
@@ -1298,6 +1306,9 @@ func (module *installedInterface) finishSetup(ctx context.Context, record owners
 }
 
 func (module *installedInterface) cleanup(ctx context.Context, record ownershipRecord, body []byte, progress ProgressReporter) Result {
+	if _, valid := decodeOwnership(body); !valid || record.Direction != cleanupRequired || !bytes.Equal(body, ownershipBytes(record)) {
+		return refused(ProblemDetected, "Cleanup authority", "Restore the exact cleanup Ownership Record, then review again.")
+	}
 	for index, operation := range []hostadapter.Operation{hostadapter.StopDisableService, hostadapter.UnmaskService, hostadapter.RemovePackageArtifact, hostadapter.RemovePackage, hostadapter.RemoveConfigurationState, hostadapter.RemovePackageIdentity, hostadapter.RemoveAPTSource, hostadapter.RemoveAPTKey} {
 		if record.CleanupCheckpoint > index {
 			continue
