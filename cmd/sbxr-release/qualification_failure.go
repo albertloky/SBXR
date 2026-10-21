@@ -238,7 +238,7 @@ func evaluateStableFailure(facts stableFailureFacts, document []byte) (stableFai
 	if (reason == "prepublication-failure" || reason == "initial-a-public-verification-failure") && aProven {
 		reason = "b-publication-or-verification-failure"
 	}
-	if reason != "prepublication-failure" && reason != "initial-a-public-verification-failure" && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" && !(reason == "v3-finalization-failure" && manifest.Mode == "v3") && reason != "qualification-expired" && reason != "owner-abandoned" {
+	if reason != "prepublication-failure" && reason != "initial-a-public-verification-failure" && reason != "b-publication-or-verification-failure" && reason != "stable-no-update-failure" && !((reason == "v3-finalization-failure" || reason == "v3-publication-or-verification-failure") && manifest.Mode == "v3") && reason != "qualification-expired" && reason != "owner-abandoned" {
 		return refused()
 	}
 	indexes := []int{len(manifest.Releases) - 1}

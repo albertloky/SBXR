@@ -361,7 +361,8 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 		"observed_at": "2026-08-27T01:01:00Z", "preflight_decision": jsonValue(t, string(stableDecision)), "preflight_facts": stableFacts, "prior_decision_sha256": sha256String(string(stableDecision)), "prior_verification_decision": nil, "prior_verification_facts": nil, "schema": qualificationFactsSchema, "stage": "stable-publication",
 	}
 	bindPublicationApprovalFixture(t, publicationFacts)
-	if publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts)); publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
+	publicationDecision, publicationErr := runQualificationCommand(binary, qualificationDocument(t, publicationFacts))
+	if publicationErr != nil || jsonObject(t, publicationDecision)["outcome"] != "actions-required" {
 		t.Fatalf("V3 stable publication = %s, %v", publicationDecision, publicationErr)
 	}
 	stableFailure := map[string]any{
@@ -370,6 +371,12 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 		"finalization_run":  map[string]any{"created_at": "2026-08-27T01:00:00Z", "head_sha": strings.Repeat("d", 40), "id": "456", "path": ".github/workflows/stable.yml", "url": "https://github.com/albertloky/SBXR/actions/runs/456"},
 		"manifest_attested": true, "observed_at": "2026-08-27T01:01:00Z", "operation": "publish", "publication_stage": "v3-finalization-failure", "schema": qualificationFactsSchema, "signed_manifest": jsonValue(t, string(manifest)), "stage": "stable-failure-finalization",
 		"observations": []any{map[string]any{"assets": release["assets"], "body": recordBody, "commit": release["commit"], "draft": false, "immutable": true, "prerelease": false, "publicly_verified": true, "release_id": release["release_id"], "release_identity": release["release_identity"], "release_present": true, "sequence": release["sequence"], "tag": release["tag"], "tag_commit": release["commit"]}},
+	}
+	publicationFailure := jsonObject(t, []byte(qualificationDocument(t, stableFailure)))
+	publicationFailure["publication_stage"] = jsonObject(t, publicationDecision)["actions"].([]any)[0].(map[string]any)["failure_reason"]
+	publicationFailure["observations"].([]any)[0].(map[string]any)["publicly_verified"] = false
+	if decision, err := runQualificationCommand(binary, qualificationDocument(t, publicationFailure)); err != nil || jsonObject(t, decision)["outcome"] != "withdraw" || len(jsonObject(t, decision)["actions"].([]any)) != 1 {
+		t.Fatalf("publication reason refused by failure finalizer: %s %v", decision, err)
 	}
 	failureDecision, failureErr := runQualificationCommand(binary, qualificationDocument(t, stableFailure))
 	if failureErr != nil || jsonObject(t, failureDecision)["reason"] != "v3-finalization-failure" || len(jsonObject(t, failureDecision)["actions"].([]any)) != 1 {
