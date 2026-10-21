@@ -236,21 +236,20 @@ func TestCandidateFailureCleanupFinishesOnlyThroughThePublicInterface(t *testing
 			t.Errorf("packaged-live failure cleanup omitted %q", required)
 		}
 	}
-	for _, required := range []string{`cleanup_mode='${{ inputs.mode }}'`, `if test "$cleanup_mode" = v3`, `if test -d /var/lib/sbxr; then find /var/lib/sbxr -depth -delete; fi`} {
-		if !strings.Contains(workflow, required) {
-			t.Errorf("candidate mode-specific failure cleanup omitted %q", required)
+	cleanupStart := strings.Index(workflow, "cleanup_v3_transport() {")
+	if cleanupStart < 0 {
+		t.Fatal("candidate transport failure cleanup missing")
+	}
+	cleanupEnd := strings.Index(workflow[cleanupStart:], "trap cleanup_v3_transport EXIT")
+	if cleanupEnd < 0 {
+		t.Fatal("candidate transport failure cleanup is not installed")
+	}
+	failureCleanup := workflow[cleanupStart : cleanupStart+cleanupEnd]
+	for _, required := range []string{`status=$?`, `v3-qualification-transport.sh down`, `status=1`, `exit "$status"`} {
+		if !strings.Contains(failureCleanup, required) {
+			t.Errorf("candidate transport cleanup omitted %q", required)
 		}
 	}
-	cleanupCall := strings.Index(workflow, "remote-failure-cleanup")
-	if cleanupCall < 0 {
-		t.Fatal("candidate failure cleanup does not call the packaged public cleanup mode")
-	}
-	transportCleanup := strings.Index(workflow[cleanupCall:], "hosts.original")
-	cleanupResult := strings.Index(workflow[cleanupCall:], `test "$proxy_cleanup_status" -eq 0`)
-	if transportCleanup < 0 || cleanupResult < 0 || transportCleanup >= cleanupResult {
-		t.Fatal("failure cleanup does not preserve the public cleanup result through qualification transport cleanup")
-	}
-	failureCleanup := workflow[cleanupCall : cleanupCall+cleanupResult]
 	for _, forbidden := range []string{"rm -f /usr/local/bin/sbxr", "find /var/lib/sbxr -depth -delete"} {
 		if strings.Contains(failureCleanup, forbidden) {
 			t.Fatalf("failure cleanup bypasses public ownership with %q", forbidden)
