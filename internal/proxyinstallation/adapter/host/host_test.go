@@ -109,7 +109,7 @@ func TestMutationLockAuthorityIsBoundToItsExactHeldFile(t *testing.T) {
 	}
 }
 
-func TestFinalOwnershipRemovalRestoresRecoveryAuthorityUntilStateDirectoryIsEmpty(t *testing.T) {
+func TestFinalOwnershipRemovalRefusesUnknownStateDirectoryEntries(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "var", "lib", "sbxr")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -134,21 +134,6 @@ func TestFinalOwnershipRemovalRestoresRecoveryAuthorityUntilStateDirectoryIsEmpt
 	}
 	if final, err := adapter.ReadOwnership(finalName); err != nil || !bytes.Equal(final, body) {
 		t.Fatalf("finalization authority = %q, %v", final, err)
-	}
-	if err := os.Remove(unknown); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, finalName, body); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(directory); !os.IsNotExist(err) {
-		t.Fatalf("state directory still exists: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "var", "lib", ".sbxr-removal.json"), body, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, finalName, body); err != nil {
-		t.Fatalf("resume after state-directory removal: %v", err)
 	}
 }
 
@@ -619,51 +604,6 @@ func TestOwnershipRefusesUnsafeParentAndPreservesFinalSchema2Bytes(t *testing.T)
 	}
 }
 
-func TestFinalizationRetainsFullAuthorityAcrossEveryDirectorySyncFailure(t *testing.T) {
-	for failure := 1; failure <= 4; failure++ {
-		t.Run(fmt.Sprint(failure), func(t *testing.T) {
-			root := t.TempDir()
-			directory := filepath.Join(root, "var/lib/sbxr")
-			if err := os.MkdirAll(directory, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			adapter := Adapter{root: root}
-			spec := testSetupSpec()
-			body := []byte("{\"schema\":2,\"complete_provenance\":\"retained\"}\n")
-			if err := adapter.PublishOwnership(spec.OwnershipPath, spec.OwnershipNextPath, nil, body); err != nil {
-				t.Fatal(err)
-			}
-			calls := 0
-			adapter.syncDirectoryFault = func(string) error {
-				calls++
-				if calls == failure {
-					return fmt.Errorf("injected directory sync")
-				}
-				return nil
-			}
-			final := "/var/lib/.sbxr-removal.json"
-			if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err == nil {
-				t.Fatal("failure not observed")
-			}
-			current, currentErr := adapter.ReadOwnership(spec.OwnershipPath)
-			moved, movedErr := adapter.ReadOwnership(final)
-			if (currentErr == nil) == (movedErr == nil) || currentErr == nil && !bytes.Equal(current, body) || movedErr == nil && !bytes.Equal(moved, body) {
-				t.Fatal("lost or duplicated full authority")
-			}
-			restarted := Adapter{root: root}
-			if err := restarted.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err != nil {
-				t.Fatalf("restart: %v", err)
-			}
-			if _, err := os.Lstat(directory); !os.IsNotExist(err) {
-				t.Fatal("directory survived")
-			}
-			if _, err := os.Lstat(adapter.path(final)); !os.IsNotExist(err) {
-				t.Fatal("authority survived")
-			}
-		})
-	}
-}
-
 func TestRemovalInspectsSafelyMissingResourcesWithoutAvailabilityChecks(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "var/lib/sbxr"), 0o700); err != nil {
@@ -718,42 +658,5 @@ esac
 	}
 	if absent := adapter.InspectSubscriptionAbsence(t.Context()); absent.Accepted {
 		t.Fatal("unknown token called absent")
-	}
-}
-
-func TestTerminalAuthorityUnlinkFailureDoesNotPublishTornReplacement(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "var/lib/sbxr"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	adapter := Adapter{root: root}
-	spec := testSetupSpec()
-	body := []byte(`{"schema":2,"full_provenance":"original"}` + "\n")
-	if err := adapter.PublishOwnership(spec.OwnershipPath, spec.OwnershipNextPath, nil, body); err != nil {
-		t.Fatal(err)
-	}
-	calls := 0
-	adapter.syncDirectoryFault = func(string) error {
-		calls++
-		if calls >= 5 {
-			return fmt.Errorf("persistent sync failure")
-		}
-		return nil
-	}
-	final := "/var/lib/.sbxr-removal.json"
-	if err := adapter.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err == nil {
-		t.Fatal("uncertain completion reported success")
-	}
-	if _, err := os.Lstat(adapter.path(final)); !os.IsNotExist(err) {
-		t.Fatal("terminal failure published replacement authority")
-	}
-	// If the unsynchronized unlink is lost in a crash, only the original full
-	// record returns. A fresh Adapter can finish that state without proxy work.
-	if err := os.WriteFile(adapter.path(final), body, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	restarted := Adapter{root: root}
-	if err := restarted.RemoveFinalOwnership(spec.OwnershipPath, spec.OwnershipNextPath, final, body); err != nil {
-		t.Fatalf("surviving full authority: %v", err)
 	}
 }

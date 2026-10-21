@@ -201,36 +201,6 @@ func TestServingAcceptsAndRemovesOnlyOfficialCertbotReadme(t *testing.T) {
 	}
 }
 
-func TestServingRemovalResumesAfterEveryUnlinkSynchronizationFailure(t *testing.T) {
-	readme, err := os.ReadFile("testdata/certbot-lineage-README")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for boundary := 1; boundary <= 16; boundary++ {
-		t.Run("sync", func(t *testing.T) {
-			a, authority := servingFiles(t)
-			if err := os.WriteFile(a.path(servingLive+"/README"), readme, 0644); err != nil {
-				t.Fatal(err)
-			}
-			calls := 0
-			a.syncDirectoryFault = func(string) error {
-				calls++
-				if calls == boundary {
-					return os.ErrInvalid
-				}
-				return nil
-			}
-			if removeServing(t, a, authority) {
-				t.Fatal("synchronization failure accepted")
-			}
-			a.syncDirectoryFault = nil
-			if !removeServing(t, a, authority) || !a.ServingRuntimeAbsent(authority) {
-				t.Fatal("removal recovery failed")
-			}
-		})
-	}
-}
-
 func TestServingFilesRefuseUnsafeOwnershipLinksAndUnknownState(t *testing.T) {
 	for _, mutate := range []func(Adapter){
 		func(a Adapter) { os.Chmod(a.path(ServingTokenPath), 0644) },

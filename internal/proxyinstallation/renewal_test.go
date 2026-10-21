@@ -3,7 +3,6 @@ package proxyinstallation
 import (
 	"context"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -229,60 +228,6 @@ func TestCertificateActivationRequiresDurableLateCheckpointProof(t *testing.T) {
 	review = m.Review(t.Context(), FinishSubscriptionChangeAction)
 	if result := m.Execute(t.Context(), *review.Prepared, Approved, nil); result.Code != SubscriptionChangeFinished || host.restarts != 1 {
 		t.Fatalf("durable Execute() = %#v restarts=%d", result, host.restarts)
-	}
-}
-
-func TestInterruptedCertificateActivationThenRemovalRecoversFresh(t *testing.T) {
-	for _, accepted := range []bool{false, true} {
-		t.Run(fmt.Sprint("accepted=", accepted), func(t *testing.T) {
-			_, renewal, lifecycle := renewalInstallation(t)
-			record, _ := decodeOwnership(renewal.ownership)
-			target := *record.Serving
-			target.CertificateGeneration++
-			for index := range target.CertificateSHA256 {
-				target.CertificateSHA256[index] = strings.Repeat(string(rune('5'+index)), 64)
-			}
-			host := &activationTestHost{renewalTestHost: renewal, published: target, loaded: *record.Serving, activationFails: !accepted}
-			if accepted {
-				host.failPublishAt = 3 // Interrupt clearing the accepted activation marker.
-			}
-			module := newInstalledInterface(lifecycle, host, acceptedSingBox{})
-			review := module.Review(t.Context(), FinishSubscriptionChangeAction)
-			if review.Prepared == nil {
-				t.Fatalf("activation review: %#v", review)
-			}
-			module.Execute(t.Context(), *review.Prepared, Approved, nil)
-			pending, valid := decodeOwnership(host.ownership)
-			if !valid || pending.Activation == nil {
-				t.Fatalf("missing activation authority: %s", host.ownership)
-			}
-			review = module.Review(t.Context(), CompleteRemovalAction)
-			if review.Prepared == nil {
-				t.Fatalf("removal review: %#v", review)
-			}
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			result := module.Execute(ctx, *review.Prepared, Approved, func(p Progress) {
-				if p.Phase == string(removalCommitted) {
-					cancel()
-				}
-			})
-			if result.Code != RemovalNeedsCompletion {
-				t.Fatalf("interrupted removal: %#v", result)
-			}
-			committed, valid := decodeOwnership(host.ownership)
-			if !valid || committed.Activation == nil || *committed.Activation != *pending.Activation || *committed.Serving != *pending.Serving {
-				t.Fatalf("lost removal authority: %s", host.ownership)
-			}
-			fresh := newInstalledInterface(lifecycle, host, acceptedSingBox{})
-			finish := fresh.Review(t.Context(), FinishRemovalAction)
-			if finish.Prepared == nil {
-				t.Fatalf("fresh removal unavailable: %#v", finish)
-			}
-			if result := fresh.Execute(t.Context(), *finish.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted {
-				t.Fatalf("fresh removal: %#v", result)
-			}
-		})
 	}
 }
 

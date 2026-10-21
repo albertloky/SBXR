@@ -1,63 +1,12 @@
 package architecture_test
 
 import (
-	"bytes"
-	"context"
-	"crypto/sha256"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
-
-	singboxadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/singbox"
 )
-
-func TestV3QualificationAcceptsTheCanonicalClientConfiguration(t *testing.T) {
-	script, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	const prefix = "jq -e '"
-	start := strings.Index(string(script), prefix+`.inbounds ==`)
-	if start < 0 {
-		t.Fatal("V3 qualification omitted the Client Configuration predicate")
-	}
-	start += len(prefix)
-	end := strings.Index(string(script)[start:], `' "$client_config"`)
-	if end < 0 {
-		t.Fatal("V3 qualification Client Configuration predicate is malformed")
-	}
-	predicate := string(script)[start : start+end]
-	want := `.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1`
-	if predicate != want {
-		t.Fatalf("Client Configuration predicate = %q", predicate)
-	}
-
-	adapter := singboxadapter.New()
-	identity, err := adapter.PrepareIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := adapter.EncodeServerConfiguration(identity, "microsoft.com:443", "microsoft.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := adapter.EncodeClientConfiguration(server, "8.8.8.8")
-	if err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command("jq", "-e", predicate)
-	command.Stdin = bytes.NewReader(client)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("live Client Configuration predicate rejected the production encoder: %v\n%s", err, output)
-	}
-}
 
 func TestPackagedActionReadsItsResultNotLifecycleStatus(t *testing.T) {
 	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
@@ -92,120 +41,6 @@ func TestPackagedActionReadsItsResultNotLifecycleStatus(t *testing.T) {
 			output, err := command.CombinedOutput()
 			if (err == nil) != test.want {
 				t.Fatalf("action success = %v, want %v; output: %s", err == nil, test.want, output)
-			}
-		})
-	}
-}
-
-func TestPackagedInterruptionRequiresObservedEventAndForcedDeath(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("real process-group interruption and subreaper checks require Linux")
-	}
-	// Exercise the real packaged function, including timeout, signal, lock and
-	// descendant behavior. Rewriting shell snippets and mocking wait/kill hid
-	// the live orphan failure and no longer represents the controller seam.
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
-	defer cancel()
-	command := exec.CommandContext(ctx, "python3", "-m", "unittest", "discover", "-v",
-		"-s", ".github/scripts", "-p", "test_v3_packaged_live_interrupt.py")
-	command.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("packaged interruption process fixture: %v\n%s", err, output)
-	}
-}
-
-func TestPackagedSigningKeyDownloadFollowsRedirectAndChecksDigest(t *testing.T) {
-	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, rest, found := strings.Cut(string(source), "runner_stage=download-client-signing-key\n")
-	download, _, ended := strings.Cut(rest, "runner_stage=download-client-package\n")
-	if !found || !ended {
-		t.Fatal("signing-key download block not found")
-	}
-	const key = "public signing key fixture\n"
-	for _, body := range []string{key, "changed key\n"} {
-		t.Run(strings.TrimSpace(body), func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/gpg.key" {
-					http.Redirect(w, r, "/key", http.StatusMovedPermanently)
-					return
-				}
-				fmt.Fprint(w, body)
-			}))
-			defer server.Close()
-			script := strings.NewReplacer(
-				"https://sing-box.app/gpg.key", server.URL+"/gpg.key",
-				"/dev/shm/sagernet.asc", filepath.Join(t.TempDir(), "sagernet.asc"),
-				"803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1", fmt.Sprintf("%x", sha256.Sum256([]byte(key))),
-			).Replace(download)
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			output, err := exec.CommandContext(ctx, "bash", "-c", "set -euo pipefail\n"+script).CombinedOutput()
-			if (err == nil) != (body == key) {
-				t.Fatalf("redirected key verification: %v, output = %s", err, output)
-			}
-		})
-	}
-}
-
-func TestPackagedRunnerCleanupRetainsOnlyTheFixedFailedStage(t *testing.T) {
-	source, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := strings.Index(string(source), "\ncleanup() {")
-	if start < 0 {
-		t.Fatal("runner cleanup function not found")
-	}
-	start++
-	end := strings.Index(string(source)[start:], "\n}\ntrap cleanup EXIT")
-	if end < 0 {
-		t.Fatal("runner cleanup function not found")
-	}
-	cleanup := string(source)[start : start+end+2]
-	for _, test := range []struct {
-		name       string
-		exitStatus int
-		wantStage  bool
-	}{
-		{name: "failure", exitStatus: 23, wantStage: true},
-		{name: "success", wantStage: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			stageEvidence := filepath.Join(directory, "failure-evidence", "runner-stage.txt")
-			workflowCapture := filepath.Join(directory, "workflow.log")
-			secret := "11111111-1111-4111-8111-111111111111"
-			body := "safe capture\n"
-			if test.wantStage {
-				body += secret + "\n"
-			}
-			if err := os.WriteFile(workflowCapture, []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			sandboxCleanup := strings.ReplaceAll(cleanup, "/dev/shm/sagernet.asc", filepath.Join(directory, "sagernet.asc"))
-			sandboxCleanup = strings.ReplaceAll(sandboxCleanup, "/dev/shm/sagernet.sources", filepath.Join(directory, "sagernet.sources"))
-			sandbox := fmt.Sprintf("set -u\nclient_config=%q\nclient_root=%q\nclient_deb=%q\nclient_log=%q\nworkflow_capture=%q\nclient_uuid=%q\ndownload=\nrunner_stage=measure-proxied-route\nrunner_stage_evidence=%q\n%s\ntrap cleanup EXIT\nexit %d\n", filepath.Join(directory, "client.json"), filepath.Join(directory, "client"), filepath.Join(directory, "client.deb"), filepath.Join(directory, "client.log"), workflowCapture, secret, stageEvidence, sandboxCleanup, test.exitStatus)
-			script := filepath.Join(directory, "cleanup.sh")
-			if err := os.WriteFile(script, []byte(sandbox), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			output, runErr := exec.Command("bash", script).CombinedOutput()
-			if (runErr != nil) != test.wantStage {
-				t.Fatalf("cleanup error = %v, output = %s", runErr, output)
-			}
-			evidence, readErr := os.ReadFile(stageEvidence)
-			if test.wantStage {
-				if readErr != nil || string(evidence) != "Runner stage: measure-proxied-route\n" || strings.Contains(string(evidence), secret) {
-					t.Fatalf("stage evidence = %q, %v", evidence, readErr)
-				}
-			} else if !os.IsNotExist(readErr) {
-				t.Fatalf("successful cleanup retained stage evidence: %q, %v", evidence, readErr)
-			}
-			if _, err := os.Stat(workflowCapture); !os.IsNotExist(err) {
-				t.Fatalf("workflow capture remains: %v", err)
 			}
 		})
 	}

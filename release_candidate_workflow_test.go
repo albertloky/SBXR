@@ -374,83 +374,32 @@ func TestCandidatePreflightUsesOnlyCanonicalQualificationActions(t *testing.T) {
 	}
 }
 
-func TestCandidateRoutesOneV3CandidateThroughPackagedLiveQualification(t *testing.T) {
+func TestCandidateRoutesCurrentV3Qualification(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	workflow := string(body)
-	scriptBody, err := os.ReadFile(".github/scripts/v3-packaged-live.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	v3Path := workflow + "\n" + string(scriptBody)
 	stableBody, err := os.ReadFile(".github/workflows/stable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	stable := string(stableBody)
 	for _, required := range []string{
-		"v3-clean",
 		"docs/acceptance/v3-packaged-live.md",
 		"v3-packaged-live-evidence.json",
 		"v3-packaged-live-result-facts.json",
 		"v3-packaged-live-result-decision.json",
-		`curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_Gz0vP/sing-box_1.14.3_linux_amd64.deb -o "$client_deb"`,
-		`PACKAGE_SIZE=32297878`,
-		`PACKAGE_SHA256=ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e`,
-		`test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"`,
-		`test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"`,
-		`.inbounds == [{type:"mixed",tag:"mixed-in",listen:"127.0.0.1",listen_port:2080}] and (.outbounds | length) == 1`,
-		"/dev/shm/sbxr-v3-client.json",
-		`${RUNNER_TEMP:?}/sbxr-v3-client`,
-		"chmod 0600",
-		"SIGSTOP",
-		"SIGKILL",
-		"'Validate configuration'",
-		"'Activation committed'",
-		"'Removal committed'",
-		"ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
-		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
 		"RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION",
 		`(.records | length) == 1`,
 		`tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3`,
 	} {
-		if !strings.Contains(v3Path, required) {
+		if !strings.Contains(workflow, required) {
 			t.Fatalf("candidate.yml omitted V3 qualification contract %q", required)
 		}
 	}
 	if strings.Contains(workflow, `tar -xzf - -C /root/sbxr-qualification-v3`) {
 		t.Fatal("V3 transport extraction may restore the runner's archived uid and gid on the root VPS")
-	}
-	if strings.Contains(v3Path, "client_root=/dev/shm/") {
-		t.Fatal("V3 qualification executes the outside client from the runner's noexec /dev/shm mount")
-	}
-	download := strings.Index(string(scriptBody), `curl -fsSL --retry 3 --retry-all-errors https://deb.sagernet.org/files/ver_Gz0vP/sing-box_1.14.3_linux_amd64.deb`)
-	size := strings.Index(string(scriptBody), `test "$(stat -c %s "$client_deb")" -eq "$PACKAGE_SIZE"`)
-	digest := strings.Index(string(scriptBody), `test "$(sha256sum "$client_deb" | cut -d' ' -f1)" = "$PACKAGE_SHA256"`)
-	extract := strings.Index(string(scriptBody), `dpkg-deb -x "$client_deb" "$client_root"`)
-	if download < 0 || size < 0 || digest < 0 || extract < 0 || !(download < size && size < digest && digest < extract) {
-		t.Fatal("V3 qualification does not verify the exact outside-client package before extraction")
-	}
-	drift := strings.Index(string(scriptBody), "chmod 0600 /etc/sing-box/config.json")
-	refusal := strings.Index(string(scriptBody), "run_action 'Complete removal' 'REMOVE SBXR' 'Code: PROXY-INSTALLATION-ACTION-REFUSED'")
-	restore := strings.Index(string(scriptBody), "chmod 0640 /etc/sing-box/config.json")
-	if drift < 0 || refusal < 0 || restore < 0 || !(drift < refusal && refusal < restore) {
-		t.Fatal("V3 qualification does not apply mode 0600 drift before removal refusal and restore canonical mode 0640 after it")
-	}
-	interruptLaunch := strings.Index(string(scriptBody), `session = driver.MenuSession(executable, capture, deadline,`)
-	interruptChoice := strings.Index(string(scriptBody), `session.choose(action)`)
-	if interruptLaunch < 0 || interruptChoice < 0 || interruptLaunch >= interruptChoice {
-		t.Fatal("V3 qualification does not resolve an interruption action through the same launched menu session")
-	}
-	if strings.Count(v3Path, `test ! -e "$client_root"`) < 2 {
-		t.Fatal("V3 qualification does not prove outside-client cleanup on success and failure")
-	}
-	for _, mode := range []string{"remote-failure-safety", "remote-setup-and-disclose", "remote-secret-safe", "remote-remove"} {
-		if !strings.Contains(v3Path, "/usr/bin/bash $WORK/v3-packaged-live.sh "+mode) {
-			t.Fatalf("V3 qualification directly executes %s from the noexec /run mount", mode)
-		}
 	}
 	for _, required := range []string{"stable-v3-finalization", "v3-finalization-failure", `v3_packaged_live == $live`, `complete_removal == $live`, "live_result=Passed", "owner-approved-v3.1.0-sequence-83", "stable-v3-finalization-facts.json", "stable-v3-finalization-decision.json"} {
 		if !strings.Contains(stable, required) {

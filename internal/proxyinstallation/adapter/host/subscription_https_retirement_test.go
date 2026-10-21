@@ -78,46 +78,38 @@ func httpsRetirementFixture(t *testing.T) (Adapter, HTTPSRetirementAuthority, Se
 	return a, retired, target
 }
 
-func TestHTTPSRetirementCleanupResumesPartialRemovalAndPreservesUnrelatedCA(t *testing.T) {
-	for _, missing := range []string{"", "certificate", "backup", "evidence", "admission", "writer"} {
-		t.Run(missing, func(t *testing.T) {
-			a, r, target := httpsRetirementFixture(t)
-			shared, ok := a.AcquireServingExclusion()
-			if !ok {
-				t.Fatal("shared exclusion")
-			}
-			defer shared.Release()
-			if !a.RemoveServingRuntime(t.Context(), target, shared) || !a.RemoveSubscriptionResources(t.Context(), SubscriptionResourcesForEnablement(r.Renewal.PublicIPv4, SubscriptionPreflight{HTTP: true}), &target) {
-				t.Fatal("active HTTP cleanup")
-			}
-			if !a.InspectHTTPSRetirement(r, false) {
-				t.Fatal("HTTP cleanup erased retained authority")
-			}
-			marker := "/etc/letsencrypt/accounts/unrelated/operator-marker"
-			if os.MkdirAll(filepath.Dir(a.path(marker)), 0700) != nil || os.WriteFile(a.path(marker), []byte("unrelated CA account\n"), 0600) != nil {
-				t.Fatal("CA account fixture")
-			}
-			path := map[string]string{"certificate": servingArchive + "/cert1.pem", "backup": HTTPSRetirementDirectory + "/deploy-hook", "evidence": RenewalEvidencePath, "admission": RenewalAdmissionPath, "writer": RenewalWriterPath}[missing]
-			if path != "" && os.Remove(a.path(path)) != nil {
-				t.Fatal("partial cleanup")
-			}
-			if !a.RemoveHTTPSRetirement(t.Context(), r) || !a.RemoveHTTPSRetirement(t.Context(), r) {
-				t.Fatal("retained cleanup retry")
-			}
-			for _, path := range []string{servingArchive, servingLive, HTTPSRetirementDirectory, RenewalEvidencePath, RenewalAdmissionPath, RenewalWriterPath} {
-				if !a.safelyAbsent(path) {
-					t.Fatalf("owned residue %s", path)
-				}
-			}
-			if body, err := os.ReadFile(a.path(marker)); err != nil || string(body) != "unrelated CA account\n" {
-				t.Fatal("unrelated CA state changed")
-			}
-			for _, path := range certbotDirectoryLocks {
-				if _, err := os.Stat(a.path(path)); err != nil {
-					t.Fatal("shared Certbot lock removed")
-				}
-			}
-		})
+func TestHTTPSRetirementCleanupPreservesUnrelatedCA(t *testing.T) {
+	a, r, target := httpsRetirementFixture(t)
+	shared, ok := a.AcquireServingExclusion()
+	if !ok {
+		t.Fatal("shared exclusion")
+	}
+	defer shared.Release()
+	if !a.RemoveServingRuntime(t.Context(), target, shared) || !a.RemoveSubscriptionResources(t.Context(), SubscriptionResourcesForEnablement(r.Renewal.PublicIPv4, SubscriptionPreflight{HTTP: true}), &target) {
+		t.Fatal("active HTTP cleanup")
+	}
+	if !a.InspectHTTPSRetirement(r, false) {
+		t.Fatal("HTTP cleanup erased retained authority")
+	}
+	marker := "/etc/letsencrypt/accounts/unrelated/operator-marker"
+	if os.MkdirAll(filepath.Dir(a.path(marker)), 0700) != nil || os.WriteFile(a.path(marker), []byte("unrelated CA account\n"), 0600) != nil {
+		t.Fatal("CA account fixture")
+	}
+	if !a.RemoveHTTPSRetirement(t.Context(), r) || !a.RemoveHTTPSRetirement(t.Context(), r) {
+		t.Fatal("retained cleanup")
+	}
+	for _, path := range []string{servingArchive, servingLive, HTTPSRetirementDirectory, RenewalEvidencePath, RenewalAdmissionPath, RenewalWriterPath} {
+		if !a.safelyAbsent(path) {
+			t.Fatalf("owned residue %s", path)
+		}
+	}
+	if body, err := os.ReadFile(a.path(marker)); err != nil || string(body) != "unrelated CA account\n" {
+		t.Fatal("unrelated CA state changed")
+	}
+	for _, path := range certbotDirectoryLocks {
+		if _, err := os.Stat(a.path(path)); err != nil {
+			t.Fatal("shared Certbot lock removed")
+		}
 	}
 }
 

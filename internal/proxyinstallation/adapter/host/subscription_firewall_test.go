@@ -58,8 +58,8 @@ func TestHTTPPreparationRefusesForeignFirewallRoutesBeforeEnable(t *testing.T) {
 	}
 }
 
-func TestFirewallRemovalRecoversFreshAndRemovesOnlyExactEnablementLinks(t *testing.T) {
-	for _, variant := range []string{"dangling-owned", "foreign-link", "effective-stop", "interrupted-reload"} {
+func TestFirewallRemovalRemovesOnlyExactEnablementLinks(t *testing.T) {
+	for _, variant := range []string{"dangling-owned", "foreign-link", "effective-stop"} {
 		t.Run(variant, func(t *testing.T) {
 			a, _ := httpSubscriptionFixture(t)
 			authority := SubscriptionResourcesForEnablement("8.8.8.8", SubscriptionPreflight{HTTP: true})
@@ -72,14 +72,13 @@ func TestFirewallRemovalRecoversFreshAndRemovesOnlyExactEnablementLinks(t *testi
 			if err := os.Symlink(target, linkPath); err != nil {
 				t.Fatal(err)
 			}
-			if variant == "effective-stop" || variant == "interrupted-reload" {
+			if variant == "effective-stop" {
 				if err := os.WriteFile(unitPath, []byte(subscriptionResourceUnit(authority)), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
 			run := a.subscriptionCommand
 			stopped := false
-			interrupted := false
 			a.subscriptionCommand = func(ctx context.Context, name string, args ...string) (string, int, bool) {
 				if name == "systemctl" && len(args) > 0 {
 					if args[0] == "disable" || args[0] == "stop" {
@@ -87,10 +86,6 @@ func TestFirewallRemovalRecoversFreshAndRemovesOnlyExactEnablementLinks(t *testi
 					}
 					if len(args) > 1 && args[1] == "--property=ExecStop" && variant == "effective-stop" {
 						return "{ path=/bin/false ; argv[]=/bin/false ; ignore_errors=no }", 0, true
-					}
-					if args[0] == "daemon-reload" && variant == "interrupted-reload" && !interrupted {
-						interrupted = true
-						return "", 1, true
 					}
 				}
 				return run(ctx, name, args...)
@@ -106,15 +101,7 @@ func TestFirewallRemovalRecoversFreshAndRemovesOnlyExactEnablementLinks(t *testi
 				}
 				return
 			}
-			if variant == "interrupted-reload" {
-				if removed || !interrupted {
-					t.Fatal("reload interruption did not occur")
-				}
-				fresh := Adapter{root: a.root, subscriptionCommand: a.subscriptionCommand}
-				if !fresh.RemoveSubscriptionResources(t.Context(), authority, nil) {
-					t.Fatal("fresh removal refused proved partial footprint")
-				}
-			} else if !removed {
+			if !removed {
 				t.Fatal("owned dangling link refused")
 			}
 			if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {

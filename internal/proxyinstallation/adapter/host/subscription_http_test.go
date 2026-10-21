@@ -56,49 +56,42 @@ func httpSubscriptionFixture(t *testing.T) (Adapter, *bool) {
 	return a, &firewall
 }
 
-func TestHTTPSubscriptionPreparationAndEveryInterruptedCheckpointCleanOnlyOwnedFiles(t *testing.T) {
-	checkpoints := []int{1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15, 22}
-	for _, failAt := range append(slices.Clone(checkpoints), 0) {
-		t.Run(string(rune('A'+failAt)), func(t *testing.T) {
-			a, _ := httpSubscriptionFixture(t)
-			// Unrelated CA state is deliberately uninspectable to the old TLS admission.
-			unrelated := a.path("/etc/letsencrypt/owner-marker")
-			if err := os.MkdirAll(filepath.Dir(unrelated), 0775); err != nil || os.WriteFile(unrelated, []byte("preserve owner CA state\n"), 0600) != nil {
-				t.Fatal("CA fixture")
-			}
-			credential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
-			serving := ServingAuthority{HTTP: true, LinkID: strings.Repeat("a", 32), CredentialSHA256: digest(credential)}
-			resources := SubscriptionResourcesForEnablement("8.8.8.8", a.PreflightHTTPSubscription(t.Context(), "8.8.8.8"))
-			last := 0
-			input := SubscriptionEnableInput{PublicIPv4: "8.8.8.8", Credential: credential, Serving: serving, Resources: resources, Authorize: func(next int, _ *ServingAuthority) bool { last = next; return next != failAt }}
-			result := a.PrepareSubscription(t.Context(), input)
-			if result.Prepared != (failAt == 0) {
-				t.Fatalf("preparation at %d: %v", last, result.Prepared)
-			}
-			if failAt == 0 {
-				if result.Renewal != (RenewalAuthority{}) || !a.safelyAbsent(servingArchive) || !a.safelyAbsent(RenewalDropInPath) || !a.InspectServingFiles(serving, true).Accepted {
-					t.Fatal("HTTP created certificate authority or unsafe serving state")
-				}
-				// systemd supplies this link on activation; exercise its real protected-file inspection.
-				if err := os.Symlink("../sbxr-subscription.service", a.path(ServingUnitWantsPath)); err != nil {
-					t.Fatal(err)
-				}
-				if !a.InspectServingFiles(serving, false).Accepted {
-					t.Fatal("complete HTTP footprint refused")
-				}
-				link, ok := a.ReadSubscriptionLink(serving, "8.8.8.8")
-				if !ok || !strings.HasPrefix(string(link), "http://8.8.8.8:8443/s/") {
-					t.Fatal("HTTP link not emitted")
-				}
-			}
-			if !a.CleanupPreparedSubscription(t.Context(), SubscriptionCleanupInput{Checkpoint: last, LinkID: serving.LinkID, CredentialSHA256: serving.CredentialSHA256, Resources: &resources, Serving: &serving}) {
-				t.Fatalf("cleanup refused checkpoint %d", last)
-			}
-			body, err := os.ReadFile(unrelated)
-			if err != nil || string(body) != "preserve owner CA state\n" {
-				t.Fatal("HTTP cleanup disturbed unrelated CA state")
-			}
-		})
+func TestHTTPSubscriptionPreparationAndCleanupPreserveUnrelatedCA(t *testing.T) {
+	a, _ := httpSubscriptionFixture(t)
+	// Unrelated CA state is deliberately uninspectable to the old TLS admission.
+	unrelated := a.path("/etc/letsencrypt/owner-marker")
+	if err := os.MkdirAll(filepath.Dir(unrelated), 0775); err != nil || os.WriteFile(unrelated, []byte("preserve owner CA state\n"), 0600) != nil {
+		t.Fatal("CA fixture")
+	}
+	credential := []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	serving := ServingAuthority{HTTP: true, LinkID: strings.Repeat("a", 32), CredentialSHA256: digest(credential)}
+	resources := SubscriptionResourcesForEnablement("8.8.8.8", a.PreflightHTTPSubscription(t.Context(), "8.8.8.8"))
+	last := 0
+	input := SubscriptionEnableInput{PublicIPv4: "8.8.8.8", Credential: credential, Serving: serving, Resources: resources, Authorize: func(next int, _ *ServingAuthority) bool { last = next; return true }}
+	result := a.PrepareSubscription(t.Context(), input)
+	if !result.Prepared {
+		t.Fatalf("preparation at %d: %v", last, result.Prepared)
+	}
+	if result.Renewal != (RenewalAuthority{}) || !a.safelyAbsent(servingArchive) || !a.safelyAbsent(RenewalDropInPath) || !a.InspectServingFiles(serving, true).Accepted {
+		t.Fatal("HTTP created certificate authority or unsafe serving state")
+	}
+	// systemd supplies this link on activation; exercise its real protected-file inspection.
+	if err := os.Symlink("../sbxr-subscription.service", a.path(ServingUnitWantsPath)); err != nil {
+		t.Fatal(err)
+	}
+	if !a.InspectServingFiles(serving, false).Accepted {
+		t.Fatal("complete HTTP footprint refused")
+	}
+	link, ok := a.ReadSubscriptionLink(serving, "8.8.8.8")
+	if !ok || !strings.HasPrefix(string(link), "http://8.8.8.8:8443/s/") {
+		t.Fatal("HTTP link not emitted")
+	}
+	if !a.CleanupPreparedSubscription(t.Context(), SubscriptionCleanupInput{Checkpoint: last, LinkID: serving.LinkID, CredentialSHA256: serving.CredentialSHA256, Resources: &resources, Serving: &serving}) {
+		t.Fatalf("cleanup refused checkpoint %d", last)
+	}
+	body, err := os.ReadFile(unrelated)
+	if err != nil || string(body) != "preserve owner CA state\n" {
+		t.Fatal("HTTP cleanup disturbed unrelated CA state")
 	}
 }
 

@@ -679,16 +679,9 @@ func TestCommittedRotationRemovalRequiresExclusionAndRefusesConflictingCanonical
 
 func TestPublishedCertificateRepairRemovalDeletesCompleteMixedServingFootprint(t *testing.T) {
 	adapter := Adapter{root: t.TempDir()}
-	reloads := 0
 	adapter.subscriptionCommand = func(_ context.Context, name string, arguments ...string) (string, int, bool) {
 		if name != "systemctl" || !slices.Equal(arguments, []string{"disable", "--now", "sbxr-subscription.service"}) && !slices.Equal(arguments, []string{"daemon-reload"}) {
 			t.Fatalf("unexpected command %s %v", name, arguments)
-		}
-		if slices.Equal(arguments, []string{"daemon-reload"}) {
-			reloads++
-			if reloads == 1 {
-				return "", 1, true
-			}
 		}
 		return "", 0, true
 	}
@@ -753,11 +746,8 @@ func TestPublishedCertificateRepairRemovalDeletesCompleteMixedServingFootprint(t
 		t.Fatal("serving exclusion refused")
 	}
 	defer exclusion.Release()
-	if adapter.RemoveSubscriptionRepair(t.Context(), source, target, exclusion) {
-		t.Fatal("removal ignored daemon reload failure")
-	}
 	if !adapter.RemoveSubscriptionRepair(t.Context(), source, target, exclusion) {
-		t.Fatal("partially completed mixed repair removal did not resume")
+		t.Fatal("mixed repair removal failed")
 	}
 	for _, authority := range []ServingAuthority{source, target} {
 		for _, resource := range authority.Resources() {

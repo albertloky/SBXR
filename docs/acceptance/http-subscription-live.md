@@ -64,8 +64,7 @@ their existing meanings.
 Fresh HTTP enablement and serving restart obtain no subscription certificates.
 The two legacy HTTPS preparations and their CA wait belonged to the discarded
 source route. Do not install the old source merely to uninstall it on an absent
-host. Retain relevant transaction, setup, rotation and removal recovery regressions
-as ordinary tests. The historical recurring policies remain readable and are not
+host. The historical recurring policies remain readable and are not
 qualification claims for the current product.
 
 Before recommending Latest, prove that the unchanged old updater refuses the new

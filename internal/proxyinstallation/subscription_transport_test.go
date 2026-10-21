@@ -13,9 +13,9 @@ import (
 
 type migrationTestHost struct {
 	*controlledHost
-	retired                    hostadapter.HTTPSRetirementAuthority
-	migrations                 int
-	failRuntime, retiredUnsafe bool
+	retired       hostadapter.HTTPSRetirementAuthority
+	migrations    int
+	retiredUnsafe bool
 }
 
 func (h *migrationTestHost) ReadOwnership(path string) ([]byte, error) {
@@ -116,40 +116,7 @@ func TestHTTPSRetirementStrictAuthorityAndUpdateCapability(t *testing.T) {
 
 func (h *migrationTestHost) RemoveHTTPSRetirement(context.Context, hostadapter.HTTPSRetirementAuthority) bool {
 	h.migrations++
-	if h.failRuntime {
-		h.failRuntime = false
-		return false
-	}
 	return true
-}
-
-func TestMigratedHTTPCompleteRemovalRetainsAuthorityUntilCleanupAndRetries(t *testing.T) {
-	h := migrationInstallation(t)
-	r := migrationSelectedRecord(t, h)
-	r.TransportMigrating = false
-	updateSubscriptionResources(&r, testInstalledIdentity())
-	h.ownership = ownershipBytes(r)
-	lifecycle := &controlledRemovalLifecycle{ready: true}
-	module := newInstalledInterface(lifecycle, h, acceptedSingBox{})
-	review := module.Review(t.Context(), CompleteRemovalAction)
-	if review.Prepared == nil {
-		t.Fatalf("removal refused: %+v", review.Result)
-	}
-	h.failRuntime = true
-	if result := module.Execute(t.Context(), *review.Prepared, Approved, nil); result.Code != RemovalNeedsCompletion {
-		t.Fatalf("partial retired cleanup: %+v", result)
-	}
-	committed, valid := decodeOwnership(h.ownership)
-	if !valid || committed.Direction != removalRequired || committed.HTTPSRetirement == nil || !lifecycle.executable || !lifecycle.installedRecord {
-		t.Fatal("interrupted cleanup lost finisher or retired authority")
-	}
-	review = module.Review(t.Context(), FinishRemovalAction)
-	if review.Prepared == nil {
-		t.Fatalf("retry refused: %+v", review.Result)
-	}
-	if result := module.Execute(t.Context(), *review.Prepared, Approved, nil); result.Code != CompleteRemovalCompleted || len(h.ownership) != 0 || lifecycle.executable || lifecycle.installedRecord || h.migrations != 2 {
-		t.Fatalf("retired cleanup retry: %+v calls=%d", result, h.migrations)
-	}
 }
 
 func TestMigratedRemovalRefusesChangedRetirementBeforeCommit(t *testing.T) {

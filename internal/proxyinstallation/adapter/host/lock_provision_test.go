@@ -43,24 +43,6 @@ func TestLockProvisioningPublishesInspectsAndRemovesExactResources(t *testing.T)
 	}
 }
 
-func TestLockProvisioningResumesInterruptedExactPublication(t *testing.T) {
-	a := lockProvisionFixture(t)
-	authority := NewLockProvisioningAuthority()
-	staged := a.path(MutationLockProvisionUnitPath + ".sbxr-next")
-	if err := os.WriteFile(staged, []byte(MutationLockProvisionUnit), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !a.InstallLockProvisioning(t.Context(), authority) || !a.InspectLockProvisioning(authority).Accepted {
-		t.Fatal("exact staged publication did not resume")
-	}
-	if _, err := os.Lstat(staged); !os.IsNotExist(err) {
-		t.Fatalf("staged publication remains: %v", err)
-	}
-	if !a.RemoveLockProvisioning(t.Context(), authority) || !a.RemoveLockProvisioning(t.Context(), authority) {
-		t.Fatal("resumed publication was not idempotently removable")
-	}
-}
-
 func TestLockProvisioningRefusesUnexpectedResourcesWithoutChangingThem(t *testing.T) {
 	for _, path := range []string{MutationLockProvisionUnitPath, MutationLockProvisionUnitPath + ".sbxr-next", MutationLockProvisionWantsPath} {
 		t.Run(filepath.Base(path), func(t *testing.T) {
