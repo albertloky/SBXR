@@ -813,7 +813,7 @@ func TestGeneratedInstallerRefusesOccupiedPathBeforeInstallEffects(t *testing.T)
 	}
 }
 
-func TestGeneratedInstallerRefusesProvenHistoricalFullProductUnchanged(t *testing.T) {
+func TestGeneratedInstallerRefusesHistoricalFullProductPathUnchanged(t *testing.T) {
 	fixture := newInstallerFixture(t)
 	commit := strings.Repeat("d", 40)
 	payload := strings.Repeat("e", 64)
@@ -834,7 +834,7 @@ func TestGeneratedInstallerRefusesProvenHistoricalFullProductUnchanged(t *testin
 
 	result, err := exec.Command("bash", fixture.script).CombinedOutput()
 	link, linkErr := os.Readlink(active)
-	if err == nil || strings.TrimSpace(string(result)) != "SOFTWARE-LIFECYCLE-INSTALL-LEGACY-REFUSED" || linkErr != nil || link != target {
+	if err == nil || strings.TrimSpace(string(result)) != "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED" || linkErr != nil || link != target {
 		t.Fatalf("legacy = %v, %q, link %q, %v", err, result, link, linkErr)
 	}
 }
