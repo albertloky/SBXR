@@ -1,5 +1,7 @@
 # Dependency research
 
+- [Optional VMess WebSocket and named Cloudflare Tunnel](vmess-cloudflare-tunnel.md):
+  verified 1.14.3 packaging, external connector choice and deployment inputs.
 - [sing-box 1.14.3 compatibility — 2026-10-18](sing-box-1.14.3-compatibility.md):
   official package identity, generated configuration and qualification boundaries.
 

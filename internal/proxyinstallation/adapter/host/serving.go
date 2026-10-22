@@ -514,7 +514,7 @@ func (a Adapter) loadedServingAuthority(ctx context.Context, renewal RenewalAuth
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
 	closeErr := response.Body.Close()
 	state := response.TLS
-	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Content-Type-Options") != "nosniff" || len(body) < 1 || len(body) > 4096 || body[len(body)-1] != '\n' || bytes.Count(body, []byte{'\n'}) != 1 || !published.HTTP && (state == nil || len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || !state.VerifiedChains[0][0].Equal(state.PeerCertificates[0])) || published.HTTP && state != nil {
+	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Content-Type-Options") != "nosniff" || len(body) < 1 || len(body) > 4096 || !published.HTTP && (state == nil || len(state.PeerCertificates) == 0 || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 || !state.VerifiedChains[0][0].Equal(state.PeerCertificates[0])) || published.HTTP && state != nil {
 		return ServingAuthority{}, false
 	}
 	// A valid certificate and envelope do not prove the current Client Identity.

@@ -16,7 +16,14 @@ import (
 )
 
 func TestHTTPSubscriptionServesAuthenticatedRealityArtifactWithoutCertificate(t *testing.T) {
+	for _, hostname := range []string{"", "tunnel.example.com"} {
+		t.Run("VMess="+hostname, func(t *testing.T) { testHTTPSubscription(t, hostname) })
+	}
+}
+
+func testHTTPSubscription(t *testing.T, hostname string) {
 	facts := profile(t)
+	facts.VMessHostname = hostname
 	m := subscriptionserving.New(nil, nil)
 	generation := subscriptionserving.Generation{LinkID: strings.Repeat("a", 32), CredentialSHA256: sha256.Sum256([]byte(credential))}
 	state, code := m.PrepareHTTP(facts, generation)

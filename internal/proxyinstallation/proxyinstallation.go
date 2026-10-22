@@ -56,6 +56,7 @@ const (
 	StatusAction                         Action = "Status"
 	ViewDetailsAction                    Action = "View details"
 	StartSetupAction                     Action = "Start setup"
+	StartVMessSetupAction                Action = "Start setup with VMess WebSocket"
 	FinishCleanupAction                  Action = "Finish cleanup"
 	FinishSetupAction                    Action = "Finish setup"
 	ShowClientConfigurationAction        Action = "Show client configuration"
@@ -228,6 +229,8 @@ type preparedReview struct {
 	repair       subscriptionRepairCorrection
 	target       []byte
 	startup      *hostadapter.ProxyStartupAuthority
+
+	vmessHostname string
 }
 
 var clientIdentityRotationEffects = []string{"prepare target", "publish startup integration", "reload systemd", "verify startup route", "establish cutover gate", "stop source", "prove source quiescence", "revoke source", "publish target", "start target", "verify target", "clean staging"}
@@ -315,8 +318,22 @@ func NewInstalled(lifecycle softwarelifecycle.Interface) Interface {
 }
 
 func (module *installedInterface) Review(ctx context.Context, action Action) Review {
+	return module.reviewWithVMess(ctx, action, "")
+}
+
+// ReviewVMessSetup reviews clean setup with an externally connected VMess
+// origin. Tunnel credentials and Cloudflare changes remain outside SBXR.
+func (module *installedInterface) ReviewVMessSetup(ctx context.Context, hostname string) Review {
+	return module.reviewWithVMess(ctx, StartVMessSetupAction, hostname)
+}
+
+func (module *installedInterface) reviewWithVMess(ctx context.Context, action Action, hostname string) Review {
 	module.mu.Lock()
 	defer module.mu.Unlock()
+	vmess := action == StartVMessSetupAction
+	if vmess {
+		action = StartSetupAction
+	}
 	review := module.review(ctx, action)
 	identityLegal := slices.Contains(review.LegalActions, RotateClientIdentityAction)
 	if action == EnableSubscriptionAction && review.Prepared == nil && review.Result.Code != ActionRefused {
@@ -482,7 +499,30 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 			}
 		}
 	}
+	if review.Status == NotSetUp && slices.Contains(review.LegalActions, StartSetupAction) {
+		review.LegalActions = append(review.LegalActions, StartVMessSetupAction)
+	}
+	if vmess && review.Prepared != nil {
+		if !singboxadapter.ValidVMessHostname(hostname) || !module.vmessOriginAvailable(ctx) {
+			delete(module.prepared, review.Prepared.token)
+			review.Prepared = nil
+			review.Result = refused(review.Status, "VMess WebSocket origin", "Use a lowercase DNS hostname and ensure TCP 10000 is unused. Tunnel setup is managed separately.")
+		} else {
+			authority := module.prepared[review.Prepared.token]
+			authority.vmessHostname = hostname
+			module.prepared[review.Prepared.token] = authority
+			review.Plan = append(review.Plan,
+				"Add VMess WebSocket on http://127.0.0.1:10000/sbxr-vmess for "+hostname+" using the same generated Client Identity.",
+				"Configure a named Cloudflare Tunnel separately to forward this hostname to http://127.0.0.1:10000. SBXR does not install, configure, stop or remove cloudflared, tunnel credentials, DNS or account resources.",
+				"The subscription will include VLESS REALITY and VMess TLS/WebSocket nodes. Client Identity rotation revokes both. Cloudflare reachability is not verified.")
+		}
+	}
 	return review
+}
+
+func (module *installedInterface) vmessOriginAvailable(ctx context.Context) bool {
+	inspection := module.host.Inspect(ctx, []hostadapter.Resource{{Kind: hostadapter.TCPListenerResource, Name: "10000"}})
+	return inspection.Complete && len(inspection.Resources) == 1 && inspection.Resources[0].Kind == hostadapter.TCPListenerResource && inspection.Resources[0].Name == "10000" && inspection.Resources[0].Observed && !inspection.Resources[0].Present
 }
 
 func (module *installedInterface) subscriptionStatus(ctx context.Context) SubscriptionStatus {
@@ -1116,6 +1156,12 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 		return setupDiagnosticRefused(authority.status, "Generated Client Identity revalidation", "SETUP-REVALIDATION-IDENTITY", "valid generated identity", "identity validation failed", "Review Start setup again with the qualified executable; no identity values are included in diagnostics.")
 	}
 	configuration, err := module.singbox.EncodeServerConfiguration(authority.identity, selected.Address, selected.ServerName)
+	if err == nil && authority.vmessHostname != "" {
+		if !module.vmessOriginAvailable(ctx) {
+			return refused(authority.status, "VMess WebSocket origin revalidation", "Ensure TCP 10000 is unused, then review setup again.")
+		}
+		configuration, err = singboxadapter.New().WithVMessWebSocket(configuration, authority.vmessHostname)
+	}
 	if err != nil {
 		return refused(authority.status, "Server configuration", "Review Start setup again with a qualified SBXR executable.")
 	}

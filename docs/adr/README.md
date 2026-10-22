@@ -22,6 +22,7 @@ general publication waiver. See the [acceptance guide](../acceptance/README.md).
 
 ## Current V3 and scoped release decisions
 
+- [0033 — Optional VMess WebSocket through an external named tunnel](0033-optional-vmess-websocket-tunnel.md)
 - [0032 — Publish qualified files and preserve publication retries](0032-qualified-publication-retry.md)
 - [0031 — Select equivalent native release proofs](0031-equivalent-native-release-proofs.md)
 

@@ -89,7 +89,7 @@ func authorizeProxyStart(ctx context.Context, lifecycle softwarelifecycle.Interf
 func clientIdentityRotationPlan() []string {
 	return []string{
 		"Action: Rotate Client Identity",
-		"Replace only the VLESS UUID. Preserve the endpoint, destination, REALITY key pair, short ID, package identity, and resource provenance.",
+		"Replace the Client Identity UUID for VLESS and optional VMess together. Preserve endpoints, destination, REALITY key pair, short ID, package identity, and resource provenance.",
 		"Existing proxy sessions will disconnect during cutover. New sessions cannot use the revoked Client Identity.",
 		"The Subscription Capability is Not enabled; this action will not enable it and the same Subscription Link remains unchanged.",
 		"A failed replacement after revocation can cause an extended outage. Finish only the prepared replacement; never restore the revoked identity.",

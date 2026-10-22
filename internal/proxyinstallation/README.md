@@ -29,7 +29,7 @@ cause of a prior run without these observations.
 | Task | Start here |
 |---|---|
 | Owner actions, statuses, `Review`/`Execute`, setup, cleanup, and removal sequencing | [proxyinstallation.go](proxyinstallation.go) |
-| Ownership Record schemas, validation, compatibility, and update admission | [ownership.go](ownership.go) |
+| Ownership Record schemas, validation, compatibility, update admission, and exact rotation checkpoint publication | [ownership.go](ownership.go) |
 | Owner-facing details and observation formatting | [details.go](details.go) |
 | Subscription enablement and interrupted-enable cleanup | [subscription.go](subscription.go) |
 | Subscription-link replacement and finishing | [rotation.go](rotation.go) |
@@ -42,7 +42,7 @@ cause of a prior run without these observations.
 | New-setup boot provisioning of the volatile whole-host lock | [lock_provision.go](lock_provision.go), [adapter/host/lock_provision.go](adapter/host/lock_provision.go), and [softwarelifecycle/mutation_lock.go](../softwarelifecycle/mutation_lock.go) |
 | Linux filesystem, systemd, Certbot, firewall, process, and lock mechanics | [adapter/host](adapter/host) |
 | Subscription firewall unit, effective commands, and exact enablement-link ownership | [adapter/host/subscription_firewall.go](adapter/host/subscription_firewall.go) |
-| sing-box configuration and UUID-only Client Identity replacement | [adapter/singbox/singbox.go](adapter/singbox/singbox.go) |
+| sing-box configuration, shared Client Identity replacement, and subscription URI encoding | [adapter/singbox](adapter/singbox) |
 | Numbered Owner menu and Software Lifecycle choices | [adapter/terminal/run.go](adapter/terminal/run.go) and [adapter/terminal/lifecycle.go](adapter/terminal/lifecycle.go) |
 | Authenticated HTTP serving and legacy TLS transaction compatibility | [subscriptionserving/README.md](subscriptionserving/README.md) and [subscriptionserving/serving.go](subscriptionserving/serving.go) |
 
@@ -51,6 +51,14 @@ sing-box mechanics; package tests cover Review/Execute behavior, interruption,
 restart recovery, refusal, and cleanup.
 
 ## Subscription transport
+
+Fresh setup also offers an optional VMess WebSocket origin for a separately
+managed named Cloudflare Tunnel. The hostname is bound in the protected
+configuration's `vmess-ws@<hostname>` inbound tag. Both inbounds share the current
+UUID, rotate together, and use the existing setup/removal authority. There is no
+new connector or Cloudflare resource ownership. See
+[ADR-0033](../../docs/adr/0033-optional-vmess-websocket-tunnel.md) and the
+[deployment inputs](../../docs/research/vmess-cloudflare-tunnel.md).
 
 Fresh Enable subscription uses HTTP on fixed TCP 8443 with the existing bearer
 credential and artifact contract. Its explicit HTTP authority owns no certificate,

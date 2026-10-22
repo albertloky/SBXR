@@ -53,6 +53,33 @@ Recover retains proved transaction recovery; it does not
 start legacy transport migration. Only `y` approves a supported action's effects.
 Empty input or `n` cancels. Changed facts require a fresh review.
 
+## Optional VMess over a named Cloudflare Tunnel
+
+For a fresh setup, choose **Start setup with VMess WebSocket** and enter the
+hostname of your named tunnel. The usual **Start setup** keeps its existing
+VLESS REALITY Vision behavior and needs no hostname.
+
+The optional setup adds VMess on `127.0.0.1:10000`, WebSocket path
+`/sbxr-vmess`. A separately managed `cloudflared` connector must forward the
+hostname to `http://127.0.0.1:10000`. Clients use TLS on the hostname's TCP 443;
+no extra public origin port is needed. SBXR accepts no Cloudflare credentials
+and does not manage the connector, tunnel or DNS. See the
+[connector decision and deployment inputs](docs/research/vmess-cloudflare-tunnel.md).
+
+The HTTP subscription includes the existing VLESS node and an additional VMess
+node. Both use one Client Identity; rotation replaces both credentials together.
+Show client configuration includes both outbounds, with VLESS still the default.
+Local status checks do not prove Cloudflare or VMess client reachability.
+Complete removal removes SBXR's local VMess configuration; separately managed
+connector and account resources remain the Owner's responsibility.
+
+This is source implementation, not a published or live-qualified release.
+VMess can be selected only before proxy setup; there is no in-place enable action,
+including for an existing VLESS-only installation. To switch, finish reviewed
+Complete removal through the installed exact release, clean-install a qualified
+VMess-capable release, and select the VMess setup variant. This entails downtime,
+new client credentials, a new Subscription Link and client reconfiguration.
+
 ## Subscription transport
 
 New subscriptions use `http://<recorded IPv4>:8443/s/<token>`. They need provider

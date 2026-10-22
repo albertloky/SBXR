@@ -56,7 +56,7 @@ func prepareUUID() (string, error) {
 }
 
 // ReplaceClientIdentity preserves every supported server field except the one
-// VLESS UUID. It never generates new REALITY key or short-ID material.
+// shared client UUID. It never generates new REALITY key or short-ID material.
 func (adapter Adapter) ReplaceClientIdentity(source []byte) ([]byte, error) {
 	if _, err := adapter.CurrentConnectionFacts(source, "192.0.2.1"); err != nil {
 		return nil, fmt.Errorf("client identity replacement refused")
@@ -66,7 +66,7 @@ func (adapter Adapter) ReplaceClientIdentity(source []byte) ([]byte, error) {
 		return nil, fmt.Errorf("client identity replacement refused")
 	}
 	inbounds, ok := configuration["inbounds"].([]any)
-	if !ok || len(inbounds) != 1 {
+	if !ok || len(inbounds) < 1 || len(inbounds) > 2 {
 		return nil, fmt.Errorf("client identity replacement refused")
 	}
 	inbound, ok := inbounds[0].(map[string]any)
@@ -86,6 +86,9 @@ func (adapter Adapter) ReplaceClientIdentity(source []byte) ([]byte, error) {
 		return nil, err
 	}
 	user["uuid"] = uuid
+	if len(inbounds) == 2 {
+		inbounds[1].(map[string]any)["users"].([]any)[0].(map[string]any)["uuid"] = uuid
+	}
 	body, err := json.Marshal(configuration)
 	if err != nil {
 		return nil, err
@@ -137,6 +140,7 @@ func (adapter Adapter) EncodeServerConfiguration(identity Identity, destinationA
 // ConnectionFacts contains only Client Access Values, never a REALITY private key.
 type ConnectionFacts struct {
 	PublicIPv4, UUID, ServerName, PublicKey, ShortID string
+	VMessHostname                                    string
 }
 
 func (ConnectionFacts) String() string   { return "Client Access Values (redacted)" }
@@ -162,7 +166,7 @@ func (adapter Adapter) CurrentConnectionFacts(serverConfiguration []byte, public
 			}
 		}
 	}
-	if err := json.Unmarshal(serverConfiguration, &server); err != nil || len(server.Inbounds) != 1 || len(server.Inbounds[0].Users) != 1 || len(server.Inbounds[0].TLS.Reality.ShortID) != 1 {
+	if err := json.Unmarshal(serverConfiguration, &server); err != nil || len(server.Inbounds) < 1 || len(server.Inbounds) > 2 || len(server.Inbounds[0].Users) != 1 || len(server.Inbounds[0].TLS.Reality.ShortID) != 1 {
 		return ConnectionFacts{}, fmt.Errorf("client configuration refused")
 	}
 	inbound, user := server.Inbounds[0], server.Inbounds[0].Users[0]
@@ -179,7 +183,11 @@ func (adapter Adapter) CurrentConnectionFacts(serverConfiguration []byte, public
 	if address == nil || address.To4() == nil || inbound.Type != "vless" || inbound.ListenPort != 443 || user.Flow != "xtls-rprx-vision" || !inbound.TLS.Enabled || inbound.TLS.ServerName == "" || !inbound.TLS.Reality.Enabled || !adapter.ValidIdentity(identity) {
 		return ConnectionFacts{}, fmt.Errorf("client configuration refused")
 	}
-	return ConnectionFacts{PublicIPv4: publicIPv4, UUID: user.UUID, ServerName: inbound.TLS.ServerName, PublicKey: identity.PublicKey, ShortID: identity.ShortID}, nil
+	hostname, err := vmessHostname(serverConfiguration, user.UUID)
+	if err != nil {
+		return ConnectionFacts{}, err
+	}
+	return ConnectionFacts{PublicIPv4: publicIPv4, UUID: user.UUID, ServerName: inbound.TLS.ServerName, PublicKey: identity.PublicKey, ShortID: identity.ShortID, VMessHostname: hostname}, nil
 }
 
 func (adapter Adapter) EncodeClientConfiguration(serverConfiguration []byte, publicIPv4 string) ([]byte, error) {
@@ -202,6 +210,9 @@ func (adapter Adapter) EncodeClientConfiguration(serverConfiguration []byte, pub
 				"reality": map[string]any{"enabled": true, "public_key": facts.PublicKey, "short_id": facts.ShortID},
 			},
 		}},
+	}
+	if facts.VMessHostname != "" {
+		configuration.Outbounds = append(configuration.Outbounds, vmessOutbound(facts))
 	}
 	body, err := json.Marshal(configuration)
 	if err != nil {

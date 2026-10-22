@@ -65,7 +65,25 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			continue
 		}
 		action := current.LegalActions[number-1]
-		review := installation.Review(ctx, action)
+		var review proxyinstallation.Review
+		if action == proxyinstallation.StartVMessSetupAction {
+			reviewer, ok := installation.(interface {
+				ReviewVMessSetup(context.Context, string) proxyinstallation.Review
+			})
+			if !ok {
+				return 1
+			}
+			if _, err := io.WriteString(output, "Named tunnel hostname (lowercase DNS name; no credentials): "); err != nil {
+				return 1
+			}
+			hostname, err := readLine(reader)
+			if err != nil {
+				return 1
+			}
+			review = reviewer.ReviewVMessSetup(ctx, hostname)
+		} else {
+			review = installation.Review(ctx, action)
+		}
 		switch action {
 		case proxyinstallation.ShowClientConfigurationAction:
 			if review.Prepared == nil {
@@ -107,7 +125,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			} else if writeRefusal(output, latest) != nil {
 				return 1
 			}
-		case proxyinstallation.StartSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.ReplaceSubscriptionCertificateAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
+		case proxyinstallation.StartSetupAction, proxyinstallation.StartVMessSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.ReplaceSubscriptionCertificateAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {

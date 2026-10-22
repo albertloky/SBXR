@@ -1,8 +1,9 @@
 # Private Subscription Serving
 
 The current private runtime serves newly enabled subscriptions over plain HTTP
-on the recorded IPv4 TCP 8443 listener. `PrepareHTTP` validates the same one-node
-REALITY artifact and bearer-token generation without certificate material.
+on the recorded IPv4 TCP 8443 listener. `PrepareHTTP` validates the REALITY
+artifact and optional VMess node, plus the bearer-token generation, without
+certificate material.
 Authentication, request/response bounds, rate limits, no-store responses,
 shutdown and secret-safe diagnostics remain; HTTP has no certificate expiry
 shutdown. HTTP exposes tokens/configuration to interception and tampering.
@@ -19,15 +20,20 @@ Certbot. See [ADR-0026](../../../docs/adr/0026-http-subscription.md).
 
 
 `Prepare`, `Inspect`, and `Serve` are the concrete private Module boundary.
-The sing-box Adapter supplies typed Client Access Values; the Module never
-imports Proxy Installation or publishes durable state. `Prepare` returns an
+The sing-box Adapter supplies typed Client Access Values and owns subscription
+URI encoding and validation. This Module maps encoding failures to its bounded
+result codes and owns authentication and network serving; it never imports
+Proxy Installation or publishes durable state. `Prepare` returns an
 immutable state after exact profile, credential-generation and trusted TLS
 validation. `Inspect` separates certificate validity from runtime knowledge:
 a prepared state alone does not prove a running service. A stopped result is
 published only after the listener and all accepted connections have ended.
 
-The artifact is the exact single VLESS REALITY URI from #333, with one LF,
-ordered fields, percent encoding and a 4,096-byte ceiling. Authentication uses
+The default artifact is the exact single VLESS REALITY URI from #333, with one
+LF, ordered fields and percent encoding. Optional VMess setup appends one
+`vmess://` URI containing base64-encoded v2 JSON for TLS/WebSocket at the named
+tunnel hostname. Both nodes use the current UUID. The whole artifact retains
+its 4,096-byte ceiling. Authentication uses
 the exact unescaped `/s/` path, canonical 43-character base64url encoding,
 SHA-256 and fixed-length constant-time comparison. HTTP/1.1 GET is the only
 accepted request. Query strings, bodies, other methods and credentials receive
@@ -63,10 +69,11 @@ The root-only executable recognizes only the fixed private
 `--subscription-serving` argument. The argument is not authorization. Startup
 requires the existing whole-host lock, a verified installed pair, the complete
 supported Ownership Record, no pending/final authority, recorded IPv4, exact
-configuration, certificate generation, fixed unit, private cgroup membership,
+configuration, fixed unit, private cgroup membership,
 zero process capabilities, no-new-privileges and inaccessible credential,
 staging, proc and host-control paths. It binds only the recorded IPv4 TCP 8443.
-Missing or conflicting facts refuse silently and create no state.
+HTTPS additionally requires the recorded certificate generation. Missing or
+conflicting facts refuse silently and create no state.
 
 A failed periodic public-IPv4 check still stops serving immediately. The owning
 dispatch reports `Failed` (exit 1), while Owner cancellation reports `Stopped`
@@ -95,7 +102,7 @@ There is no separate authority file.
 Proxy Installation owns reviewed enablement, link rotation, certificate
 activation and repair, Client Identity rotation, interrupted-operation recovery,
 and Complete removal. This package only prepares, inspects, and serves the
-immutable HTTPS state selected by that authority. Unknown staging or state,
+immutable HTTP or HTTPS state selected by that authority. Unknown staging or state,
 unsupported resource changes, contradictory checkpoints, or an unproved
 pending operation refuse. A valid running record can report Subscription
 Capability Status `Available`; renewal evidence and runtime inspection can

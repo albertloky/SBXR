@@ -10,13 +10,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -89,8 +87,6 @@ func New(roots *x509.CertPool, now func() time.Time) *Module {
 	return &Module{roots: roots, now: now}
 }
 
-var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-var name = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$`)
 var linkID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func (m *Module) Prepare(f singbox.ConnectionFacts, generation Generation, cert Certificate) (*State, Code) {
@@ -144,18 +140,11 @@ func (m *Module) PrepareHTTP(f singbox.ConnectionFacts, generation Generation) (
 
 // Artifact prepares secret-bearing node bytes independently of TLS availability.
 func Artifact(f singbox.ConnectionFacts) ([]byte, Code) {
-	ip, err := netip.ParseAddr(f.PublicIPv4)
-	public, publicErr := base64.RawURLEncoding.Strict().DecodeString(f.PublicKey)
-	short, shortErr := hex.DecodeString(f.ShortID)
-	if err != nil || !ip.Is4() || ip.String() != f.PublicIPv4 || !uuid.MatchString(f.UUID) || !name.MatchString(f.ServerName) || publicErr != nil || len(public) != 32 || shortErr != nil || len(short) != 4 || hex.EncodeToString(short) != f.ShortID {
+	artifact, err := singbox.New().EncodeSubscriptionArtifact(f)
+	if err != nil {
 		return nil, Refused
 	}
-	escape := func(s string) string { return strings.ReplaceAll(url.QueryEscape(s), "+", "%20") }
-	artifact := "vless://" + f.UUID + "@" + f.PublicIPv4 + ":443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=" + escape(f.ServerName) + "&fp=chrome&pbk=" + escape(f.PublicKey) + "&sid=" + escape(f.ShortID) + "&type=tcp#" + escape("SBXR Proxy ("+f.PublicIPv4+")") + "\n"
-	if len(artifact) == 0 || len(artifact) > 4096 {
-		return nil, Refused
-	}
-	return []byte(artifact), Ready
+	return artifact, Ready
 }
 
 type Facts struct {

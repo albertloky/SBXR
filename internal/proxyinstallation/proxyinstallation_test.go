@@ -761,7 +761,7 @@ func TestOwnerCanReviewAndDeclineCleanSetup(t *testing.T) {
 
 	review := installation.Review(t.Context(), StartSetupAction)
 
-	wantActions := []Action{StartSetupAction, ViewDetailsAction, CompleteRemovalAction}
+	wantActions := []Action{StartSetupAction, ViewDetailsAction, CompleteRemovalAction, StartVMessSetupAction}
 	if review.Version != "v3.0.0" || review.Status != NotSetUp || review.Result.Code != StatusNotSetUp || !reflect.DeepEqual(review.LegalActions, wantActions) || review.Prepared == nil {
 		t.Fatalf("Review() = %#v", review)
 	}

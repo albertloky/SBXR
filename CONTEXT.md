@@ -32,7 +32,9 @@ The Owner's explicit decision to approve or decline one Prepared Action. Only th
 The Software Lifecycle result after Complete removal proves that the SBXR executable, Installed Record, Ownership Record, and all proved V3-owned proxy resources are absent. It is distinct from Proxy Installation Status `Not set up`, where SBXR remains installed without proxy capability.
 
 ### Proxy Profile
-The single managed V3 proxy endpoint and its one authorized Client Identity.
+The managed V3 VLESS REALITY Vision endpoint, optionally accompanied by a VMess
+WebSocket endpoint through a separately managed named Cloudflare Tunnel. Both
+use one authorized Client Identity and rotate together. See ADR-0033.
 
 ### Client Identity
 The single credential-bound identity permitted to use the Proxy Profile from an outside client. Replacement is sequential: old sessions end before revocation selects only the prepared replacement, and revoked access cannot be restored.
@@ -53,7 +55,11 @@ The non-secret identity of one Subscription Link Credential generation, used to 
 The authenticated capability URL that carries the Subscription Link Credential and returns the current Subscription Artifact. New subscriptions use HTTP. The link remains stable until explicit rotation or Complete removal. The current clean-install-only product does not automatically migrate legacy HTTPS authority.
 
 ### Subscription Artifact
-The secret-bearing representation of exactly one current Proxy Profile returned through the Subscription Link for Karing import and refresh. It owns the imported proxy-node fields but not Karing's profile settings, DNS, routing, TUN, or selector behavior.
+The secret-bearing representation of one current Proxy Profile returned through
+the Subscription Link for client import and refresh: one VLESS node by default,
+plus a VMess node when enabled during setup. It owns the imported proxy-node
+fields but not client profile settings, DNS, routing, TUN, or selector behavior.
+The optional two-node format has no live Karing acceptance yet.
 
 ### Subscription Capability Status
 The separate derived status of the Subscription Link capability: `Not enabled`, `Available`, `Change in progress`, `Change incomplete`, or `Problem detected`. `Available` means fresh local capability checks pass, not that Karing reachability is proved; a subscription problem can coexist with Proxy Installation Status `Running`.
