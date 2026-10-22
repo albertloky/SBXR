@@ -95,7 +95,7 @@ func (a Adapter) UpgradeClientIdentityServingStartup() bool {
 	if !a.publishSubscriptionFile(ServingUnitPath+".sbxr-next", []byte(ServingUnit), 0644) {
 		return false
 	}
-	return a.replaceSubscriptionFile(ServingUnitPath, ServingUnitPath+".sbxr-next", []byte(ServingUnit), 0644, digest([]byte(legacyServingUnit))) && a.removeClientPublication(ServingUnitPath+".sbxr-next", 0644, digest([]byte(ServingUnit)))
+	return a.replaceSubscriptionFile(ServingUnitPath, ServingUnitPath+".sbxr-next", []byte(ServingUnit), 0644, digest(current)) && a.removeClientPublication(ServingUnitPath+".sbxr-next", 0644, digest([]byte(ServingUnit)))
 }
 
 func (a Adapter) VerifyClientIdentityServingStartup(ctx context.Context) bool {

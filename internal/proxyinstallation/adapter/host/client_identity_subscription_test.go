@@ -44,31 +44,52 @@ func TestClientIdentitySubscriptionPreparationRecoversEachPublicationBoundary(t 
 }
 
 func TestClientIdentityServingStartupUpgradeRecoversPublicationBoundaries(t *testing.T) {
-	for boundary := 1; boundary <= 6; boundary++ {
-		t.Run(string(rune('0'+boundary)), func(t *testing.T) {
-			a, _ := servingFiles(t)
-			if err := os.WriteFile(a.path(ServingUnitPath), []byte(legacyServingUnit), 0644); err != nil {
-				t.Fatal(err)
-			}
-			calls := 0
-			a.syncDirectoryFault = func(string) error {
-				calls++
-				if calls == boundary {
-					return os.ErrInvalid
-				}
-				return nil
-			}
-			a.UpgradeClientIdentityServingStartup()
-			a.syncDirectoryFault = nil
-			if !a.UpgradeClientIdentityServingStartup() {
-				t.Fatal("exact startup publication could not recover")
-			}
-			for _, path := range []string{ServingUnitPath + ".sbxr-next", ServingUnitPath + ".sbxr-next.sbxr-next"} {
-				if !a.safelyAbsent(path) {
-					t.Fatal("startup staging survived")
-				}
+	for name, unit := range map[string]string{"legacy": legacyServingUnit, "previous": previousServingUnit} {
+		t.Run(name, func(t *testing.T) {
+			for boundary := 1; boundary <= 6; boundary++ {
+				t.Run(string(rune('0'+boundary)), func(t *testing.T) {
+					a, _ := servingFiles(t)
+					if err := os.WriteFile(a.path(ServingUnitPath), []byte(unit), 0644); err != nil {
+						t.Fatal(err)
+					}
+					calls := 0
+					a.syncDirectoryFault = func(string) error {
+						calls++
+						if calls == boundary {
+							return os.ErrInvalid
+						}
+						return nil
+					}
+					a.UpgradeClientIdentityServingStartup()
+					a.syncDirectoryFault = nil
+					if !a.UpgradeClientIdentityServingStartup() {
+						t.Fatal("exact startup publication could not recover")
+					}
+					if body, err := os.ReadFile(a.path(ServingUnitPath)); err != nil || string(body) != ServingUnit {
+						t.Fatal("startup publication did not select the current unit")
+					}
+					for _, path := range []string{ServingUnitPath + ".sbxr-next", ServingUnitPath + ".sbxr-next.sbxr-next"} {
+						if !a.safelyAbsent(path) {
+							t.Fatal("startup staging survived")
+						}
+					}
+				})
 			}
 		})
+	}
+}
+
+func TestClientIdentityServingStartupUpgradePreservesForeignUnit(t *testing.T) {
+	a, _ := servingFiles(t)
+	foreign := []byte(ServingUnit + "# owner change\n")
+	if err := os.WriteFile(a.path(ServingUnitPath), foreign, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if a.UpgradeClientIdentityServingStartup() {
+		t.Fatal("foreign unit accepted for replacement")
+	}
+	if body, err := os.ReadFile(a.path(ServingUnitPath)); err != nil || !bytes.Equal(body, foreign) || !a.safelyAbsent(ServingUnitPath+".sbxr-next") {
+		t.Fatal("refusal changed foreign unit or created staging")
 	}
 }
 
