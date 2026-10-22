@@ -52,13 +52,19 @@ restart recovery, refusal, and cleanup.
 
 ## Subscription transport
 
-Fresh setup also offers an optional VMess WebSocket origin for a separately
-managed named Cloudflare Tunnel. The hostname is bound in the protected
+Fresh setup also offers an optional VMess WebSocket origin for the Owner's
+dedicated remotely managed Cloudflare Tunnel. The hostname is bound in the protected
 configuration's `vmess-ws@<hostname>` inbound tag. Both inbounds share the current
-UUID, rotate together, and use the existing setup/removal authority. There is no
-new connector or Cloudflare resource ownership. See
+UUID and rotate together. Optional tunnel authority records only the dedicated
+`sbxr-tunnel.service` unit/staging file/enablement link, reviewed prerequisite
+digests and tunnel ID. It preserves the Owner's token, cloudflared package and
+Cloudflare resources. Failed starts retain forward setup; precommit failure and
+Complete removal clean only proved owned resources. The public connection check
+is separate from local Running and uses a short-lived VMess-only client with
+PID-proved loopback listener ownership. See [tunnel.go](tunnel.go), the
+[host connector](adapter/host/tunnel.go), [probe](adapter/host/vmess_probe.go),
 [ADR-0033](../../docs/adr/0033-optional-vmess-websocket-tunnel.md) and the
-[deployment inputs](../../docs/research/vmess-cloudflare-tunnel.md).
+[setup guide](../../docs/setup-vmess-tunnel.md).
 
 Fresh Enable subscription uses HTTP on fixed TCP 8443 with the existing bearer
 credential and artifact contract. Its explicit HTTP authority owns no certificate,

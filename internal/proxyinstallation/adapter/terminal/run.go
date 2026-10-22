@@ -73,12 +73,15 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			if !ok {
 				return 1
 			}
-			if _, err := io.WriteString(output, "Named tunnel hostname (lowercase DNS name; no credentials): "); err != nil {
+			if _, err := io.WriteString(output, "VMess Tunnel setup — use your own Cloudflare domain and a dedicated remotely managed tunnel.\n1. In Cloudflare Networking > Tunnels, create a tunnel or select a dedicated unused tunnel. Never reuse a shared tunnel.\n2. Add a Published application route: your hostname -> http://127.0.0.1:10000; leave route path blank.\n3. Install official cloudflared >=2025.4.0 at /usr/bin/cloudflared. Save only this tunnel's token in /etc/cloudflared/sbxr.token, root-owned 0600; never paste it here.\nSBXR will manage only sbxr-tunnel.service. Full instructions: https://github.com/albertloky/SBXR/blob/main/docs/setup-vmess-tunnel.md\nNamed tunnel hostname (lowercase DNS name; no credentials; blank cancels): "); err != nil {
 				return 1
 			}
 			hostname, err := readLine(reader)
 			if err != nil {
 				return 1
+			}
+			if hostname == "" {
+				continue
 			}
 			review = reviewer.ReviewVMessSetup(ctx, hostname)
 		} else {

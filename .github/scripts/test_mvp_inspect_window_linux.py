@@ -27,6 +27,9 @@ sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('observer', SOURCE / 'mvp-inspect-window.py')
 observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
+prepare_spec = importlib.util.spec_from_file_location('prepare_window', SOURCE / 'prepare-mvp-window.py')
+prepare_window = importlib.util.module_from_spec(prepare_spec)
+prepare_spec.loader.exec_module(prepare_window)
 RECEIPT = {'repository': 'https://deb.sagernet.org/', 'name': 'sing-box',
            'version': '1.14.3', 'architecture': 'amd64', 'size': 32297878,
            'sha256': 'ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e'}
@@ -86,9 +89,9 @@ def main(deb):
         for parent in (Path('/var/lib/snapd'), Path('/var/lib/snapd/snaps'), Path('/var/lib/snapd/cache')):
             if not parent.exists():
                 directory(parent)
-        expected = dict(observer.log_observation(), proxy_package=RECEIPT,
-                        installed_binary_sha256='031042edfd30a215e4c69d83eb7d13c194e6ef50c782e2e1308d9d8fa128454a',
-                        operator_sha256={}, snap_packages={})
+        expected = prepare_window.prepare(
+            dict(observer.log_observation(), proxy_package=RECEIPT,
+                 operator_sha256={}, snap_packages={}), deb)
         for name, mode in observer.OPERATOR_MODES.items():
             source = SOURCE / name
             if name in ('with-protected-log-parent.sh', 'protected_command_supervisor.py'):

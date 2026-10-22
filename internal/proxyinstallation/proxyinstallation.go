@@ -57,6 +57,7 @@ const (
 	ViewDetailsAction                    Action = "View details"
 	StartSetupAction                     Action = "Start setup"
 	StartVMessSetupAction                Action = "Start setup with VMess WebSocket"
+	CheckVMessTunnelAction               Action = "Check VMess connection"
 	FinishCleanupAction                  Action = "Finish cleanup"
 	FinishSetupAction                    Action = "Finish setup"
 	ShowClientConfigurationAction        Action = "Show client configuration"
@@ -231,6 +232,7 @@ type preparedReview struct {
 	startup      *hostadapter.ProxyStartupAuthority
 
 	vmessHostname string
+	tunnel        *hostadapter.TunnelAuthority
 }
 
 var clientIdentityRotationEffects = []string{"prepare target", "publish startup integration", "reload systemd", "verify startup route", "establish cutover gate", "stop source", "prove source quiescence", "revoke source", "publish target", "start target", "verify target", "clean staging"}
@@ -321,8 +323,7 @@ func (module *installedInterface) Review(ctx context.Context, action Action) Rev
 	return module.reviewWithVMess(ctx, action, "")
 }
 
-// ReviewVMessSetup reviews clean setup with an externally connected VMess
-// origin. Tunnel credentials and Cloudflare changes remain outside SBXR.
+// ReviewVMessSetup binds the Owner's protected, dedicated tunnel prerequisites.
 func (module *installedInterface) ReviewVMessSetup(ctx context.Context, hostname string) Review {
 	return module.reviewWithVMess(ctx, StartVMessSetupAction, hostname)
 }
@@ -331,6 +332,10 @@ func (module *installedInterface) reviewWithVMess(ctx context.Context, action Ac
 	module.mu.Lock()
 	defer module.mu.Unlock()
 	vmess := action == StartVMessSetupAction
+	checkVMess := action == CheckVMessTunnelAction
+	if checkVMess {
+		action = StatusAction
+	}
 	if vmess {
 		action = StartSetupAction
 	}
@@ -506,16 +511,33 @@ func (module *installedInterface) reviewWithVMess(ctx context.Context, action Ac
 		if !singboxadapter.ValidVMessHostname(hostname) || !module.vmessOriginAvailable(ctx) {
 			delete(module.prepared, review.Prepared.token)
 			review.Prepared = nil
-			review.Result = refused(review.Status, "VMess WebSocket origin", "Use a lowercase DNS hostname and ensure TCP 10000 is unused. Tunnel setup is managed separately.")
+			review.Result = refused(review.Status, "VMess WebSocket origin", "Use your own lowercase DNS hostname and ensure TCP 10000 is unused. See docs/setup-vmess-tunnel.md.")
 		} else {
+			host, supported := module.host.(tunnelHost)
+			var tunnel hostadapter.TunnelAuthority
+			problem := "This executable cannot manage the dedicated connector. Use a qualified VMess-capable release."
+			if supported {
+				tunnel, problem = host.PreflightTunnel(ctx)
+			}
+			if problem != "" {
+				delete(module.prepared, review.Prepared.token)
+				review.Prepared = nil
+				review.Result = refused(review.Status, "Dedicated tunnel prerequisites", problem)
+				return review
+			}
 			authority := module.prepared[review.Prepared.token]
 			authority.vmessHostname = hostname
+			authority.tunnel = &tunnel
 			module.prepared[review.Prepared.token] = authority
 			review.Plan = append(review.Plan,
 				"Add VMess WebSocket on http://127.0.0.1:10000/sbxr-vmess for "+hostname+" using the same generated Client Identity.",
-				"Configure a named Cloudflare Tunnel separately to forward this hostname to http://127.0.0.1:10000. SBXR does not install, configure, stop or remove cloudflared, tunnel credentials, DNS or account resources.",
-				"The subscription will include VLESS REALITY and VMess TLS/WebSocket nodes. Client Identity rotation revokes both. Cloudflare reachability is not verified.")
+				"Selected tunnel ID: "+tunnel.TunnelID+". Match this ID to your dedicated tunnel in Cloudflare before confirming; the token alone cannot prove domain ownership or route selection.",
+				"Install and enable only sbxr-tunnel.service using /etc/cloudflared/sbxr.token and official /usr/bin/cloudflared. Existing cloudflared services are preserved. Complete removal removes only this dedicated unit and link, preserving the token, binary, tunnel and DNS.",
+				"Publish "+hostname+" to http://127.0.0.1:10000 in that tunnel, with route path blank. The subscription includes VLESS and VMess; identity rotation revokes both. Setup checks public VMess traffic and reports an unfinished connection separately from local Running status.")
 		}
+	}
+	if action == StatusAction || action == ViewDetailsAction || checkVMess {
+		review = module.vmessReview(ctx, review, checkVMess)
 	}
 	return review
 }
@@ -624,7 +646,7 @@ func (module *installedInterface) review(ctx context.Context, action Action) Rev
 			review.Result = refused(NotSetUp, "Installed SBXR", "Restore SBXR to a verified Ready Software Lifecycle state before Complete removal.")
 			return review
 		}
-		return module.prepareRemoval(review, installed, nil, nil, inspection, hostadapter.RemovalInspection{})
+		return module.prepareRemoval(ctx, review, installed, nil, nil, inspection, hostadapter.RemovalInspection{})
 	case StartSetupAction:
 	default:
 		review.Result = refused(NotSetUp, "Legal action", "Choose one of the actions legal for the freshly inspected Proxy Installation Status.")
@@ -785,7 +807,7 @@ func (module *installedInterface) reviewOwned(ctx context.Context, action Action
 			review.Result = refused(review.Status, "Complete removal preflight", removalCorrection(removal))
 			return review
 		}
-		return module.prepareRemoval(review, installed, &record, body, surface, removal)
+		return module.prepareRemoval(ctx, review, installed, &record, body, surface, removal)
 	}
 	if action == ViewDetailsAction && record.Phase == runningPhase {
 		removal := module.inspectOwnedRemoval(ctx, record, body)
@@ -876,7 +898,11 @@ func (module *installedInterface) reviewCommittedRemoval(ctx context.Context, ac
 	return review
 }
 
-func (module *installedInterface) prepareRemoval(review Review, installed softwarelifecycle.ReleaseIdentity, record *ownershipRecord, body []byte, inspection hostadapter.Inspection, removal hostadapter.RemovalInspection) Review {
+func (module *installedInterface) prepareRemoval(ctx context.Context, review Review, installed softwarelifecycle.ReleaseIdentity, record *ownershipRecord, body []byte, inspection hostadapter.Inspection, removal hostadapter.RemovalInspection) Review {
+	if !module.tunnelRemovalSafe(ctx, record) {
+		review.Result = refused(review.Status, "Dedicated tunnel ownership", "Preserve foreign files and restore the exact sbxr-tunnel.service unit, effective commands and enablement link before reviewing Complete removal.")
+		return review
+	}
 	var token [32]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		review.Result = refused(review.Status, "Prepared Action generation", "Review Complete removal again.")
@@ -940,6 +966,14 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 				if runningAccepted(facts) {
 					result.ProxyTraffic = ProvedWorking
 				}
+			}
+		}
+		if result.Code == SetupComplete {
+			body, err := module.readOwnership()
+			if record, valid := decodeOwnership(body); err == nil && valid && record.Tunnel != nil {
+				checked := module.checkVMessConnection(ctx, record, body)
+				checked.SubscriptionStatus, checked.SubscriptionServing = result.SubscriptionStatus, result.SubscriptionServing
+				result = checked
 			}
 		}
 	}()
@@ -1010,6 +1044,9 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 				return refused(ProblemDetected, "Prepared Action facts", "Restore the exact reviewed Ownership Record, then review Complete removal again.")
 			}
 			removal := module.inspectOwnedRemoval(context.WithoutCancel(ctx), record, current, packageLocks)
+			if !module.tunnelRemovalSafe(ctx, &record) {
+				return refused(authority.status, "Dedicated tunnel ownership changed", "Restore the reviewed dedicated service before reviewing Complete removal again.")
+			}
 			if !removalAccepted(removal) || !reflect.DeepEqual(removal, authority.removal) {
 				return refused(ProblemDetected, "Prepared Action facts", removalCorrection(removal))
 			}
@@ -1161,11 +1198,21 @@ func (module *installedInterface) Execute(ctx context.Context, prepared Prepared
 			return refused(authority.status, "VMess WebSocket origin revalidation", "Ensure TCP 10000 is unused, then review setup again.")
 		}
 		configuration, err = singboxadapter.New().WithVMessWebSocket(configuration, authority.vmessHostname)
+		host, ok := module.host.(tunnelHost)
+		if !ok || authority.tunnel == nil {
+			return refused(authority.status, "Dedicated tunnel authority", "Review VMess setup again.")
+		}
+		tunnel, problem := host.PreflightTunnel(ctx)
+		if problem != "" || tunnel != *authority.tunnel {
+			return refused(authority.status, "Dedicated tunnel prerequisites changed", "Restore the reviewed protected token and cloudflared binary, then review setup again. "+problem)
+		}
 	}
 	if err != nil {
 		return refused(authority.status, "Server configuration", "Review Start setup again with a qualified SBXR executable.")
 	}
 	record := newOwnershipRecord(authority.release, currentFacts, selected, configuration)
+	record.Tunnel = authority.tunnel
+	record.Resources = recordResources(record, false)
 	body := ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, nil, body); err != nil {
 		if current, readErr := module.readOwnership(); readErr == nil {
@@ -1271,6 +1318,12 @@ func (module *installedInterface) runPreCommit(ctx context.Context, record owner
 			return interruptedCleanup()
 		}
 	}
+	if record.Tunnel != nil {
+		host, ok := module.host.(tunnelHost)
+		if !ok || !host.InstallTunnel(ctx, *record.Tunnel) {
+			return module.cleanup(ctx, record, body, progress)
+		}
+	}
 	destination, _ := acceptedDestination(record.DestinationAddress, record.DestinationName)
 	if facts := module.host.InspectActivation(ctx, hostSetupSpec, aptSourceBody, body, record.ConfigurationSHA256, record.PublicIPv4, destination); !ownedFactsAccepted(facts.RunningInspection) || facts.ServiceEnabled.Accepted || facts.ServiceActive.Accepted || facts.Listener.Accepted || !facts.DestinationCompatible || !facts.ListenerAvailable {
 		if ctx.Err() != nil {
@@ -1337,6 +1390,12 @@ func (module *installedInterface) finishSetup(ctx context.Context, record owners
 	if !runningAccepted(facts) {
 		return Result{Status: SetupIncomplete, Message: "Proxy setup needs forward completion.", Code: SetupNeedsCompletion, FailedCheck: "Locally Running verification", Correction: "Correct the local package, configuration, service, or listener fact, then choose Finish setup."}
 	}
+	if record.Tunnel != nil {
+		host, ok := module.host.(tunnelHost)
+		if !ok || !host.InstallTunnel(ctx, *record.Tunnel) || !host.StartTunnel(ctx, *record.Tunnel) {
+			return Result{Status: SetupIncomplete, Code: SetupNeedsCompletion, Message: "Local proxy is running; dedicated tunnel connector needs completion.", FailedCheck: "Dedicated tunnel connector", Correction: "Restore the reviewed /etc/cloudflared/sbxr.token and /usr/bin/cloudflared, inspect only sbxr-tunnel.service, then choose Finish setup. DNS and tunnel account resources are unchanged."}
+		}
+	}
 	record.Phase, record.Direction = runningPhase, noDirection
 	next := ownershipBytes(record)
 	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, body, next); err != nil {
@@ -1354,6 +1413,9 @@ func (module *installedInterface) finishSetup(ctx context.Context, record owners
 func (module *installedInterface) cleanup(ctx context.Context, record ownershipRecord, body []byte, progress ProgressReporter) Result {
 	if _, valid := decodeOwnership(body); !valid || record.Direction != cleanupRequired || !bytes.Equal(body, ownershipBytes(record)) {
 		return refused(ProblemDetected, "Cleanup authority", "Restore the exact cleanup Ownership Record, then review again.")
+	}
+	if !module.removeTunnel(ctx, record) {
+		return Result{Status: SetupIncomplete, Code: SetupNeedsCleanup, Message: "Dedicated connector cleanup needs completion.", FailedCheck: "Dedicated tunnel ownership", Correction: "Restore the exact sbxr-tunnel.service unit and link; preserve foreign files, then choose Finish cleanup."}
 	}
 	for index, operation := range []hostadapter.Operation{hostadapter.StopDisableService, hostadapter.UnmaskService, hostadapter.RemovePackageArtifact, hostadapter.RemovePackage, hostadapter.RemoveConfigurationState, hostadapter.RemovePackageIdentity, hostadapter.RemoveAPTSource, hostadapter.RemoveAPTKey} {
 		if record.CleanupCheckpoint > index {
@@ -1399,6 +1461,9 @@ func (module *installedInterface) finishRemoval(ctx context.Context, record owne
 	}
 	if !module.syncRemovalAuthority(body) {
 		return removalInterrupted("Removal authority synchronization")
+	}
+	if !module.removeTunnel(ctx, record) {
+		return removalInterrupted("Dedicated tunnel connector removal")
 	}
 	repairServingRemoved := false
 	if record.ClientRotation != nil {

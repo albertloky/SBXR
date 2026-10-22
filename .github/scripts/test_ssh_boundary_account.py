@@ -98,7 +98,7 @@ class LockedAccountTests(unittest.TestCase):
                 self.assertEqual(stderr, b"SSH_BOUNDARY_REFUSED case=candidate-handoff-example\n")
             else:
                 self.assertEqual(process.returncode, 0, stderr)
-                self.assertEqual(stdout, b"SSH_BOUNDARY_CASES_PASSED count=25\n")
+                self.assertEqual(stdout, b"SSH_BOUNDARY_CASES_PASSED count=31\n")
                 self.assertEqual(stderr, b"")
 
     def test_locked_caller_success(self):

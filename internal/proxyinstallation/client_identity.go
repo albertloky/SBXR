@@ -127,7 +127,7 @@ func (module *installedInterface) prepareClientIdentityFinishReview(ctx context.
 			review.Result = refused(ChangeIncomplete, "Complete removal preflight", removalCorrection(removal))
 			return review
 		}
-		return module.prepareRemoval(review, installed, &record, body, surface, removal)
+		return module.prepareRemoval(ctx, review, installed, &record, body, surface, removal)
 	}
 	if action != FinishClientIdentityAction {
 		review.Result = refused(ChangeIncomplete, "Legal action", "Choose Finish Client Identity rotation, View details, or Complete removal.")

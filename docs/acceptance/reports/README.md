@@ -101,6 +101,10 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Repairs, readiness and investigations
 
+- [Guided VMess tunnel implementation and automated verification — 2026-10-22](vmess-guided-setup-2026-10-22.md)
+  — own-domain/tunnel guidance, dedicated connector and honest readiness checks;
+  automated verification only, no new live qualification or publication.
+
 - [Mac executor EPERM: sanitized support diagnostic — 2026-10-18](mac-executor-eperm-2026-10-18.md)
   — historical process-spawn and loopback failures; cause unresolved, not live qualification.
 

@@ -55,23 +55,31 @@ Empty input or `n` cancels. Changed facts require a fresh review.
 
 ## Optional VMess over a named Cloudflare Tunnel
 
-For a fresh setup, choose **Start setup with VMess WebSocket** and enter the
-hostname of your named tunnel. The usual **Start setup** keeps its existing
-VLESS REALITY Vision behavior and needs no hostname.
+Follow the [VMess Tunnel setup guide](docs/setup-vmess-tunnel.md) first. You need
+your own Cloudflare domain, an unused hostname and a dedicated remotely managed
+tunnel. The menu explains how to create/select that tunnel and checks its
+protected local prerequisites before confirmation. The usual **Start setup**
+keeps its existing VLESS REALITY Vision behavior and needs no hostname.
 
 The optional setup adds VMess on `127.0.0.1:10000`, WebSocket path
-`/sbxr-vmess`. A separately managed `cloudflared` connector must forward the
-hostname to `http://127.0.0.1:10000`. Clients use TLS on the hostname's TCP 443;
-no extra public origin port is needed. SBXR accepts no Cloudflare credentials
-and does not manage the connector, tunnel or DNS. See the
-[connector decision and deployment inputs](docs/research/vmess-cloudflare-tunnel.md).
+`/sbxr-vmess`. SBXR manages only a dedicated `sbxr-tunnel.service`, using an
+Owner-installed official `cloudflared` binary and a protected token file. It
+does not create or change Cloudflare account resources, domain, tunnel or DNS.
+The selected tunnel must forward the hostname to `http://127.0.0.1:10000`.
+Clients use TLS on the hostname's TCP 443; no extra public origin port is needed.
+Existing connector services are preserved. Tokens never belong in the hostname
+prompt, client configuration, shell command arguments or reports.
 
 The HTTP subscription includes the existing VLESS node and an additional VMess
 node. Both use one Client Identity; rotation replaces both credentials together.
 Show client configuration includes both outbounds, with VLESS still the default.
-Local status checks do not prove Cloudflare or VMess client reachability.
-Complete removal removes SBXR's local VMess configuration; separately managed
-connector and account resources remain the Owner's responsibility.
+Setup checks the public WebSocket route and authenticated VMess-only HTTPS
+traffic. A failure reports **VMess connection pending**, even if the local proxy
+is Running. After correcting the route, choose **Check VMess connection**;
+reinstallation is unnecessary. A server-originated pass does not prove
+outside-client or Karing acceptance. Complete removal stops and removes only
+SBXR's dedicated connector unit/link and local proxy resources. The Owner's
+token, cloudflared package, domain, tunnel and DNS remain the Owner's responsibility.
 
 This is source implementation, not a published or live-qualified release.
 VMess can be selected only before proxy setup; there is no in-place enable action,

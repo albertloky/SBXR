@@ -85,3 +85,18 @@ func vmessOutbound(f ConnectionFacts) map[string]any {
 		"transport": map[string]any{"type": "ws", "path": VMessWebSocketPath, "headers": map[string]any{"Host": f.VMessHostname}},
 	}
 }
+
+// EncodeVMessProbeConfiguration has one authenticated loopback proxy and one
+// VMess outbound. It cannot silently fall back to VLESS or direct traffic.
+func (a Adapter) EncodeVMessProbeConfiguration(source []byte, port int, user, password string) ([]byte, error) {
+	facts, err := a.CurrentConnectionFacts(source, "192.0.2.1")
+	if err != nil || facts.VMessHostname == "" || port < 1 || port > 65535 || user == "" || password == "" {
+		return nil, fmt.Errorf("VMess probe configuration refused")
+	}
+	return json.Marshal(map[string]any{
+		"log":       map[string]any{"disabled": true},
+		"inbounds":  []any{map[string]any{"type": "http", "listen": "127.0.0.1", "listen_port": port, "users": []any{map[string]any{"username": user, "password": password}}}},
+		"outbounds": []any{vmessOutbound(facts)},
+		"route":     map[string]any{"final": "vmess-ws-out"},
+	})
+}

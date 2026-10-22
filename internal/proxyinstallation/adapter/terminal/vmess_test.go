@@ -44,7 +44,20 @@ func TestMenuReviewsVMessHostnameBeforeConfirmation(t *testing.T) {
 			if !strings.Contains(output.String(), "VMess origin for tunnel.example.com\nStart proxy setup? [y/N]") {
 				t.Fatal("confirmation omitted the reviewed origin")
 			}
+			for _, guidance := range []string{"your own Cloudflare domain", "dedicated unused tunnel", "leave route path blank", "/etc/cloudflared/sbxr.token", "never paste it here", "sbxr-tunnel.service"} {
+				if !strings.Contains(output.String(), guidance) {
+					t.Fatalf("guide omitted %q", guidance)
+				}
+			}
 		})
+	}
+}
+
+func TestVMessGuideBlankHostnameCancelsBeforeReview(t *testing.T) {
+	v := &vmessInstallation{}
+	var output bytes.Buffer
+	if code := Run(t.Context(), nil, strings.NewReader("4\n\n0\n"), &output, &output, v, nil); code != 0 || v.hostname != "" || len(v.confirmations) != 0 || len(v.actions) != 1 {
+		t.Fatal("blank hostname did not cancel safely")
 	}
 }
 

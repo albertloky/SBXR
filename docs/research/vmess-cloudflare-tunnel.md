@@ -1,5 +1,12 @@
 # Optional VMess WebSocket and named Cloudflare Tunnel
 
+The original connector boundary below describes commit `1bc15c7`. The later
+guided implementation adds dedicated local connector ownership and public
+connection checks; see the [current setup guide](../setup-vmess-tunnel.md) and
+[ADR-0033 refinement](../adr/0033-optional-vmess-websocket-tunnel.md#guided-connector-refinement-2026-10-22).
+The pinned sing-box option/package observations below remain applicable. They do
+not qualify the later connector code or supply release/Karing acceptance.
+
 ## Connector choice and verified 1.14.3 support
 
 The [official cloudflared inbound documentation](https://sing-box.sagernet.org/configuration/inbound/cloudflared/)

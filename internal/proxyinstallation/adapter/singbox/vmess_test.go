@@ -119,3 +119,28 @@ func TestVMessWebSocketRefusesNoncanonicalInboundFieldWithoutPanicking(t *testin
 		t.Fatal("accepted a noncanonical inbound field")
 	}
 }
+
+func TestVMessProbeHasOneRouteAndNoInfrastructureSecret(t *testing.T) {
+	a := New()
+	id, _ := a.PrepareIdentity()
+	source, _ := a.EncodeServerConfiguration(id, "google.com:443", "google.com")
+	source, _ = a.WithVMessWebSocket(source, "tunnel.example.com")
+	body, err := a.EncodeVMessProbeConfiguration(source, 12345, "probe-user", "probe-password")
+	if err != nil || bytes.Contains(body, []byte(id.PrivateKey)) {
+		t.Fatal("unsafe probe encoding", err)
+	}
+	var config struct {
+		Log       map[string]any
+		Inbounds  []map[string]any
+		Outbounds []map[string]any
+		Route     map[string]any
+	}
+	if json.Unmarshal(body, &config) != nil || len(config.Inbounds) != 1 || len(config.Outbounds) != 1 || config.Outbounds[0]["type"] != "vmess" || config.Outbounds[0]["uuid"] != id.UUID || config.Route["final"] != "vmess-ws-out" || config.Log["disabled"] != true || config.Inbounds[0]["listen"] != "127.0.0.1" {
+		t.Fatal("probe permits an unexpected route or exposure")
+	}
+	for _, port := range []int{0, 65536} {
+		if _, err := a.EncodeVMessProbeConfiguration(source, port, "u", "p"); err == nil {
+			t.Fatal("unsafe port accepted")
+		}
+	}
+}

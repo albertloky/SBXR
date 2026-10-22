@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
@@ -23,6 +24,7 @@ func buildBootstrapFile(options bootstrapOptions) error {
 		"Tag":        options.tag, "Commit": options.commit, "Version": options.version,
 		"Sequence": fmt.Sprint(options.sequence), "Root": strings.TrimSuffix(options.root, "/"),
 		"AMD64ExecutableSHA256": options.amd64ExecutableSHA256, "ARM64ExecutableSHA256": options.arm64ExecutableSHA256,
+		"TunnelUnitSHA256": hostadapter.TunnelUnitSHA256(),
 	}) != nil {
 		return errors.New("bootstrap build refused")
 	}
@@ -294,6 +296,16 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     lock_provisioning_suffix=',"lock_provisioning":\{"unit_sha256":"440c4153f2db3ee3b8cd00f1297d9fcedda633c2761b00fa71429c222280dc40"\}'
   fi
   serving_suffix=''
+  tunnel_suffix=''
+  if "$ROOT/usr/bin/grep" -Fq '"tunnel":' <<<"$removal_subject"; then
+    [ -n "$lock_provisioning_suffix" ] && [ "$package_version" = '1.14.3' ] || path_refused
+    tunnel=$("$ROOT/usr/bin/sed" -n 's/.*,"tunnel":\({[^}]*}\).*/\1/p' <<<"$removal_subject")
+    tunnel_pattern='\{"tunnel_id":"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}","token_sha256":"[0-9a-f]{64}","binary_sha256":"[0-9a-f]{64}"\}'
+    printf '%s\n' "$tunnel" | "$ROOT/usr/bin/grep" -Eqx "$tunnel_pattern" || path_refused
+    resources=${resources%]}',"/etc/systemd/system/sbxr-tunnel.service root:root 0644 one-link sha256:{{.TunnelUnitSHA256}}","/etc/systemd/system/sbxr-tunnel.service.sbxr-next root-owned synchronized no-replace publication","/etc/systemd/system/multi-user.target.wants/sbxr-tunnel.service root-owned symlink ../sbxr-tunnel.service"]'
+    provenance_count=$((provenance_count + 3))
+    tunnel_suffix=',"tunnel":'"$tunnel_pattern"
+  fi
   http_serving=0
   legacy_serving_pattern='\{"link_id":"[0-9a-f]{32}","credential_sha256":"[0-9a-f]{64}","certificate_generation":[1-9][0-9]{0,6},"certificate_sha256":\["[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}","[0-9a-f]{64}"\]\}'
   http_serving_pattern='\{"http":true,"link_id":"[0-9a-f]{32}","credential_sha256":"[0-9a-f]{64}","certificate_generation":0,"certificate_sha256":\["","","",""\]\}'
@@ -477,7 +489,7 @@ if [ -e "$removal_record" ] || [ -L "$removal_record" ]; then
     suffix=$suffix',"resource_creating_releases":\['"$identity"'(,'"$identity"'){'"$((provenance_count - 1))"'}\],"finishing_release_identity":'"$identity"
     selector='finishing_release_identity'
   fi
-  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$activation_suffix$enablement_suffix$rotation_suffix$repair_suffix$compromised_suffix$subscription_suffix$startup_suffix$lock_provisioning_suffix$client_suffix$retirement_suffix"'\}$' "$removal_record" || path_refused
+  "$ROOT/usr/bin/grep" -Eqx '^'"$prefix$fields$suffix$serving_suffix$renewal_suffix$activation_suffix$enablement_suffix$rotation_suffix$repair_suffix$compromised_suffix$subscription_suffix$startup_suffix$lock_provisioning_suffix$tunnel_suffix$client_suffix$retirement_suffix"'\}$' "$removal_record" || path_refused
   if [ "$removal_record" = "$final_removal_record" ]; then
     final_checkpoint=3
     [ -z "$config_sha" ] || final_checkpoint=11
@@ -602,6 +614,9 @@ single_line "$WORK/candidate-identity.json" && "$ROOT/usr/bin/grep" -Eqx "$candi
 [ "$RESTORING_REMOVAL" -eq 1 ] || [ "$executable_sha" = "$EXPECTED_EXECUTABLE_SHA256" ] || release_refused 'executable/sha256 expected=embedded observed=mismatch'
 
 if [ "$RESTORING_REMOVAL" -eq 1 ]; then
+  if [ -n "${tunnel_suffix:-}" ]; then
+    "$ROOT/usr/bin/grep" -aFq 'SBXR-DEDICATED-TUNNEL-V1' "$candidate" || release_refused
+  fi
   if [ "$http_serving" -eq 1 ] || [ "${pending_http:-0}" -eq 1 ]; then
     "$ROOT/usr/bin/grep" -aFq 'SBXR-SUBSCRIPTION-HTTP-V1' "$candidate" || release_refused
   fi
@@ -649,7 +664,7 @@ fi
 
 # A clean installation never reclaims an existing product or protected state.
 [ ! -e "$active" ] && [ ! -L "$active" ] && [ ! -e "$installed_directory" ] && [ ! -L "$installed_directory" ] || path_refused
-for resource in /etc/sing-box /var/lib/sing-box /usr/bin/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-mutation-lock.service /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service /etc/systemd/system/sbxr-subscription.service /etc/systemd/system/sbxr-subscription-firewall.service /etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf /etc/letsencrypt/live/sbxr-subscription /etc/letsencrypt/archive/sbxr-subscription /etc/letsencrypt/renewal/sbxr-subscription.conf /etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription /etc/letsencrypt/renewal-hooks/post/sbxr-subscription /etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf; do
+for resource in /etc/sing-box /var/lib/sing-box /usr/bin/sing-box /etc/apt/sources.list.d/sagernet.sources /etc/apt/keyrings/sagernet.asc /etc/systemd/system/sbxr-mutation-lock.service /etc/systemd/system/sbxr-mutation-lock.service.sbxr-next /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service /etc/systemd/system/sbxr-tunnel.service /etc/systemd/system/sbxr-tunnel.service.sbxr-next /etc/systemd/system/multi-user.target.wants/sbxr-tunnel.service /etc/systemd/system/sbxr-subscription.service /etc/systemd/system/sbxr-subscription-firewall.service /etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf /etc/letsencrypt/live/sbxr-subscription /etc/letsencrypt/archive/sbxr-subscription /etc/letsencrypt/renewal/sbxr-subscription.conf /etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription /etc/letsencrypt/renewal-hooks/post/sbxr-subscription /etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf; do
   [ ! -e "$ROOT$resource" ] && [ ! -L "$ROOT$resource" ] || path_refused
 done
 RECLAIMING=1

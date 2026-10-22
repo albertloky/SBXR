@@ -69,6 +69,7 @@ type ownershipRecord struct {
 	SubscriptionResources    *hostadapter.SubscriptionResourceAuthority `json:"subscription_resources,omitempty"`
 	Startup                  *hostadapter.ProxyStartupAuthority         `json:"proxy_startup,omitempty"`
 	LockProvisioning         *hostadapter.LockProvisioningAuthority     `json:"lock_provisioning,omitempty"`
+	Tunnel                   *hostadapter.TunnelAuthority               `json:"tunnel,omitempty"`
 	ClientRotation           *clientIdentityRotation                    `json:"client_identity_rotation,omitempty"`
 	HTTPSRetirement          *hostadapter.HTTPSRetirementAuthority      `json:"https_retirement,omitempty"`
 	TransportMigrating       bool                                       `json:"subscription_transport_migration,omitempty"`
@@ -244,7 +245,7 @@ func decodeOwnership(body []byte) (ownershipRecord, bool) {
 		}
 	}
 	for name, value := range fields {
-		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "lock_provisioning", "client_identity_rotation", "https_retirement", "subscription_transport_migration"}, name) {
+		if !slices.Contains([]string{"schema", "phase", "unfinished_direction", "release_identity", "proxy_package_identity", "public_ipv4", "destination_address", "destination_server_name", "configuration_sha256", "permitted_resources", "cleanup_checkpoint", "removal_checkpoint", "resource_creating_releases", "finishing_release_identity", "serving", "renewal", "certificate_activation", "subscription_enablement", "subscription_rotation", "subscription_repair", "subscription_compromised", "subscription_resources", "proxy_startup", "lock_provisioning", "tunnel", "client_identity_rotation", "https_retirement", "subscription_transport_migration"}, name) {
 			return ownershipRecord{}, false
 		}
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
@@ -513,6 +514,9 @@ func validOwnership(record ownershipRecord) bool {
 	if record.LockProvisioning != nil && (!record.LockProvisioning.Valid() || record.Package == "") {
 		return false
 	}
+	if record.Tunnel != nil && (!record.Tunnel.Valid() || record.Package == "" || record.LockProvisioning == nil) {
+		return false
+	}
 	if record.ClientRotation != nil && (record.Schema != 2 || record.Enablement != nil || record.Rotation != nil || record.Repair != nil || record.Activation != nil || record.Direction != noDirection && record.Direction != removalRequired || record.Phase != runningPhase && record.Phase != removalCommitted || !validClientIdentityRotation(*record.ClientRotation, record.Startup, record.ConfigurationSHA256)) {
 		return false
 	}
@@ -552,6 +556,9 @@ func recordResources(record ownershipRecord, softwareOnly bool) []string {
 	}
 	if record.LockProvisioning != nil {
 		resources = append(resources, record.LockProvisioning.Resources()...)
+	}
+	if record.Tunnel != nil {
+		resources = append(resources, record.Tunnel.Resources()...)
 	}
 	if record.Serving != nil {
 		resources = append(resources, record.Serving.Resources()...)
@@ -802,6 +809,9 @@ func AdmitSoftwareUpdate(body []byte, source softwarelifecycle.ReleaseIdentity, 
 		return false
 	}
 	if record.Serving != nil && !bytes.Contains(target.Executable, []byte(httpSubscriptionCapability)) {
+		return false
+	}
+	if record.Tunnel != nil && !bytes.Contains(target.Executable, []byte(hostadapter.TunnelCapability())) {
 		return false
 	}
 	if (record.HTTPSRetirement != nil || record.Serving != nil && !record.Serving.HTTP) && !bytes.Contains(target.Executable, []byte(hostadapter.HTTPSRetirementCapability())) {

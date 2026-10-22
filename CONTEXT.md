@@ -33,7 +33,9 @@ The Software Lifecycle result after Complete removal proves that the SBXR execut
 
 ### Proxy Profile
 The managed V3 VLESS REALITY Vision endpoint, optionally accompanied by a VMess
-WebSocket endpoint through a separately managed named Cloudflare Tunnel. Both
+WebSocket endpoint through the Owner's dedicated named Cloudflare Tunnel. New
+clean VMess setups manage only a dedicated local connector unit; the Owner
+provides its protected token/binary and manages account/domain/DNS resources. Both
 use one authorized Client Identity and rotate together. See ADR-0033.
 
 ### Client Identity

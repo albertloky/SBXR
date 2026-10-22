@@ -121,7 +121,7 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {
-	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14} {
+	for _, variant := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} {
 		name := fmt.Sprint(variant)
 		legacyPackage := variant == 14
 		if legacyPackage {
@@ -324,6 +324,28 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				authority, _ := json.Marshal(hostadapter.NewLockProvisioningAuthority())
 				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"lock_provisioning":` + string(authority) + "}\n")
 			}
+			if variant == 15 {
+				tunnel := hostadapter.TunnelAuthority{TunnelID: "12345678-1234-4234-8234-123456789abc", TokenSHA256: strings.Repeat("8", 64), BinarySHA256: strings.Repeat("9", 64)}
+				var fields map[string]json.RawMessage
+				if json.Unmarshal(ownership, &fields) != nil {
+					t.Fatal("tunnel fixture authority")
+				}
+				var resources []string
+				var creators []json.RawMessage
+				json.Unmarshal(fields["permitted_resources"], &resources)
+				json.Unmarshal(fields["resource_creating_releases"], &creators)
+				index := 18 // Original proxy resources followed by boot lock provisioning.
+				resources = append(append(append([]string{}, resources[:index]...), tunnel.Resources()...), resources[index:]...)
+				for range tunnel.Resources() {
+					creators = append(creators, fields["release_identity"])
+				}
+				resourceJSON, _ := json.Marshal(resources)
+				creatorJSON, _ := json.Marshal(creators)
+				ownership = bytes.Replace(ownership, fields["permitted_resources"], resourceJSON, 1)
+				ownership = bytes.Replace(ownership, fields["resource_creating_releases"], creatorJSON, 1)
+				tunnelJSON, _ := json.Marshal(tunnel)
+				ownership = []byte(strings.TrimSuffix(string(ownership), "}\n") + `,"tunnel":` + string(tunnelJSON) + "}\n")
+			}
 			if variant >= 12 {
 				retired := hostadapter.HTTPSRetirementAuthority{
 					Serving:           hostadapter.ServingAuthority{LinkID: strings.Repeat("a", 32), CredentialSHA256: strings.Repeat("b", 64), CertificateGeneration: 1, CertificateSHA256: [4]string{strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64)}},
@@ -382,6 +404,11 @@ func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *tes
 				"unknown operation":          bytes.Replace(ownership, []byte(`"phase":`), []byte(`"operation":{},"phase":`), 1),
 				"conflicting identity alias": bytes.Replace(ownership, []byte(`"Tag":`), []byte(`"tag":"v9.0.0","Tag":`), 1),
 				"unknown resource":           bytes.Replace(ownership, []byte(`root:root 0600 one-link`), []byte(`unproved resource`), 1),
+			}
+			if variant == 15 {
+				invalid["unknown tunnel field"] = bytes.Replace(ownership, []byte(`"tunnel_id":`), []byte(`"extra":true,"tunnel_id":`), 1)
+				invalid["invalid tunnel id"] = bytes.Replace(ownership, []byte(`"tunnel_id":"12345678-1234-4234-8234-123456789abc"`), []byte(`"tunnel_id":"not-a-tunnel"`), 1)
+				invalid["changed tunnel unit digest"] = bytes.Replace(ownership, []byte(hostadapter.TunnelUnitSHA256()), []byte(strings.Repeat("0", 64)), 1)
 			}
 			if variant >= 3 {
 				var fields struct {
@@ -976,7 +1003,7 @@ import "os"
 func main() {
 	if root := os.Getenv("SBXR_INSTALL_TEST_ROOT"); root != "" {
 		_ = os.WriteFile(root+"/fixtures/launched", []byte("launched"), 0600)
-		_ = os.WriteFile(root+"/fixtures/capabilities", []byte("SBXR-SUBSCRIPTION-HTTP-V1 SBXR-SUBSCRIPTION-HTTPS-RETIREMENT-V1"), 0600)
+		_ = os.WriteFile(root+"/fixtures/capabilities", []byte("SBXR-SUBSCRIPTION-HTTP-V1 SBXR-SUBSCRIPTION-HTTPS-RETIREMENT-V1 SBXR-DEDICATED-TUNNEL-V1"), 0600)
 		_ = os.WriteFile(root+"/fixtures/launched-locale", []byte(os.Getenv("LC_ALL")), 0600)
 	}
 }

@@ -102,6 +102,9 @@ func TestPackagedFootprintChecksTreatBrokenSymlinksAsPresent(t *testing.T) {
 		`if test -e "$path" || test -L "$path"; then`,
 		`{ test ! -e "$path" && test ! -L "$path"; } || return 1`,
 		`test ! -e /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service && test ! -L /etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service`,
+		`test ! -e /etc/systemd/system/sbxr-tunnel.service && test ! -L /etc/systemd/system/sbxr-tunnel.service`,
+		`test ! -e /etc/systemd/system/sbxr-tunnel.service.sbxr-next && test ! -L /etc/systemd/system/sbxr-tunnel.service.sbxr-next`,
+		`test ! -e /etc/systemd/system/multi-user.target.wants/sbxr-tunnel.service && test ! -L /etc/systemd/system/multi-user.target.wants/sbxr-tunnel.service`,
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("packaged footprint checks omitted broken-link guard %q", required)

@@ -71,6 +71,7 @@ type Preflight struct {
 }
 
 type Adapter struct {
+	tunnelCommand           func(context.Context, string, ...string) (string, int, bool)
 	subscriptionCommand     func(context.Context, string, ...string) (string, int, bool)
 	renewalCommand          func(context.Context, string, ...string) int
 	renewalProcessIdentity  func(int) (string, uint64, bool)

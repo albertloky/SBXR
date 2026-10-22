@@ -41,7 +41,9 @@ retains ordinary native, signing, attestation, failure and publication gates.
 
 `v3-packaged-live.sh` inventories the complete protected candidate footprint and
 proves its absence after public cleanup, including the owned mutation-lock boot
-unit, its staged publication path, and its enablement symlink. Absence checks
+unit and optional dedicated tunnel unit, their staged publication paths, and
+their enablement symlinks. Owner-provisioned tunnel tokens and cloudflared are
+preserved outside that cleanup authority. Absence checks
 treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.

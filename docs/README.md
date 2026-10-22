@@ -5,6 +5,7 @@
 | Need | Start here | What it establishes |
 |---|---|---|
 | Use SBXR | [Product README](../README.md) | Supported host, installation and menu journey |
+| Set up optional VMess Tunnel | [VMess setup guide](setup-vmess-tunnel.md) | Your own domain/tunnel, protected token, dedicated connector and honest connection checks |
 | Change implementation | [Agent code map](agents/code-map.md) | Entry points, owning modules and focused checks |
 | Understand domain language | [CONTEXT.md](../CONTEXT.md) | One shared glossary, not a second specification |
 | Find an architectural or policy decision | [ADR index](adr/README.md) | Decisions grouped by scope and product era |
