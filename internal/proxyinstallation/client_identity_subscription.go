@@ -95,7 +95,7 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 		record.Serving = &accepted
 		updateSubscriptionResources(record, record.Release)
 		var published bool
-		*current, published = m.publishClientIdentityCheckpoint(*record, *current)
+		*current, published = m.publishOwnershipCheckpoint(*record, *current)
 		if !published {
 			return false
 		}
@@ -114,14 +114,14 @@ func (m *installedInterface) finishIdentitySubscription(ctx context.Context, rec
 		sub.Target = inspection.Published
 		updateSubscriptionResources(record, record.Release)
 		var published bool
-		*current, published = m.publishClientIdentityCheckpoint(*record, *current)
+		*current, published = m.publishOwnershipCheckpoint(*record, *current)
 		if !published || !host.PublishClientIdentitySubscription(*record.Serving, sub.Target) {
 			return false
 		}
 		accepted := sub.Target
 		record.Serving = &accepted
 		updateSubscriptionResources(record, record.Release)
-		*current, published = m.publishClientIdentityCheckpoint(*record, *current)
+		*current, published = m.publishOwnershipCheckpoint(*record, *current)
 		if !published {
 			return false
 		}

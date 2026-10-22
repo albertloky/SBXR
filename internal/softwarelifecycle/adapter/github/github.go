@@ -88,7 +88,7 @@ func publicClient() *http.Client {
 }
 
 func (source Source) CheckLatest(ctx context.Context) (softwarelifecycle.LatestRelease, softwarelifecycle.LatestReleaseOutcome) {
-	latest, _, outcome := source.latest(ctx, "")
+	latest, _, outcome := source.publicRelease(ctx, "", "")
 	return latest, outcome
 }
 
@@ -109,7 +109,7 @@ func (source Source) PrepareLatest(ctx context.Context, architecture softwarelif
 	} else if architecture != softwarelifecycle.AMD64 {
 		return softwarelifecycle.UpdateCandidate{}, softwarelifecycle.LatestReleaseRefused
 	}
-	latest, archive, outcome := source.latest(ctx, name)
+	latest, archive, outcome := source.publicRelease(ctx, name, "")
 	if outcome != softwarelifecycle.LatestReleaseAccepted {
 		return softwarelifecycle.UpdateCandidate{}, outcome
 	}
@@ -118,10 +118,6 @@ func (source Source) PrepareLatest(ctx context.Context, architecture softwarelif
 		return softwarelifecycle.UpdateCandidate{}, softwarelifecycle.LatestReleaseRefused
 	}
 	return candidate, softwarelifecycle.LatestReleaseAccepted
-}
-
-func (source Source) latest(ctx context.Context, archiveName string) (softwarelifecycle.LatestRelease, []byte, softwarelifecycle.LatestReleaseOutcome) {
-	return source.publicRelease(ctx, archiveName, "")
 }
 
 func (source Source) publicRelease(ctx context.Context, archiveName, tag string) (softwarelifecycle.LatestRelease, []byte, softwarelifecycle.LatestReleaseOutcome) {
@@ -204,7 +200,7 @@ func (source Source) publicRelease(ctx context.Context, archiveName, tag string)
 		return softwarelifecycle.LatestRelease{}, nil, softwarelifecycle.LatestReleaseRefused
 	}
 	proofs := make([]softwarelifecycle.LatestAssetProof, 0, 4)
-	for _, name := range latestAssetNames() {
+	for _, name := range softwarelifecycle.LatestReleaseAssetNames() {
 		asset := metadata[name]
 		proofs = append(proofs, softwarelifecycle.LatestAssetProof{Name: name, Size: asset.Size, SHA256: asset.SHA256})
 	}
@@ -442,13 +438,9 @@ type assetMetadata struct {
 	Size        int64
 }
 
-func latestAssetNames() []string {
-	return []string{"install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
-}
-
 func exactLatestAssets(baseURL string, assets []githubAsset) (map[string]assetMetadata, error) {
 	expected := map[string]bool{}
-	for _, name := range latestAssetNames() {
+	for _, name := range softwarelifecycle.LatestReleaseAssetNames() {
 		expected[name] = true
 	}
 	result := make(map[string]assetMetadata, len(assets))
@@ -596,7 +588,7 @@ func latestAcceptanceRecord(body, tag, commit string, assets map[string]assetMet
 	} else if role == "Rescue direct-install and lower-sequence replacement release" {
 		return "", 0, false
 	}
-	for _, name := range latestAssetNames() {
+	for _, name := range softwarelifecycle.LatestReleaseAssetNames() {
 		asset := assets[name]
 		value, ok := uniqueRecordValue(body, "Asset: "+name+" ")
 		if !ok || value != fmt.Sprintf("%d %s", asset.Size, asset.SHA256) {
@@ -736,7 +728,7 @@ func parseReleaseStatement(body []byte, commit string) (string, map[string]strin
 	purl := "pkg:github/" + softwarelifecycle.Repository + "@" + tag
 	if statement.Type != "https://in-toto.io/Statement/v1" || statement.PredicateType != "https://in-toto.io/attestation/release/v0.2" ||
 		statement.Predicate.DatabaseID == "" || statement.Predicate.OwnerID == "" || statement.Predicate.PackageID == "" || statement.Predicate.RepositoryID == "" ||
-		statement.Predicate.Repository != softwarelifecycle.Repository || !immutableTagPattern.MatchString(tag) || statement.Predicate.PURL != purl || len(statement.Subject) != len(latestAssetNames())+1 {
+		statement.Predicate.Repository != softwarelifecycle.Repository || !immutableTagPattern.MatchString(tag) || statement.Predicate.PURL != purl || len(statement.Subject) != len(softwarelifecycle.LatestReleaseAssetNames())+1 {
 		return "", nil, errors.New("release statement refused")
 	}
 	release := statement.Subject[0]
@@ -750,7 +742,7 @@ func parseReleaseStatement(body []byte, commit string) (string, map[string]strin
 		}
 		assets[subject.Name] = subject.Digest["sha256"]
 	}
-	for _, name := range latestAssetNames() {
+	for _, name := range softwarelifecycle.LatestReleaseAssetNames() {
 		if assets[name] == "" {
 			return "", nil, errors.New("release statement refused")
 		}

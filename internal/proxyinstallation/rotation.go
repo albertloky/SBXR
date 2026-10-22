@@ -112,7 +112,7 @@ func (module *installedInterface) rotateSubscriptionLink(ctx context.Context, au
 	record.Rotation = &operation
 	updateSubscriptionResources(&record, authority.release)
 	var published bool
-	current, published = module.publishSubscriptionRotationCheckpoint(record, current)
+	current, published = module.publishOwnershipCheckpoint(record, current)
 	if !published {
 		return subscriptionRotationIncomplete("Replacement generation authority", "Inspect the durable Ownership Record before retrying.")
 	}
@@ -123,7 +123,7 @@ func (module *installedInterface) rotateSubscriptionLink(ctx context.Context, au
 	}
 	operation.Checkpoint, operation.Completed = rotationStopAuthorized, []string{"target prepared"}
 	record.Rotation = &operation
-	current, published = module.publishSubscriptionRotationCheckpoint(record, current)
+	current, published = module.publishOwnershipCheckpoint(record, current)
 	if !published {
 		return subscriptionRotationIncomplete("Old generation stop authority", "Inspect the durable Ownership Record before retrying.")
 	}
@@ -134,21 +134,11 @@ func (module *installedInterface) rotateSubscriptionLink(ctx context.Context, au
 	operation.Checkpoint, operation.Direction, operation.Completed = rotationCommitted, "forward", []string{"target prepared", "source stopped"}
 	record.Serving, record.Rotation = &target, &operation
 	updateSubscriptionResources(&record, authority.release)
-	current, published = module.publishSubscriptionRotationCheckpoint(record, current)
+	current, published = module.publishOwnershipCheckpoint(record, current)
 	if !published {
 		return subscriptionRotationIncomplete("Replacement selection commitment", "Inspect durable authority; never restore or regenerate the selected replacement.")
 	}
 	return module.completeSubscriptionRotation(ctx, host, authority.release, record, current, input, progress)
-}
-
-func (module *installedInterface) publishSubscriptionRotationCheckpoint(record ownershipRecord, current []byte) ([]byte, bool) {
-	next := ownershipBytes(record)
-	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err == nil {
-		return next, true
-	}
-	published, err := module.readOwnership()
-	_, ok := decodeOwnership(published)
-	return published, err == nil && ok && bytes.Equal(published, next) && module.host.SyncOwnership(hostSetupSpec.OwnershipPath, published) == nil
 }
 
 func (module *installedInterface) prepareSubscriptionRotationFinishReview(ctx context.Context, review Review, record ownershipRecord, body []byte) Review {
@@ -209,7 +199,7 @@ func (module *installedInterface) finishSubscriptionRotation(ctx context.Context
 		}
 		record.Rotation = nil
 		updateSubscriptionResources(&record, authority.release)
-		if _, ok := module.publishSubscriptionRotationCheckpoint(record, current); !ok {
+		if _, ok := module.publishOwnershipCheckpoint(record, current); !ok {
 			return subscriptionRotationIncomplete("Rotation cleanup checkpoint", "Inspect durable authority before retrying.")
 		}
 		report(progress, "Verifying subscription result")
@@ -235,7 +225,7 @@ func (module *installedInterface) completeSubscriptionRotation(ctx context.Conte
 	}
 	record.Rotation, record.SubscriptionCompromised = nil, false
 	updateSubscriptionResources(&record, release)
-	if _, ok := module.publishSubscriptionRotationCheckpoint(record, current); !ok {
+	if _, ok := module.publishOwnershipCheckpoint(record, current); !ok {
 		return subscriptionRotationIncomplete("Rotation completion checkpoint", "Inspect durable authority before retrying.")
 	}
 	report(progress, "Verifying subscription result")

@@ -1,7 +1,6 @@
 package softwarelifecycle
 
 import (
-	"encoding/json"
 	"io"
 	"slices"
 )
@@ -83,14 +82,5 @@ func BuildSubscriptionReleaseIndex(tag, commit string, sequence uint64, assets [
 	if !support.valid() {
 		return nil, io.ErrUnexpectedEOF
 	}
-	body, err := BuildLatestReleaseIndex(tag, commit, sequence, assets)
-	if err != nil {
-		return nil, err
-	}
-	var document latestReleaseIndex
-	if json.Unmarshal(body, &document) != nil {
-		return nil, io.ErrUnexpectedEOF
-	}
-	document.Schema, document.Support = 2, &support
-	return json.Marshal(document)
+	return buildLatestReleaseIndex(tag, commit, sequence, assets, &support)
 }

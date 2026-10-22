@@ -203,6 +203,16 @@ func newOwnershipRecord(release softwarelifecycle.ReleaseIdentity, facts hostada
 	return record
 }
 
+func (module *installedInterface) publishOwnershipCheckpoint(record ownershipRecord, current []byte) ([]byte, bool) {
+	next := ownershipBytes(record)
+	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err == nil {
+		return next, true
+	}
+	published, err := module.readOwnership()
+	_, ok := decodeOwnership(published)
+	return published, err == nil && ok && bytes.Equal(published, next) && module.host.SyncOwnership(hostSetupSpec.OwnershipPath, published) == nil
+}
+
 func ownershipBytes(record ownershipRecord) []byte {
 	body, _ := json.Marshal(record)
 	return append(body, '\n')

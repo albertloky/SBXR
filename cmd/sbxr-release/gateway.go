@@ -19,7 +19,7 @@ import (
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
-var gatewayAssetNames = []string{"install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"}
+var gatewayAssetNames = softwarelifecycle.LatestReleaseAssetNames()
 
 type gatewayManifest struct {
 	Schema     string `json:"schema"`

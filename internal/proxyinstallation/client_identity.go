@@ -230,7 +230,7 @@ func (module *installedInterface) finishClientIdentityRotation(ctx context.Conte
 		}
 		record.ClientRotation = nil
 		updateSubscriptionResources(&record, authority.release)
-		if _, ok := module.publishClientIdentityCheckpoint(record, current); !ok {
+		if _, ok := module.publishOwnershipCheckpoint(record, current); !ok {
 			return clientIdentityIncomplete("Rotation cleanup checkpoint", "Inspect durable authority before retrying.")
 		}
 		return Result{Status: Running, SubscriptionStatus: SubscriptionNotEnabled, ProxyTraffic: ProvedWorking, SubscriptionServing: ProvedStopped, Message: "Client Identity rotation was cancelled and its preparation was cleaned up. The previous Client Identity remains authoritative.", Code: ClientIdentityRotationCleanedUp}
@@ -312,7 +312,7 @@ func (module *installedInterface) rotateClientIdentity(ctx context.Context, auth
 	}
 	record.Startup = authority.startup
 	updateSubscriptionResources(&record, authority.release)
-	current, ok = module.publishClientIdentityCheckpoint(record, current)
+	current, ok = module.publishOwnershipCheckpoint(record, current)
 	if !ok {
 		return clientIdentityIncomplete("Rotation authority", "Inspect the durable Ownership Record before retrying.")
 	}
@@ -423,7 +423,7 @@ func (module *installedInterface) completeClientIdentityRotation(ctx context.Con
 	}
 	record.ClientRotation = nil
 	updateSubscriptionResources(&record, release)
-	if _, ok := module.publishClientIdentityCheckpoint(record, current); !ok {
+	if _, ok := module.publishOwnershipCheckpoint(record, current); !ok {
 		return clientIdentityIncomplete("Rotation completion checkpoint", "Inspect durable authority before retrying.")
 	}
 	return Result{Status: Running, SubscriptionStatus: SubscriptionNotEnabled, ProxyTraffic: ProvedWorking, SubscriptionServing: ProvedStopped, Message: "Client Identity was rotated. Refresh the Subscription Link or use Show client configuration.", Code: ClientIdentityRotated}
@@ -436,23 +436,13 @@ func (module *installedInterface) advanceClientIdentity(record ownershipRecord, 
 	}
 	record.ClientRotation.Checkpoint = checkpoint
 	record.ClientRotation.Completed = slices.Clone(clientIdentityRotationEffects[:index+1])
-	next, ok := module.publishClientIdentityCheckpoint(record, current)
+	next, ok := module.publishOwnershipCheckpoint(record, current)
 	return next, record, ok
 }
 
 func effectForClientCheckpoint(checkpoint clientIdentityRotationCheckpoint) string {
 	policy, _, _ := clientIdentityPolicy(checkpoint)
 	return policy.effect
-}
-
-func (module *installedInterface) publishClientIdentityCheckpoint(record ownershipRecord, current []byte) ([]byte, bool) {
-	next := ownershipBytes(record)
-	if err := module.host.PublishOwnership(hostSetupSpec.OwnershipPath, hostSetupSpec.OwnershipNextPath, current, next); err == nil {
-		return next, true
-	}
-	published, err := module.readOwnership()
-	_, ok := decodeOwnership(published)
-	return published, err == nil && ok && bytes.Equal(published, next) && module.host.SyncOwnership(hostSetupSpec.OwnershipPath, published) == nil
 }
 
 func clientIdentityIncomplete(failed, correction string) Result {

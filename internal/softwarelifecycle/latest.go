@@ -43,6 +43,10 @@ func LatestReleaseAssetNames() []string {
 
 // BuildLatestReleaseIndex creates the strict index consumed by VerifyLatestReleaseIndex.
 func BuildLatestReleaseIndex(tag, commit string, sequence uint64, assets []LatestAssetProof) ([]byte, error) {
+	return buildLatestReleaseIndex(tag, commit, sequence, assets, nil)
+}
+
+func buildLatestReleaseIndex(tag, commit string, sequence uint64, assets []LatestAssetProof, support *ReleaseSupport) ([]byte, error) {
 	if !immutableReleaseTag.MatchString(tag) || !commitPattern.MatchString(commit) || sequence == 0 || len(assets) != 3 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -57,6 +61,9 @@ func BuildLatestReleaseIndex(tag, commit string, sequence uint64, assets []Lates
 		}
 	}
 	document := latestReleaseIndex{Schema: 1, Repository: Repository, Tag: tag, Commit: commit, Sequence: sequence, Assets: assets}
+	if support != nil {
+		document.Schema, document.Support = 2, support
+	}
 	body, err := json.Marshal(document)
 	if err != nil || len(body) == 0 || len(body) > MaxIndexBytes {
 		return nil, io.ErrUnexpectedEOF
