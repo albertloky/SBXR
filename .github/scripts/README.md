@@ -173,9 +173,14 @@ uses `original_profiles_audit_v3(before_profiles, after_profiles, timezone=...,
 tzif_record=..., window_start=..., window_end=...)`. It returns the complete
 private path/value diff and `passed`; callers retain the audit before requiring
 that result. Only the fixed timestamp and latency-cache changes can pass, and
-the built-in `custom` profile stays exact. `native_timezone_binding()` reads the
-native zone identity; fresh preparation must also retain and freeze its exact
-TZif bytes. The comparator reads those retained bytes, never process `TZ` or
+the built-in `custom` profile stays exact.
+The frozen baseline determines the original-profile count and order; any nonempty
+list of unique IDs containing `custom` is supported. Existing saved test profiles
+can remain protected originals. Missing, extra, reordered or changed originals
+still refuse; the fixed cache exceptions are unchanged.
+`native_timezone_binding()` reads the native zone identity; fresh preparation
+must also retain and freeze its exact TZif bytes. The comparator reads those
+retained bytes, never process `TZ` or
 current native state. Producers record their own baseline/current UTC read times,
 not UI-selected windows. M2/M3/same-link/M5 consumers recompute the immutable audit
 and separately verify current actual readbacks. Keep policy, baseline, timezone,

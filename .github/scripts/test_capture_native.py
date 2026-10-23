@@ -164,6 +164,9 @@ raise SystemExit(c.main([sys.argv[2],'--inputs',str(inputs),'--phase',sys.argv[4
         self.assertNotIn(self.case.url, result.stdout + result.stderr)
 
     def test_subprocess_capture_and_consumer_for_all_native_phases(self):
+        self.exercise_native_phases()
+
+    def exercise_native_phases(self):
         for phase in ("baseline-check", "m2", "m3-identity", "m3-link", "m5"):
             if phase != "baseline-check":
                 self.install(phase)
@@ -177,6 +180,62 @@ raise SystemExit(c.main([sys.argv[2],'--inputs',str(inputs),'--phase',sys.argv[4
                              "mvp-credentials" if phase.startswith("m3-") else
                              {"m2": "mvp-subscription", "m5": "mvp-removal"}[phase])
         self.assertNotEqual(self.run_cli("capture", "m5").returncode, 0)
+
+    def frozen_original_count(self, count):
+        if count == 1:
+            self.baseline["items"] = [self.baseline["items"][0]]
+            self.baseline["items"][0]["servers"] = copy.deepcopy(self.original["servers"])
+            connection_path = self.root / "connection-baseline.private"
+            connection = json.loads(connection_path.read_bytes())
+            connection["connection"]["configuration"] = "custom"
+            self.inputs["selected_connection_baseline"] = record(self.write(connection_path, connection))
+        else:
+            _, saved, _ = self.case.combined()
+            saved.update(groupid="PUBLIC-RackNerd-baseline", remark="SBXR RackNerd baseline")
+            for node in saved["servers"]:
+                node.update(groupid=saved["groupid"], tag="Saved " + node["type"],
+                            uuid="32345678-1234-4234-8234-123456789abc")
+            for index in range(2, count):
+                extra = copy.deepcopy(saved)
+                extra["groupid"] += str(index)
+                for node in extra["servers"]:
+                    node["groupid"] = extra["groupid"]
+                self.baseline["items"].append(extra)
+        self.inputs["original_store_baseline"] = record(self.write("store-baseline.private", self.baseline))
+        self.write(self.case.native_store.name, self.baseline)
+        self.write(self.inputs_path, self.inputs)
+
+    def test_custom_only_baseline_flows_through_all_native_phases(self):
+        self.frozen_original_count(1)
+        self.exercise_native_phases()
+
+    def test_saved_racknerd_profile_remains_through_all_native_phases(self):
+        self.frozen_original_count(3)
+        self.exercise_native_phases()
+
+    def test_larger_baseline_flows_through_all_native_phases(self):
+        self.frozen_original_count(5)
+        self.exercise_native_phases()
+
+    def test_missing_saved_original_profile_refuses_capture(self):
+        self.frozen_original_count(3)
+        self.install("m2")
+        store = json.loads(self.case.native_store.read_bytes())
+        del store["items"][2]
+        self.write(self.case.native_store.name, store)
+        self.assertNotEqual(self.run_cli("capture", "m2").returncode, 0)
+        audit = json.loads((self.root / "m2-original-profiles-audit.private").read_bytes())
+        self.assertFalse(audit["passed"])
+        self.assertFalse((self.root / "m2-native-capture-result.private").exists())
+
+    def test_unexpected_extra_profile_cannot_join_frozen_baseline(self):
+        self.frozen_original_count(3)
+        self.install("m2")
+        store = json.loads(self.case.native_store.read_bytes())
+        store["items"].append({"groupid": "unexpected", "remark": "Unexpected", "servers": []})
+        self.write(self.case.native_store.name, store)
+        self.assertNotEqual(self.run_cli("capture", "m2").returncode, 0)
+        self.assertFalse((self.root / "m2-native-capture-result.private").exists())
 
     def test_default_one_node_flow_still_works(self):
         self.install("m2", combined=False)

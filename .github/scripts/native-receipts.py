@@ -284,14 +284,15 @@ def original_profiles_audit_v3(before, after, *, timezone, tzif_record, window_s
     start, end = _profile_window_utc(window_start), _profile_window_utc(window_end)
     require(start <= end, 'Profile observation window regresses')
     refusals = []
+    # The frozen baseline determines the count; full diffs still reject count/order changes.
     for profiles in (before, after):
-        valid = isinstance(profiles, list) and len(profiles) == 2 and all(
+        valid = isinstance(profiles, list) and bool(profiles) and all(
             isinstance(item, dict) and isinstance(item.get('groupid'), str) and item['groupid']
             for item in profiles)
-        valid = valid and len({item['groupid'] for item in profiles}) == 2 and any(
+        valid = valid and len({item['groupid'] for item in profiles}) == len(profiles) and any(
             item['groupid'] == 'custom' for item in profiles)
         if not valid:
-            refusals.append('Exactly two unique original profiles including the built-in custom are required')
+            refusals.append('Nonempty unique original profiles including the built-in custom are required')
     changes = _profile_differences(before, after)
     for change in changes:
         path, old, new = change['path'], change['before'], change['after']

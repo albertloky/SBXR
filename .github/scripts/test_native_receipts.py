@@ -165,6 +165,76 @@ class NativeReadbackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Expected transport bytes"):
             self.verify()
 
+    def original_profiles(self, count):
+        profiles = [{"groupid": "custom", "remark": "custom", "servers": []}]
+        for index in range(1, count):
+            profile = copy.deepcopy(self.profile)
+            profile.update(groupid=f"original-{index}", remark=f"Original {index}",
+                           updateTime="2026-10-23 01:00:00")
+            profile["servers"][0]["groupid"] = profile["groupid"]
+            profiles.append(profile)
+        return profiles
+
+    def audit_originals(self, before, after):
+        zone = self.write("timezone.private.tzif", Path("/usr/share/zoneinfo/Etc/UTC").read_bytes())
+        return RECEIPTS.original_profiles_audit_v3(
+            before, after, timezone={"name": "Etc/UTC", "resolved_source_path": "/PUBLIC/zoneinfo/Etc/UTC",
+                                     "sha256": sha(zone.read_bytes())},
+            tzif_record=self.record(zone), window_start="2026-10-23T01:10:00Z",
+            window_end="2026-10-23T02:00:00Z")
+
+    def test_original_profile_counts_follow_frozen_baseline_with_same_cache_rules(self):
+        for count in (1, 2, 3, 5):
+            with self.subTest(count=count):
+                before = self.original_profiles(count)
+                exact = self.audit_originals(before, copy.deepcopy(before))
+                self.assertTrue(exact["passed"], exact["refusals"])
+                self.assertEqual(exact["changes"], [])
+                after = copy.deepcopy(before)
+                for profile in after[1:]:
+                    profile["updateTime"] = "2026-10-23 01:20:00"
+                    profile["servers"][0]["latency"] = "222"
+                audit = self.audit_originals(before, after)
+                self.assertTrue(audit["passed"])
+                self.assertEqual(len(audit["changes"]), 2 * (count - 1))
+                self.assertTrue(all(change["allowed"] for change in audit["changes"]))
+
+    def test_original_profile_count_identity_and_order_changes_refuse(self):
+        before = self.original_profiles(3)
+        extra = copy.deepcopy(before[1]); extra["groupid"] = "unexpected-original"
+        changed_id = copy.deepcopy(before); changed_id[2]["groupid"] = "changed-identity"
+        duplicate = copy.deepcopy(before); duplicate[2]["groupid"] = duplicate[1]["groupid"]
+        missing_id = copy.deepcopy(before); del missing_id[2]["groupid"]
+        empty_id = copy.deepcopy(before); empty_id[2]["groupid"] = ""
+        for after in (before[:2], before + [extra], list(reversed(before)), changed_id,
+                      duplicate, missing_id, empty_id, before[1:]):
+            with self.subTest(after=after):
+                self.assertFalse(self.audit_originals(before, after)["passed"])
+        for invalid in ([], before[1:], duplicate, missing_id, empty_id):
+            with self.subTest(invalid_baseline=invalid):
+                audit = self.audit_originals(invalid, copy.deepcopy(invalid))
+                self.assertFalse(audit["passed"])
+                self.assertTrue(audit["refusals"])
+
+    def test_additional_original_profiles_keep_full_content_guards(self):
+        before = self.original_profiles(3)
+        for path, value in [(("urlOrPath",), "other"), (("groupid",), "other"),
+                            (("servers", 0, "uuid"), "other"),
+                            (("servers", 0, "tls", "enabled"), False),
+                            (("servers", 0, "tls", "reality", "public_key"), "other"),
+                            (("servers", 0, "flow"), "other"), (("unexpected",), True)]:
+            with self.subTest(path=path):
+                after = copy.deepcopy(before)
+                target = after[2]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                self.assertFalse(self.audit_originals(before, after)["passed"])
+        after = copy.deepcopy(before); after[2]["servers"].clear()
+        self.assertFalse(self.audit_originals(before, after)["passed"])
+        after = copy.deepcopy(before); after[0]["latency"] = "222"
+        self.assertFalse(self.audit_originals(before, after)["passed"])
+
     def combined(self):
         attempt = {
             "schema": "sbxr-v3-qualification-attempt-v3", "proxy_profile": "vless-vmess",

@@ -348,7 +348,7 @@ offline correction supplies no live pass or publication authority.
 The Owner approved this prospective policy on 2026-10-20 for explicitly versioned
 future preparations. Bind `original-profiles-refresh-cache-v3` separately from
 settings v2. The built-in original profile with group ID `custom` must still match
-exactly. For the other original profile, permit differences only at its immediate
+exactly. For each other original profile, permit differences only at its immediate
 `updateTime` and existing `servers[index].latency` fields:
 
 - A changed timestamp requires both values to be valid native date/time strings,
@@ -361,6 +361,10 @@ exactly. For the other original profile, permit differences only at its immediat
 
 Profile/node identities, count/order, URLs, credentials, TLS/REALITY/Vision,
 routes, all other fields and all non-item store fields remain exact. The existing
+baseline may contain any nonempty number of unique profile IDs, including the
+built-in `custom`; two was an incidental historical count. A saved RackNerd
+baseline profile can remain as a protected original. Add and later remove only
+the new candidate profile; do not remove originals to fit a fixture count. The
 settings policy, selected connection, connection state and TUN checks remain
 required. Any observed selection change fails. Latency may affect automatic
 selection; before/after observations cannot prove every intermediate choice.
