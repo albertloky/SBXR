@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real-file readback regressions; public fixtures never access Karing or a server."""
 import copy
+import base64
 import hashlib
 import importlib.util
 import json
@@ -163,6 +164,222 @@ class NativeReadbackTests(unittest.TestCase):
         self.facts["saved_url"] = self.record(self.root / "expected-url.private")
         with self.assertRaisesRegex(ValueError, "Expected transport bytes"):
             self.verify()
+
+    def combined(self):
+        attempt = {
+            "schema": "sbxr-v3-qualification-attempt-v3", "proxy_profile": "vless-vmess",
+            "evidence_policy": "mvp-http-live-v1", "sources": [],
+            "support": {"scope": "subscription-clean-install-only", "sources": [],
+                        "contract": "sbxr-subscription-update-v1"},
+        }
+        host = "tunnel.example.com"
+        wire = {"v": "2", "ps": f"SBXR VMess ({host})", "add": host, "port": "443",
+                "id": self.profile["servers"][0]["uuid"], "aid": "0", "scy": "auto",
+                "net": "ws", "type": "none", "host": host, "path": "/sbxr-vmess",
+                "tls": "tls", "sni": host}
+        # Karing 1.2.25/2802's saved baseline node shape, with public replacements.
+        # The observed zero-legacy-ID VMess node omits alter_id entirely.
+        profile = copy.deepcopy(self.profile)
+        profile["servers"].append({
+            "groupid": profile["groupid"], "attach": "", "latency": "167",
+            "outlet_ip": "", "outlet_region": "", "server": host, "server_port": 443,
+            "tag": wire["ps"], "type": "vmess", "uuid": wire["id"],
+            "security": "auto", "tls": {"enabled": True, "server_name": host},
+            "transport": {"type": "ws", "path": "/sbxr-vmess", "headers": {"Host": host}},
+        })
+        return attempt, profile, wire
+
+    def combined_wire(self, vmess):
+        return self.wire + b"vmess://" + base64.b64encode(canonical(vmess)) + b"\n"
+
+    def test_signed_combined_profile_requires_exactly_both_nodes(self):
+        attempt, profile, vmess = self.combined()
+        RECEIPTS.subscription_nodes(profile, self.combined_wire(vmess), attempt=attempt)
+        RECEIPTS.subscription_nodes(self.profile, self.wire)
+        for nodes in (profile["servers"][:1], profile["servers"] * 2,
+                      list(reversed(profile["servers"])), [profile["servers"][0]] * 2):
+            with self.subTest(nodes=nodes):
+                bad = {**profile, "servers": nodes}
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(bad, self.combined_wire(vmess), attempt=attempt)
+        with self.assertRaises(ValueError):
+            RECEIPTS.subscription_nodes(profile, self.combined_wire(vmess))
+        for wire in (self.wire, self.combined_wire(vmess) + self.wire,
+                     b"vmess://not-base64\n" + self.wire,
+                     self.wire + b"vmess://not-base64\n"):
+            with self.subTest(wire=wire):
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(profile, wire, attempt=attempt)
+
+    def test_combined_native_identity_transport_tls_and_fields_are_strict(self):
+        attempt, profile, vmess = self.combined()
+        for path, value in [
+            (("uuid",), "other"), (("server",), "other.example.com"),
+            (("server_port",), "443"), (("type",), "vless"), (("alter_id",), False),
+            (("alter_id",), 0), (("alter_id",), 1), (("security",), "none"), (("tag",), "other"),
+            (("groupid",), "other"), (("attach",), "fallback"),
+            (("tls", "enabled"), False), (("tls", "server_name"), "other.example.com"),
+            (("tls", "insecure"), True), (("transport", "type"), "tcp"),
+            (("transport", "path"), "/other"),
+            (("transport", "headers", "Host"), "other.example.com"),
+            (("unexpected",), True),
+        ]:
+            with self.subTest(path=path):
+                bad = copy.deepcopy(profile)
+                target = bad["servers"][1]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(bad, self.combined_wire(vmess), attempt=attempt)
+        for path, value in [(("uuid",), "other"), (("packet_encoding",), ""),
+                            (("tls", "reality", "public_key"), "wrong")]:
+            bad = copy.deepcopy(profile)
+            target = bad["servers"][0]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            with self.assertRaises(ValueError):
+                RECEIPTS.subscription_nodes(bad, self.combined_wire(vmess), attempt=attempt)
+
+    def test_combined_rejects_wrong_vless_contract_even_when_wire_and_native_agree(self):
+        attempt, profile, vmess = self.combined()
+        for path, value, before, after in (
+            (("flow",), "xtls-rprx-splice", b"flow=xtls-rprx-vision", b"flow=xtls-rprx-splice"),
+            (("server_port",), 1443, b":443?", b":1443?"),
+            (("tls", "utls", "fingerprint"), "firefox", b"fp=chrome", b"fp=firefox"),
+        ):
+            with self.subTest(field=path):
+                bad = copy.deepcopy(profile)
+                target = bad["servers"][0]
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                wire = self.combined_wire(vmess).replace(before, after, 1)
+                with self.assertRaisesRegex(ValueError, "Two-node VLESS transport differs"):
+                    RECEIPTS.subscription_nodes(bad, wire, attempt=attempt)
+                # Omitted-profile behavior still compares the original one-node contract.
+                RECEIPTS.subscription_nodes({**bad, "servers": bad["servers"][:1]},
+                                            wire.splitlines(keepends=True)[0])
+
+    def test_combined_wire_contract_rejects_legacy_authentication_and_wrong_routes(self):
+        attempt, profile, vmess = self.combined()
+        for key, value in [("v", "1"), ("id", "other"), ("port", 443), ("port", "80"),
+                           ("aid", "1"), ("scy", "none"), ("net", "tcp"), ("type", "http"),
+                           ("tls", ""), ("sni", "other.example.com"), ("host", "other.example.com"),
+                           ("path", "/other"), ("unexpected", "value")]:
+            with self.subTest(field=key):
+                bad = {**vmess, key: value}
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(profile, self.combined_wire(bad), attempt=attempt)
+        raw = canonical(vmess).replace(b'"aid":"0"', b'"aid":"0","aid":"0"')
+        with self.assertRaises(ValueError):
+            RECEIPTS.subscription_nodes(profile, self.wire + b"vmess://" + base64.b64encode(raw), attempt=attempt)
+
+    def test_combined_requires_every_vmess_field_and_canonical_hostname(self):
+        attempt, profile, vmess = self.combined()
+        for key in profile["servers"][1]:
+            with self.subTest(missing_native=key):
+                bad = copy.deepcopy(profile)
+                del bad["servers"][1][key]
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(bad, self.combined_wire(vmess), attempt=attempt)
+        for key in vmess:
+            with self.subTest(missing_wire=key):
+                bad = dict(vmess)
+                del bad[key]
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(profile, self.combined_wire(bad), attempt=attempt)
+        for host in ("127.0.0.1", "https://example.com", "EXAMPLE.com", "a..example",
+                     "-bad.example", "a" * 64 + ".example"):
+            with self.subTest(host=host):
+                bad = {**vmess, "add": host, "host": host, "sni": host,
+                       "ps": f"SBXR VMess ({host})"}
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(profile, self.combined_wire(bad), attempt=attempt)
+
+    def test_combined_profile_refuses_incompatible_attempts(self):
+        attempt, profile, vmess = self.combined()
+        for fields in [
+            {"proxy_profile": "unknown"}, {"proxy_profile": None},
+            {"schema": "sbxr-v3-qualification-attempt-v2"},
+            {"evidence_policy": "mvp-live-v1"}, {"sources": [{}]},
+            {"support": {**attempt["support"], "scope": "subscription-clean-install-repair"}},
+            {"owner_exception": "reuse"}, {"live89_correction_review": {}},
+            {"late_confirmation_review": {}}, {"automated_only_scenarios": []},
+        ]:
+            with self.subTest(fields=fields):
+                with self.assertRaises(ValueError):
+                    RECEIPTS.subscription_nodes(profile, self.combined_wire(vmess), attempt={**attempt, **fields})
+
+    def test_combined_actual_file_readbacks_accept_observed_native_shape(self):
+        attempt, profile, vmess = self.combined()
+        self.assertNotIn("alter_id", profile["servers"][1])
+        self.profile = profile
+        self.write("expected-wire.private", self.combined_wire(vmess))
+        self.persist()
+        RECEIPTS.readbacks(SimpleNamespace(r=self.root, bindings=object()), self.facts,
+                           "expected-url.private", "expected-wire.private", attempt=attempt)
+
+    def test_combined_readbacks_preserve_source_and_whole_profile_guards(self):
+        attempt, profile, vmess = self.combined()
+        self.profile = profile
+        self.write("expected-wire.private", self.combined_wire(vmess))
+        self.persist()
+        original = copy.deepcopy(self.facts)
+        for field, value in (("sha256", "0" * 64), ("size", 0), ("mtime_ns", 0),
+                             ("source_app_path", str(self.root / "receipt-selected-store.json"))):
+            with self.subTest(provenance=field):
+                self.facts = copy.deepcopy(original)
+                self.facts["native_subscription_source"][field] = value
+                with self.assertRaises(ValueError):
+                    RECEIPTS.readbacks(self.live, self.facts, "expected-url.private",
+                                       "expected-wire.private", attempt=attempt)
+        for store in ({"items": []}, {"items": [profile, profile]},
+                      {"items": [{**profile, "unexpected": True}]}):
+            with self.subTest(store=store):
+                self.persist(store=store)
+                with self.assertRaisesRegex(ValueError, "unique actual native profile"):
+                    RECEIPTS.readbacks(self.live, self.facts, "expected-url.private",
+                                       "expected-wire.private", attempt=attempt)
+        self.persist()
+        self.native_store.chmod(0o640)
+        with self.assertRaisesRegex(ValueError, "Native app store file is not protected"):
+            RECEIPTS.readbacks(self.live, self.facts, "expected-url.private",
+                               "expected-wire.private", attempt=attempt)
+
+    def test_readbacks_reject_incompatible_attempt_before_any_file_read(self):
+        attempt, _, _ = self.combined()
+        for fields in ({"proxy_profile": "unknown"}, {"evidence_policy": "mvp-live-v1"},
+                       {"sources": [{}]}):
+            with self.subTest(fields=fields), \
+                    patch.object(RECEIPTS, "source_file", side_effect=AssertionError("read receipt")), \
+                    patch.object(RECEIPTS, "private_bytes", side_effect=AssertionError("read expected bytes")), \
+                    patch.object(RECEIPTS.os, "open", side_effect=AssertionError("read native store")):
+                with self.assertRaises(ValueError):
+                    RECEIPTS.readbacks(self.live, self.facts, "expected-url.private",
+                                       "expected-wire.private", attempt={**attempt, **fields})
+
+    def test_combined_receipt_cannot_choose_profile_or_downgrade_to_legacy_reader(self):
+        _, profile, vmess = self.combined()
+        self.profile = profile
+        self.write("expected-wire.private", self.combined_wire(vmess))
+        self.persist()
+        self.facts["proxy_profile"] = "vless-vmess"
+        original_open = RECEIPTS.os.open
+
+        def protected_open(path, *args, **kwargs):
+            if Path(path) == self.native_store:
+                raise AssertionError("native store was opened before node validation")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(RECEIPTS.os, "open", side_effect=protected_open):
+            with self.assertRaisesRegex(ValueError, "Exactly one"):
+                self.verify()
+
+    def test_live_bound_context_keeps_existing_default_vless_readbacks(self):
+        RECEIPTS.readbacks(SimpleNamespace(r=self.root, bindings=object()), self.facts,
+                           "expected-url.private", "expected-wire.private")
 
 
 if __name__ == "__main__":

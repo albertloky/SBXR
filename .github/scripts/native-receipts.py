@@ -13,6 +13,8 @@ the existing preserved(facts) API keeps its byte-strict v1 interpretation.
 Profiles v3 separately compares original profiles against frozen native rules
 and independently captured observation times; it never selects its own policy.
 """
+import base64
+import binascii
 import datetime as dt
 import hashlib
 import io
@@ -481,7 +483,9 @@ def preserved_v2(facts, binding, baseline_record):
             'Original connection must preserve exact value types')
 
 
-def readbacks(live, facts, url_name, content_name):
+def readbacks(live, facts, url_name, content_name, *, attempt=None):
+    # The caller supplies the authenticated attempt, never a receipt-selected profile.
+    _qualification_proxy_profile(attempt)
     actual = {}
     for field, expected in (('saved_url', url_name), ('saved_subscription_content', content_name)):
         record = facts.get(field)
@@ -504,6 +508,7 @@ def readbacks(live, facts, url_name, content_name):
     require(isinstance(profile, dict) and all(isinstance(profile.get(key), str) and profile[key]
             for key in ('groupid', 'remark', 'urlOrPath')), 'Actual native profile identity is missing')
     require(profile['urlOrPath'].encode() == actual['saved_url'], 'Actual native profile saved URL differs')
+    subscription_nodes(profile, wire_raw, attempt=attempt)
     proof = facts.get('native_subscription_source')
     require(isinstance(proof, dict) and set(proof) == {'source_app_path', 'sha256', 'size', 'mtime_ns'} and
             proof['source_app_path'] == str(NATIVE_SUBSCRIPTION_SOURCE), 'Actual native app source provenance is missing')
@@ -526,16 +531,62 @@ def readbacks(live, facts, url_name, content_name):
     matching = [item for item in store['items'] if isinstance(item, dict) and
                 (item.get('groupid'), item.get('remark')) == (profile['groupid'], profile['remark'])]
     require(len(matching) == 1 and matching[0] == profile, 'Readback is not the unique actual native profile entry')
-    nodes = profile.get('servers')
-    require(isinstance(nodes, list) and len(nodes) == 1 and isinstance(nodes[0], dict),
+
+
+def _qualification_proxy_profile(attempt):
+    if attempt is None:
+        return ''
+    require(type(attempt) is dict, 'A verified qualification attempt is required')
+    profile = attempt.get('proxy_profile', '')
+    require(profile in ('', 'vless-vmess'), 'Unknown native proxy profile')
+    if profile:
+        require(attempt.get('schema') == 'sbxr-v3-qualification-attempt-v3' and
+                attempt.get('evidence_policy') == 'mvp-http-live-v1' and
+                attempt.get('support') == {'scope': 'subscription-clean-install-only',
+                                           'contract': 'sbxr-subscription-update-v1', 'sources': []} and
+                attempt.get('sources') == [] and attempt.get('owner_exception', '') == '' and
+                attempt.get('late_confirmation_review') is None and
+                attempt.get('live89_correction_review') is None and
+                attempt.get('automated_only_scenarios') is None,
+                'Native proxy profile is incompatible with the signed attempt')
+    return profile
+
+
+def subscription_nodes(profile, wire_raw, *, attempt=None):
+    """Pure comparison; attempt and wire must come from verified candidate inputs.
+
+    This does not authenticate a manifest, read an app, or observe an import or
+    latency test. Never choose attempt from a receipt.
+    """
+    combined = _qualification_proxy_profile(attempt) == 'vless-vmess'
+    count = 2 if combined else 1
+    nodes = profile.get('servers') if isinstance(profile, dict) else None
+    require(isinstance(nodes, list) and len(nodes) == count and
+            all(isinstance(node, dict) for node in nodes),
+            'Exactly two native VLESS/VMess nodes are required' if combined else
             'Exactly one actual native REALITY node is required')
-    node = nodes[0]
+    try:
+        lines = wire_raw.decode().splitlines()
+    except (AttributeError, UnicodeError):
+        raise ValueError('Expected wire node parsing failed') from None
+    require(len(lines) == count, 'Expected wire node count differs')
+    _reality_node(nodes[0], lines[0])
+    if combined:
+        require(nodes[0]['server_port'] == 443 and nodes[0]['flow'] == 'xtls-rprx-vision' and
+                nodes[0]['tls']['utls']['fingerprint'] == 'chrome',
+                'Two-node VLESS transport differs')
+        require(len(wire_raw) <= 4096 and isinstance(profile.get('groupid'), str) and profile['groupid'] and
+                all(node.get('groupid') == profile['groupid'] for node in nodes) and
+                nodes[0]['tag'] == urllib.parse.unquote(urllib.parse.urlsplit(lines[0]).fragment),
+                'Two-node group or VLESS label differs')
+        _vmess_node(nodes[1], lines[1], nodes[0]['uuid'])
+
+
+def _reality_node(node, wire_line):
     require(set(node) == {'groupid', 'attach', 'latency', 'outlet_ip', 'outlet_region', 'server', 'server_port',
                          'tag', 'type', 'uuid', 'flow', 'packet_encoding', 'tls'}, 'Native node fields differ')
     try:
-        lines = wire_raw.decode().splitlines()
-        require(len(lines) == 1, 'Exactly one expected wire node is required')
-        uri = urllib.parse.urlsplit(lines[0])
+        uri = urllib.parse.urlsplit(wire_line)
         query = urllib.parse.parse_qs(uri.query, keep_blank_values=True, strict_parsing=True)
         port = uri.port
     except (UnicodeError, ValueError):
@@ -563,6 +614,40 @@ def readbacks(live, facts, url_name, content_name):
                    'packet_encoding': (node['packet_encoding'], 'xudp'), 'attach': (node['attach'], '')}
     for field, (observed, wanted) in comparisons.items():
         require(type(observed) is type(wanted) and observed == wanted, 'Native REALITY node differs: ' + field)
+
+
+def _vmess_node(node, wire_line, uuid):
+    # Karing 1.2.25/2802's observed saved VMess shape omits zero alter_id.
+    # Compare it to SBXR's strict AEAD URI; serialization is not import/traffic proof.
+    try:
+        require(wire_line.startswith('vmess://'), 'Expected VMess URI is missing')
+        encoded = wire_line[len('vmess://'):].encode('ascii')
+        decoded = base64.b64decode(encoded, validate=True)
+        require(base64.b64encode(decoded) == encoded, 'VMess base64 is not canonical')
+        wire = json.loads(decoded, object_pairs_hook=unique)
+    except (UnicodeError, binascii.Error, json.JSONDecodeError):
+        raise ValueError('VMess wire node parsing failed') from None
+    keys = {'v', 'ps', 'add', 'port', 'id', 'aid', 'scy', 'net', 'type', 'host', 'path', 'tls', 'sni'}
+    require(isinstance(wire, dict) and set(wire) == keys and
+            all(type(value) is str for value in wire.values()), 'VMess wire fields differ')
+    host = wire['add']
+    require(len(host) <= 253 and '.' in host and
+            all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in host.split('.')) and
+            not re.fullmatch(r'[0-9.]+', host), 'VMess hostname differs')
+    require(wire == {'v': '2', 'ps': 'SBXR VMess (' + host + ')', 'add': host, 'port': '443',
+                     'id': uuid, 'aid': '0', 'scy': 'auto', 'net': 'ws', 'type': 'none',
+                     'host': host, 'path': '/sbxr-vmess', 'tls': 'tls', 'sni': host},
+            'VMess wire transport, TLS or shared identity differs')
+    common = {'groupid', 'attach', 'latency', 'outlet_ip', 'outlet_region'}
+    require(set(node) == common | {'server', 'server_port', 'tag', 'type', 'uuid',
+                                   'security', 'tls', 'transport'} and
+            all(type(node[key]) is str for key in common), 'Native VMess fields differ')
+    expected = {key: node[key] for key in common}
+    expected.update({'attach': '', 'server': host, 'server_port': 443, 'tag': wire['ps'],
+                     'type': 'vmess', 'uuid': uuid, 'security': 'auto',
+                     'tls': {'enabled': True, 'server_name': host},
+                     'transport': {'type': 'ws', 'path': '/sbxr-vmess', 'headers': {'Host': host}}})
+    require(_canonical(node) == _canonical(expected), 'Native VMess identity, TLS or WebSocket differs')
 
 
 def true_facts(facts, names):

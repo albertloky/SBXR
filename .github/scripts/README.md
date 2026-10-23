@@ -27,7 +27,7 @@ retains ordinary native, signing, attestation, failure and publication gates.
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | One-target live89 recording correction | `live89-correction-review.py`, `test_live89_correction_review.py`; exact committed-source review and fresh archive payload verification under [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
-| Native Karing receipt readbacks | `native-receipts.py`, `test_native_receipts.py`; definitions-only source for fresh run-local capture/recording helpers, with actual native-store provenance and strict node comparison |
+| Native Karing receipt readbacks | `native-receipts.py`, `capture-native.py`, adjacent tests; shared comparisons and prepared capture/verification callers with actual native-store provenance and strict node comparison |
 | Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
 | Window expectation proxy pin | `prepare-mvp-window.py`, `test_prepare_mvp_window.py`; derive `/usr/bin/sing-box` SHA-256 from the receipt-verified local DEB without changing host facts |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |
@@ -113,6 +113,42 @@ VLESS URI omits packet encoding; the reader requires Karing's explicit `xudp`,
 matching sing-box's omitted-field default. Explicit empty encoding disables that
 behavior and is refused. Historical run copies and failed records remain frozen;
 this local correction supplies no live qualification or publication authority.
+
+`subscription_nodes(profile, wire, attempt=...)` is a pure offline comparison.
+Pass `v3_attempt` from the already authenticated signed manifest and the verified
+candidate's emitted wire bytes, never a receipt-selected profile. Omission keeps
+the strict one-node VLESS contract; `vless-vmess` requires exactly one VLESS and
+one VMess node, the shared identity and exact TLS/WebSocket fields. The strict
+VMess field set follows the saved Karing 1.2.25/2802 baseline representation,
+including omitted zero `alter_id`; the wire still requires `aid: "0"`.
+The Go/Python regression also uses the actual product encoder and full file
+readbacks with public fixtures.
+The two-node profile requires VLESS Vision on TCP 443 with Chrome uTLS, even if
+incorrect wire and native values agree. Default one-node comparisons are unchanged.
+
+`readbacks(..., attempt=...)` uses the same actual primary-store provenance checks
+as the existing one-node procedure: owned protected stable source, exact
+hash/size/mtime, unique complete profile and distinct private URL/profile captures
+matching the emitted bytes. A separate client process/store is not a qualification
+requirement. Do not take a target, profile policy or attempt from receipt claims.
+Keep existing app/helper identity binding, selected connection, complete settings
+and original-profile preservation checks in the reviewed capture/recording callers.
+Freeze the helper and every affected caller before a new signed attempt.
+Existing baseline serialization and latency observations prove no new candidate
+URI import, refresh, traffic, latency or qualification outcome.
+
+Fresh preparations copy `capture-native.py` to their existing prepared directory,
+beside `native-inputs.json`, and `native-receipts.py` under `operator-source/`.
+Use the existing reviewed input records and normal caller-byte bindings; no new
+freeze format is needed. `capture-native.py capture` writes the existing private
+capture envelope; `verify` consumes it and re-reads actual current sources.
+Both resolve the attempt from the authenticated manifest and check the current
+scenario request. Use phases `m2`, `m3-identity`, `m3-link` and `m5`; the two
+`baseline-check` phases remain readiness only. Supply actual home-screen connected
+and TUN observations using `--connected true|false --tun-enabled true|false`.
+All captures are exclusive mode-0600 files, with complete audit/inventory retained
+on refusal. Verification must pass immediately before recording native checks.
+Neither command operates Karing or records import, refresh or latency as observed.
 
 For new, explicitly pre-bound preparations, the same module owns the
 [fixed native settings v2 comparison](../../docs/acceptance/http-subscription-live.md#future-native-settings-comparison).

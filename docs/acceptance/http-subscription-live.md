@@ -89,6 +89,52 @@ replacement and removal checks separately. Generic observations cannot stand in
 for a missing per-node check. The public Acceptance Record discloses the selected
 profile. This procedure defines future evidence; it records no two-node live pass.
 
+The native helper's `subscription_nodes` and file-backed `readbacks` APIs require
+the explicit attempt from the authenticated signed manifest for the two-node
+profile and verify the strict node contract against candidate wire bytes.
+Default one-node VLESS checks retain their meaning. The VMess native field set
+follows the saved Karing 1.2.25/2802 baseline representation: zero `alter_id` is
+omitted, while the URI must specify `aid: "0"`.
+The combined profile also fixes VLESS Vision, TCP 443 and Chrome uTLS; matching
+incorrect native and wire values cannot satisfy that contract.
+
+Use the existing actual primary-store capture route with its protected stable
+source, exact source hash/size/mtime, unique complete profile and distinct private
+URL/profile readbacks. Separate client-process/store isolation is not required;
+preservation of the original connection, settings and profiles remains required.
+Bind the existing app/helper identity and all updated capture/recording callers
+before signing. Callers must pass the authenticated attempt; neither receipt
+claims nor an old one-node helper copy may select the new profile.
+The saved baseline structure supplies serialization evidence only. It and the
+baseline latency observations do not prove a new candidate URI import, refresh,
+traffic or latency, and cannot substitute for candidate-bound observations or
+the five-journey qualification.
+
+For a fresh preparation, copy the repository's `capture-native.py` beside its
+existing `native-inputs.json`, and the canonical native helper under
+`operator-source/`. Retain the normal reviewed caller/input bindings. After
+actually observing the current home-screen connection/TUN state, use:
+
+```sh
+python3 -B "$prepared/capture-native.py" capture --inputs "$prepared/native-inputs.json" \
+  --phase m2 --connected true --tun-enabled true
+python3 -B "$prepared/capture-native.py" verify --inputs "$prepared/native-inputs.json" \
+  --phase m2 --connected true --tun-enabled true
+```
+
+The booleans must report actual observations, including TUN off if that is the
+preserved baseline. Repeat this capture/verification path for `m3-identity`,
+`m3-link` and `m5` when those states actually exist. Both callers resolve the
+explicit attempt from the authenticated manifest/current request; verification
+re-reads the actual source and recomputes preservation before recording. The
+existing capture envelope retains its private audit and complete file inventory.
+No file is overwritten. A refusal retains partial private evidence for reviewed
+cleanup; inspect existing outputs rather than recapturing an uncertain outcome.
+This command does not operate Karing or mark any journey check observed. Fresh
+import, manual refresh and each latency result still require their own actual
+observations and the existing recorder/collector acceptance. Baseline-check phases
+are readiness only. Historical copies and receipts remain frozen.
+
 The collector emits the exact policy-specific checklist. Use the existing
 `mvp-observe.py` recorder and `v3-mvp-evidence.py` assembler with original
 timestamps and facts; never convert an old HTTPS observation into HTTP proof.
@@ -149,8 +195,8 @@ rechecks authentication, integrity and current release state. It adds no separat
 `stable-publication` environment ceremony or new `acceptance-vps` host probe. A publication job failure preserves qualification
 and accurate failure evidence for retry. Explicit abandonment retains the burn
 path. Failed or incomplete live checks and cleanup still stop qualification.
-These local workflow edits do not disable the automatic trigger on remote `main`
-until separately authorized integration; this local task authorizes no push or dispatch.
+Hosted trigger behavior follows the workflow version on GitHub; local edits
+alone do not change it.
 The ADR also defines the narrow authenticated recovery of an old prepublication
 failure without rewriting its original burn or repeating already proved journeys.
 
