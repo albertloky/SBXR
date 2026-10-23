@@ -1,10 +1,6 @@
 name: Publish qualified stable releases
 
 on:
-  workflow_run:
-    workflows: [Construct qualified drafts]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       operation:
@@ -49,7 +45,7 @@ env:
 
 jobs:
   preflight:
-    if: github.ref == 'refs/heads/main' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) || inputs.operation == 'publish')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'publish'
     runs-on: ubuntu-24.04
     outputs:
       publication_ready: ${{ steps.eligibility.outputs.publication_ready }}
@@ -59,7 +55,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id || github.event.workflow_run.id }}
+      QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
       REVIEWED_MAIN: ${{ inputs.reviewed_main }}
       SECURITY_ASSESSMENT: ${{ inputs.security_assessment }}
       DIVERGENCE_RATIONALE: ${{ inputs.divergence_rationale }}
@@ -93,11 +89,6 @@ jobs:
           cd ..
 
           manifest=verified/qualification-manifest.json
-          if test "$GITHUB_EVENT_NAME" = workflow_run && ! jq -e '.mode == "v3" and .v3_attempt.support.scope == "subscription-clean-install-only"' "$manifest" >/dev/null; then
-            printf 'publication_ready=false\n' >> "$GITHUB_OUTPUT"
-            printf '%s\n' 'Automatic publication applies to the current clean-install-only scope; historical scopes retain explicit dispatch.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           git fetch --force --tags origin
           if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
             python3 .github/scripts/live89-correction-review.py "$run_sha" > verified/live89-correction-review.json
@@ -260,7 +251,7 @@ jobs:
         run: printf '%s\n' '::warning::Stable preflight diagnostics unavailable; validation result unchanged.'
 
   publish:
-    if: needs.preflight.outputs.publication_ready == 'true' && (github.event_name == 'workflow_run' || inputs.operation == 'publish')
+    if: needs.preflight.outputs.publication_ready == 'true' && inputs.operation == 'publish'
     needs: preflight
     runs-on: ubuntu-24.04
     permissions:

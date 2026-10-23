@@ -48,11 +48,39 @@ HTTP_SCENARIOS["mvp-subscription"][0] = "outside-authenticated-http"
 HTTP_SCENARIOS["mvp-subscription"] += ["no-certificate-or-renewal-resources", "http-exposure-disclosed"]
 HTTP_SCENARIOS["mvp-serving"] = ("serving-restart-preserves-link current-artifact-after-restart outside-authenticated-http no-certificate-or-renewal-resources proxy-traffic-preserved").split()
 HTTP_ORDER = ["mvp-install", "mvp-subscription", "mvp-credentials", "mvp-serving", "mvp-removal"]
+VMESS_HTTP_SCENARIOS = {key: list(checks) for key, checks in HTTP_SCENARIOS.items()}
+VMESS_HTTP_SCENARIOS["mvp-subscription"][1] = "exact-vless-reality-and-vmess-websocket-nodes"
+for _scenario, _extra in {
+    "mvp-install": "outside-vless-reality-traffic outside-vmess-websocket-traffic dedicated-connector-running",
+    "mvp-subscription": "fresh-karing-vless-node-latency fresh-karing-vmess-node-latency",
+    "mvp-credentials": ("vless-old-established-session-terminated vmess-old-established-session-terminated "
+                        "vless-old-credential-refused vmess-old-credential-refused "
+                        "vless-replacement-proxy-traffic vmess-replacement-proxy-traffic "
+                        "same-link-refreshed-both-identities rotated-link-refreshed-both-identities "
+                        "both-identities-unchanged-by-link-rotation "
+                        "fresh-karing-vless-replacement-latency fresh-karing-vmess-replacement-latency"),
+    "mvp-serving": "vless-traffic-preserved vmess-traffic-preserved dedicated-connector-preserved",
+    "mvp-removal": ("restart-preserves-vless-access restart-preserves-vmess-access owned-connector-absent "
+                    "outside-vless-access-refused outside-vmess-access-refused tunnel-prerequisites-preserved"),
+}.items():
+    VMESS_HTTP_SCENARIOS[_scenario] += _extra.split()
 TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def scenario_order(attempt):
+    profile = attempt.get("proxy_profile", "")
+    if profile != "":
+        support = attempt.get("support")
+        if (profile != "vless-vmess" or attempt.get("schema") != "sbxr-v3-qualification-attempt-v3" or
+                attempt.get("evidence_policy") != HTTP_POLICY or
+                support != {"scope": "subscription-clean-install-only", "sources": [],
+                            "contract": "sbxr-subscription-update-v1"} or attempt.get("sources") != [] or
+                attempt.get("owner_exception", "") != "" or
+                attempt.get("late_confirmation_review") is not None or
+                attempt.get("live89_correction_review") is not None or
+                attempt.get("automated_only_scenarios") is not None):
+            refuse("unknown or incompatible proxy profile")
     policy = attempt.get("evidence_policy")
     order = HTTP_ORDER if policy in (HTTP_POLICY, HTTP_RECURRING_POLICY) else ORDER
     if policy in (POLICY, HTTP_POLICY):
@@ -80,6 +108,8 @@ def required_checks(attempt, scenario_id):
     if scenario_id not in scenario_order(attempt):
         refuse("unlisted scenario")
     scenarios = HTTP_SCENARIOS if attempt.get("evidence_policy") in (HTTP_POLICY, HTTP_RECURRING_POLICY) else SCENARIOS
+    if attempt.get("proxy_profile") == "vless-vmess":
+        scenarios = VMESS_HTTP_SCENARIOS
     if scenario_id in scenarios:
         return scenarios[scenario_id]
     checks = ("exact-source-and-candidate actual-source-packaged-updater "

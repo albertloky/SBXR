@@ -43,6 +43,14 @@ This refines source behavior only. It authorizes no new live host, credential,
 account, DNS, security, Karing or publication action. See the
 [setup and recovery guide](../setup-vmess-tunnel.md).
 
+## Qualification profile refinement, 2026-10-23
+
+The current [HTTP qualification procedure](../acceptance/http-subscription-live.md)
+supports signed `proxy_profile: "vless-vmess"` selection for clean-install-only
+attempts, requiring exact two-node observations in all five journeys. Omission
+retains the unchanged VLESS-only checklist. Historical or single-node evidence
+cannot qualify the tunnel route; this local refinement records no live pass.
+
 ## Original boundary in commit 1bc15c7
 
 The Owner's 2026-10-22 request authorizes source implementation and offline

@@ -101,12 +101,11 @@ class MainReviewTests(unittest.TestCase):
                 expression = expression.replace("inputs.operation", repr(operation)).replace("needs.preflight.result", repr(preflight)).replace("needs.publish.result", repr(publication))
                 self.assertEqual(eval(expression, {"__builtins__": {}}), burn)
         workflow = WORKFLOW.read_text()
-        self.assertIn("if: needs.preflight.outputs.publication_ready == 'true' && (github.event_name == 'workflow_run' || inputs.operation == 'publish')", workflow)
-        self.assertIn("workflows: [Construct qualified drafts]", workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
-        self.assertIn("github.event.workflow_run.head_repository.full_name == github.repository", workflow)
-        self.assertIn("QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id || github.event.workflow_run.id }}", workflow)
-        self.assertIn('if test "$GITHUB_EVENT_NAME" = workflow_run && ! jq -e \'.mode == "v3" and .v3_attempt.support.scope == "subscription-clean-install-only"\'', workflow)
+        self.assertIn("if: needs.preflight.outputs.publication_ready == 'true' && inputs.operation == 'publish'", workflow)
+        self.assertIn("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'publish'", workflow)
+        self.assertIn("QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}", workflow)
+        self.assertNotIn("github.event.workflow_run", workflow)
+        self.assertNotIn("\n  workflow_run:", workflow)
         self.assertEqual(workflow.count("if: steps.publication.outputs.pending != 'true'"), 3)
 
     def test_automatic_authorization_binds_the_exact_preflight_decision(self):

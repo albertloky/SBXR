@@ -53,16 +53,15 @@ This verification policy does not qualify a live release.
 
 Successful required tests and cleanup qualify the exact unchanged candidate for
 stable publication under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md).
-The stable workflow binds the verified facts and decision automatically, without
-a second `stable-publication` human environment approval or another
-`acceptance-vps` host probe. Authentication, exact asset digests and the complete
-successful acceptance chain remain required on every publication attempt.
-Successful completion of this repository's official `Construct qualified drafts`
-workflow on `main` starts current clean-install-only publication automatically
-through `workflow_run`; historical scopes retain explicit dispatch.
-Only successful same-repository runs qualify for that trigger. Main divergence
-still pauses for the exact review below. Manual dispatch retains
-`qualification_run_id` for retrying that successful run or explicitly abandoning it.
+After the Owner approves publication, explicitly dispatch `stable.yml` with the
+successful `qualification_run_id`. The workflow binds the verified facts and decision
+automatically, without a separate `stable-publication` environment ceremony or
+another `acceptance-vps` host probe. Authentication, exact asset digests and the
+complete successful acceptance chain remain required on every publication attempt.
+Successful completion of the official `Construct qualified drafts` workflow does
+not start publication. Stable publication has only `workflow_dispatch`; the
+`qualification_run_id` remains required for first publication, retry or explicit
+abandonment. Main divergence still pauses for the exact review below.
 
 A publication job failure preserves qualification and its actual failure evidence
 for retry of the same candidate run. Observe the current release state first if a

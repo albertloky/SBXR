@@ -181,6 +181,37 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 	assertActionsPinned(t, workflow)
 }
 
+func TestStablePublicationRequiresExplicitManualDispatch(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/stable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	trigger := workflow[strings.Index(workflow, "\non:\n"):strings.Index(workflow, "\npermissions:")]
+	if strings.Contains(trigger, "workflow_run:") || strings.Count(trigger, "  workflow_dispatch:") != 1 {
+		t.Fatal("stable publication must have only its explicit manual trigger")
+	}
+	for _, line := range strings.Split(trigger, "\n")[2:] {
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "   ") && line != "  workflow_dispatch:" {
+			t.Fatalf("unexpected stable trigger: %s", line)
+		}
+	}
+	for _, required := range []string{
+		"github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.operation == 'publish'",
+		"QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}",
+		"if: needs.preflight.outputs.publication_ready == 'true' && inputs.operation == 'publish'",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Fatalf("manual publication omitted %q", required)
+		}
+	}
+	for _, automatic := range []string{"github.event.workflow_run", `test "$GITHUB_EVENT_NAME" = workflow_run`} {
+		if strings.Contains(workflow, automatic) {
+			t.Fatalf("stable publication retained automatic event path %q", automatic)
+		}
+	}
+}
+
 func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t *testing.T) {
 	candidateBody, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {

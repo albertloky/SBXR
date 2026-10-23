@@ -34,7 +34,7 @@ func mvpQualificationFixtureWithTransport(t *testing.T, binary string, late, htt
 	return mvpQualificationFixtureForSupport(t, binary, late, httpSubscription, false)
 }
 
-func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSubscription, cleanOnly bool) (string, []byte, map[string]any) {
+func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSubscription, cleanOnly bool, proxyProfile ...string) (string, []byte, map[string]any) {
 	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
@@ -64,6 +64,9 @@ func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSu
 	if httpSubscription {
 		attempt["evidence_policy"] = softwarelifecycle.MVPHTTPEvidencePolicy
 		attempt["required_scenarios"] = strings.Fields(softwarelifecycle.MVPHTTPScenarios)
+	}
+	if len(proxyProfile) > 0 {
+		attempt["proxy_profile"] = proxyProfile[0]
 	}
 	attempt["after_snap_refresh"] = attempt["packages"]
 	if late {
@@ -111,7 +114,11 @@ func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSu
 			s["final_state"] = "Not installed"
 		}
 		checks := []any{}
-		for _, check := range ordinaryFixtureChecksFor(s["scenario_id"].(string), httpSubscription) {
+		expected := ordinaryFixtureChecksFor(s["scenario_id"].(string), httpSubscription)
+		if len(proxyProfile) > 0 && proxyProfile[0] == "vless-vmess" {
+			expected = vmessObservedChecks[s["scenario_id"].(string)]
+		}
+		for _, check := range expected {
 			checks = append(checks, map[string]any{"record": map[string]any{"check": check, "observed_at": s["completed_at"], "result": "observed"}, "sha256": ""})
 		}
 		s["evidence"] = checks

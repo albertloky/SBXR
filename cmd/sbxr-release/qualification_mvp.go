@@ -33,7 +33,21 @@ func ordinaryJourneys(attempt v3QualificationAttempt) []string {
 	return strings.Fields(softwarelifecycle.MVPLiveScenarios)
 }
 
+func validProxyProfile(attempt v3QualificationAttempt) bool {
+	if attempt.ProxyProfile == "" {
+		return true
+	}
+	// Historical scopes and evidence reuse cannot qualify the new tunnel route.
+	return attempt.ProxyProfile == "vless-vmess" && attempt.Schema == "sbxr-v3-qualification-attempt-v3" &&
+		attempt.Support != nil && validSupportDeclaration(*attempt.Support) && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly &&
+		attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy && attempt.Sources != nil && len(attempt.Sources) == 0 &&
+		attempt.OwnerException == "" && attempt.LateConfirmationReview == nil && attempt.Live89CorrectionReview == nil && attempt.AutomatedOnlyScenarios == nil
+}
+
 func ordinaryChecks(attempt v3QualificationAttempt, id string) []string {
+	if !validProxyProfile(attempt) {
+		return nil
+	}
 	if !httpLiveAttempt(attempt) {
 		if strings.HasPrefix(id, "source-") {
 			return mvpUpgradeChecks(id)
@@ -66,13 +80,28 @@ func ordinaryChecks(attempt v3QualificationAttempt, id string) []string {
 	if id == "mvp-renewal" {
 		return nil
 	}
-	if id == "mvp-serving" {
-		return strings.Fields("serving-restart-preserves-link current-artifact-after-restart outside-authenticated-http no-certificate-or-renewal-resources proxy-traffic-preserved")
-	}
 	checks := mvpLiveChecks(id)
+	if id == "mvp-serving" {
+		checks = strings.Fields("serving-restart-preserves-link current-artifact-after-restart outside-authenticated-http no-certificate-or-renewal-resources proxy-traffic-preserved")
+	}
 	if id == "mvp-subscription" {
 		checks[0] = "outside-authenticated-http"
 		checks = append(checks, "no-certificate-or-renewal-resources", "http-exposure-disclosed")
+	}
+	if attempt.ProxyProfile == "vless-vmess" {
+		for i, check := range checks {
+			if check == "one-correct-subscription-node" {
+				checks[i] = "exact-vless-reality-and-vmess-websocket-nodes"
+			}
+		}
+		extra := map[string]string{
+			"mvp-install":      "outside-vless-reality-traffic outside-vmess-websocket-traffic dedicated-connector-running",
+			"mvp-subscription": "fresh-karing-vless-node-latency fresh-karing-vmess-node-latency",
+			"mvp-credentials":  "vless-old-established-session-terminated vmess-old-established-session-terminated vless-old-credential-refused vmess-old-credential-refused vless-replacement-proxy-traffic vmess-replacement-proxy-traffic same-link-refreshed-both-identities rotated-link-refreshed-both-identities both-identities-unchanged-by-link-rotation fresh-karing-vless-replacement-latency fresh-karing-vmess-replacement-latency",
+			"mvp-serving":      "vless-traffic-preserved vmess-traffic-preserved dedicated-connector-preserved",
+			"mvp-removal":      "restart-preserves-vless-access restart-preserves-vmess-access owned-connector-absent outside-vless-access-refused outside-vmess-access-refused tunnel-prerequisites-preserved",
+		}
+		checks = append(checks, strings.Fields(extra[id])...)
 	}
 	return checks
 }

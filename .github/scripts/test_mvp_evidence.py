@@ -183,6 +183,66 @@ class MVPEvidenceTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((self.root / output).exists())
 
+    def test_vmess_profile_requires_exact_two_node_checks_and_collector_agreement(self):
+        attempt = self.manifest["v3_attempt"]
+        attempt.update(schema="sbxr-v3-qualification-attempt-v3", evidence_policy=MVP.HTTP_POLICY,
+                       proxy_profile="vless-vmess", sources=[],
+                       support={"scope": "subscription-clean-install-only",
+                                "contract": "sbxr-subscription-update-v1", "sources": []})
+        attempt["required_scenarios"] = MVP.HTTP_ORDER
+        self.write("manifest.json", self.manifest)
+        collector = SCRIPT.with_name("v3-recurring-evidence.sh").read_text()
+        function = collector[collector.index("mvp_required_checks() {"):].split("\n}", 1)[0] + "\n}\n"
+        for index, scenario in enumerate(MVP.HTTP_ORDER):
+            with self.subTest(scenario=scenario):
+                checks = MVP.required_checks(attempt, scenario)
+                self.assertNotEqual(checks, MVP.HTTP_SCENARIOS[scenario])
+                self.assertEqual(len(checks), len(set(checks)))
+                self.write("previous.json", [{"scenario_id": name} for name in MVP.HTTP_ORDER[:index]])
+                request, observation = self.scenario_files(scenario)
+                result = subprocess.run(self.command(request, observation, scenario+".json"), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                shell = subprocess.run(["bash", "-c", function+'manifest=$1; mvp_required_checks "$2"',
+                                        "bash", str(self.root / "manifest.json"), scenario],
+                                       cwd=SCRIPT.parents[2], capture_output=True, text=True)
+                self.assertEqual(shell.returncode, 0, shell.stderr)
+                self.assertEqual(shell.stdout.split(), checks)
+                observed = json.loads(observation.read_bytes())
+                for check_index in range(len(checks)):
+                    missing = {**observed, "checks": observed["checks"][:check_index] + observed["checks"][check_index+1:]}
+                    self.write("observation.json", missing)
+                    output = f"{scenario}-missing-{check_index}.json"
+                    refused = subprocess.run(self.command(request, observation, output), capture_output=True, text=True)
+                    self.assertNotEqual(refused.returncode, 0, checks[check_index])
+                    self.assertFalse((self.root / output).exists())
+        subscription = MVP.required_checks(attempt, "mvp-subscription")
+        self.assertNotIn("one-correct-subscription-node", subscription)
+        self.assertIn("exact-vless-reality-and-vmess-websocket-nodes", subscription)
+
+    def test_unknown_or_incompatible_proxy_profile_is_refused_by_checklist_cli(self):
+        base = dict(self.manifest["v3_attempt"], schema="sbxr-v3-qualification-attempt-v3",
+                    evidence_policy=MVP.HTTP_POLICY, proxy_profile="vless-vmess", sources=[],
+                    support={"scope": "subscription-clean-install-only",
+                             "contract": "sbxr-subscription-update-v1", "sources": []})
+        for name, fields in [
+            ("unknown", {"proxy_profile": "vless"}),
+            ("null", {"proxy_profile": None}),
+            ("old schema", {"schema": "sbxr-v3-qualification-attempt-v2"}),
+            ("HTTPS", {"evidence_policy": MVP.POLICY}),
+            ("recurring", {"evidence_policy": MVP.HTTP_RECURRING_POLICY}),
+            ("repair scope", {"support": {**base["support"], "scope": "subscription-clean-install-repair"}}),
+            ("sources", {"sources": [{}]}),
+            ("exception", {"owner_exception": "reuse"}),
+            ("correction", {"live89_correction_review": {}}),
+        ]:
+            with self.subTest(name=name):
+                self.manifest["v3_attempt"] = {**base, **fields}
+                self.write("manifest.json", self.manifest)
+                refused = subprocess.run([sys.executable, str(SCRIPT), "--checks", str(self.root / "manifest.json"),
+                                          "mvp-install"], capture_output=True, text=True)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertEqual(refused.stdout, "")
+
     def test_duplicate_observation_member_is_refused_before_assembly(self):
         request, observation = self.scenario_files()
         raw = observation.read_text()

@@ -13,6 +13,14 @@ facts, request/hash chain, actual observations and validation/submission deadlin
 The baseline is release-order evidence, not a source to install. Historical repair
 scope keeps its original baseline/history restriction.
 
+The signed attempt may select `proxy_profile: "vless-vmess"` for the optional
+two-node setup. Omit `proxy_profile` for the existing VLESS-only qualification;
+its checks remain unchanged. No other nonempty profile is accepted. The two-node
+profile requires attempt schema v3, this exact clean-install-only HTTP scope,
+empty sources and no exception, archival correction or automated-only claim.
+Historical repair, HTTPS and recurring scopes cannot select it. Bind the profile
+before signing; changing it requires a new qualification, not reused observations.
+
 Only v3.1.90/168 may use the approved
 [live89 operator-recording correction](../adr/0029-live89-operator-recording-correction.md).
 Its signed `live89_correction_review` and dedicated correction-result stage bind
@@ -45,6 +53,41 @@ Use exactly these five journeys in order:
 5. `mvp-removal`: retain ordinary restart/access proof, reviewed Complete
    removal, exact owned absence and outside rejection, unrelated-resource/SSH
    preservation, and actual client, process, capture and secret cleanup.
+
+For `vless-vmess`, the same five journeys require the following additional exact
+evidence. A one-or-two-node condition is never sufficient:
+
+- Install through the guided VMess setup. Prove the dedicated owned connector
+  is running and real outside traffic independently through VLESS REALITY and
+  VMess WebSocket, with no direct or other-node fallback. A server-originated
+  setup probe does not satisfy outside traffic or Karing evidence.
+- Subscription replaces `one-correct-subscription-node` with
+  `exact-vless-reality-and-vmess-websocket-nodes`: exactly one correct VLESS
+  REALITY Vision node and one correct VMess AEAD WebSocket node, no extras.
+  Compare actual emitted/imported fields, shared current UUID, VLESS endpoint,
+  REALITY key/SNI/flow and VMess hostname, TLS TCP 443 and `/sbxr-vmess` path to
+  the reviewed installation. Require fresh actual Karing latency for each node,
+  manual refresh and the existing selected connection/settings preservation.
+- Credentials must terminate established sessions and reject the old UUID on
+  each protocol. Prove replacement traffic independently through both nodes,
+  refresh both identities on the unchanged link, then rotate the link and prove
+  the new link refreshes both nodes with unchanged proxy identities. Reject the
+  old link and obtain fresh Karing replacement latency separately for both nodes.
+- Serving restart must preserve both nodes' traffic and the exact dedicated
+  connector, as well as the unchanged link and correct current two-node artifact.
+- Before removal, prove ordinary restart preserves access on each protocol.
+  After reviewed Complete removal, prove owned connector unit/enablement-link
+  absence and outside rejection on both protocols. Preserve the Owner-provided
+  `cloudflared` binary, protected token and unrelated resources; do not change
+  Cloudflare account, DNS or tunnel resources. Complete actual cleanup of both
+  test clients, processes, captures and temporary secrets, and restore the
+  original client settings/connection. Preserved prerequisite secrets are not
+  disposable test secrets.
+
+The generated checklist names each protocol's traffic, latency, revocation,
+replacement and removal checks separately. Generic observations cannot stand in
+for a missing per-node check. The public Acceptance Record discloses the selected
+profile. This procedure defines future evidence; it records no two-node live pass.
 
 The collector emits the exact policy-specific checklist. Use the existing
 `mvp-observe.py` recorder and `v3-mvp-evidence.py` assembler with original
@@ -98,13 +141,16 @@ required. Fresh HTTP subscriptions need no CA dry run, replacement or renewal.
 After all required tests and actual host/client/secret cleanup pass, the exact
 unchanged candidate qualifies for stable publication under
 [ADR-0032](../adr/0032-qualified-publication-retry.md). Successful completion of the
-official main-branch qualification starts the stable workflow automatically;
-main divergence still pauses for exact review. Publication replays that successful
-evidence and rechecks authentication, integrity and current release state; it
-requires no second human `stable-publication` approval or new
-`acceptance-vps` host probe. A publication job failure preserves qualification
+official main-branch qualification makes the candidate eligible but does not
+start publication. Obtain the Owner's explicit publication approval before manual
+`stable.yml` dispatch with the successful `qualification_run_id`; main divergence
+still pauses for exact review. Publication replays that successful evidence and
+rechecks authentication, integrity and current release state. It adds no separate
+`stable-publication` environment ceremony or new `acceptance-vps` host probe. A publication job failure preserves qualification
 and accurate failure evidence for retry. Explicit abandonment retains the burn
 path. Failed or incomplete live checks and cleanup still stop qualification.
+These local workflow edits do not disable the automatic trigger on remote `main`
+until separately authorized integration; this local task authorizes no push or dispatch.
 The ADR also defines the narrow authenticated recovery of an old prepublication
 failure without rewriting its original burn or repeating already proved journeys.
 

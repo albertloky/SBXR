@@ -122,18 +122,8 @@ func TestCleanInstallOnlyQualificationDeclarationRecordAndPublication(t *testing
 	if err := runQualificationDeclaration(strings.NewReader(qualificationDocument(t, qualificationDeclarationFacts{Attempt: declaration, Preflight: pre})), &declared); err != nil {
 		t.Fatalf("unsigned declaration: %v", err)
 	}
-	r := m.Releases[0]
-	support := m.V3Attempt.Support.lifecycle()
-	public := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: r.ReleaseIdentity.Repository, Tag: r.Tag, Commit: r.Commit, IndexSHA256: r.ReleaseIdentity.ReleaseIndexSHA256}, Sequence: r.Sequence, Support: &support}
-	path := filepath.Join(t.TempDir(), "record.json")
-	if err := os.WriteFile(path, []byte(qualificationDocument(t, map[string]any{"body": body, "release": public, "assets": r.Assets})), 0600); err != nil {
-		t.Fatal(err)
-	}
-	check := exec.Command("go", "test", "../../internal/softwarelifecycle/adapter/github", "-run", "TestCleanInstallOnlyRecordCompatibility", "-count=1")
-	check.Env = append(os.Environ(), "SBXR_TEST_CLEAN_INSTALL_ONLY_RECORD="+path)
-	if result, err := check.CombinedOutput(); err != nil {
-		t.Fatalf("public/frozen reader: %v %s", err, result)
-	}
+	assertCleanInstallOnlyRecordReaders(t, m, body)
+
 	for i, raw := range evidence["scenarios"].([]any) {
 		s := raw.(map[string]any)
 		for j := range s["evidence"].([]any) {
@@ -146,6 +136,22 @@ func TestCleanInstallOnlyQualificationDeclarationRecordAndPublication(t *testing
 		}
 	}
 	assertCleanInstallOnlyPublication(t, binary, pre, m, document, out)
+}
+
+func assertCleanInstallOnlyRecordReaders(t *testing.T, m qualificationManifest, body string) {
+	t.Helper()
+	r := m.Releases[0]
+	support := m.V3Attempt.Support.lifecycle()
+	public := softwarelifecycle.LatestRelease{Identity: softwarelifecycle.ReleaseIdentity{Repository: r.ReleaseIdentity.Repository, Tag: r.Tag, Commit: r.Commit, IndexSHA256: r.ReleaseIdentity.ReleaseIndexSHA256}, Sequence: r.Sequence, Support: &support}
+	path := filepath.Join(t.TempDir(), "record.json")
+	if err := os.WriteFile(path, []byte(qualificationDocument(t, map[string]any{"body": body, "release": public, "assets": r.Assets})), 0600); err != nil {
+		t.Fatal(err)
+	}
+	check := exec.Command("go", "test", "../../internal/softwarelifecycle/adapter/github", "-run", "TestCleanInstallOnlyRecordCompatibility", "-count=1")
+	check.Env = append(os.Environ(), "SBXR_TEST_CLEAN_INSTALL_ONLY_RECORD="+path)
+	if result, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("public/frozen reader: %v %s", err, result)
+	}
 }
 
 func assertCleanInstallOnlyPublication(t *testing.T, binary string, pre qualificationFacts, m qualificationManifest, document string, decision []byte) {

@@ -6,9 +6,9 @@ revoke or rewrite a decision. [CONTEXT.md](../../CONTEXT.md) is the shared gloss
 
 For current product and release scope, begin with [ADR-0028](0028-clean-install-only.md).
 For publication after successful qualification or recovery from a publishing
-failure, use [ADR-0032](0032-qualified-publication-retry.md). It refines the
-separate approval and automatic burn requirements without rewriting historical
-signed records.
+failure, use [ADR-0032](0032-qualified-publication-retry.md). It requires Owner
+approval and manual publication dispatch, and preserves qualification after
+publication failures without rewriting historical signed records.
 The [live89 operator-recording correction](0029-live89-operator-recording-correction.md)
 applies only to fresh v3.1.90/168 with unchanged product source and executable
 payloads; it preserves the failed v3.1.89 run and burn.

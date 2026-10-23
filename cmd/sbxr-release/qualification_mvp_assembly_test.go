@@ -23,6 +23,10 @@ func TestHTTPPythonAssemblerProducesFiveValidatorAcceptedPrefixes(t *testing.T) 
 	testMVPAssembler(t, false, true)
 }
 
+func TestVMessHTTPRecorderAndPythonAssemblerProduceFiveAcceptedPrefixes(t *testing.T) {
+	testMVPAssemblerWithHandoff(t, false, true, false, "vless-vmess")
+}
+
 func TestHTTPRecurringRecorderAndAssemblerProduceEightValidatorAcceptedPrefixes(t *testing.T) {
 	testMVPAssembler(t, true, true)
 }
@@ -35,7 +39,7 @@ func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
 	testMVPAssemblerWithHandoff(t, recurring, httpSubscription, false)
 }
 
-func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, handoff bool) {
+func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, handoff bool, proxyProfile ...string) {
 	binary := filepath.Join(t.TempDir(), "sbxr-release")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
@@ -44,6 +48,8 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 	var manifest []byte
 	if recurring {
 		boundary, manifest, _ = mvpRecurringQualificationFixtureWithHandoff(t, binary, httpSubscription, handoff)
+	} else if len(proxyProfile) > 0 {
+		boundary, manifest, _ = mvpQualificationFixtureForSupport(t, binary, false, true, true, proxyProfile...)
 	} else {
 		boundary, manifest, _ = mvpQualificationFixtureWithTransport(t, binary, false, httpSubscription)
 	}
@@ -74,6 +80,9 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 			limit = 7200
 		}
 		expectedChecks := ordinaryFixtureChecksFor(id, httpSubscription)
+		if len(proxyProfile) > 0 {
+			expectedChecks = vmessObservedChecks[id]
+		}
 		request := map[string]any{
 			"deadline_unix": now.Add(time.Duration(limit) * time.Second).Unix(), "not_before": stamp,
 			"qualification_manifest_sha256": sha256String(string(manifest)),
@@ -134,7 +143,7 @@ func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, hand
 			t.Fatal(err)
 		}
 		observationPath := filepath.Join(directory, fmt.Sprintf("observation-%d.json", index))
-		if recurring {
+		if recurring || len(proxyProfile) > 0 {
 			draft := filepath.Join(directory, fmt.Sprintf("draft-%d.json", index))
 			if handoff {
 				draft = sharedDraft

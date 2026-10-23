@@ -27,11 +27,12 @@ source update/recovery journeys to the current scope. Local implementation and
 regressions do not assert a packaged live pass.
 
 [Qualified publication and retry](adr/0032-qualified-publication-retry.md) makes
-successful exact-candidate tests and cleanup the stable-publication authority.
-Successful current clean-install-only qualification starts stable publication automatically.
-Publication revalidates authentication and unchanged bytes, pauses for exact
-main-divergence review when needed, preserves failures for transparent retry, and
-requires no second human publication approval.
+successful exact-candidate tests and cleanup prerequisites for stable publication.
+Successful qualification and cleanup make the exact candidate eligible for publication.
+The Owner must approve publication before explicit `stable.yml` dispatch with the
+successful `qualification_run_id`. Publication revalidates authentication and unchanged
+bytes, pauses for exact main-divergence review when needed, and preserves failures
+for transparent retry.
 
 ## Repository layout
 

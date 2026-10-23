@@ -543,6 +543,9 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 			}
 		} else if mvpLiveAttempt(*attempt) {
 			body.WriteString("Evidence policy: " + attempt.EvidencePolicy + "\nLive acceptance coverage: " + softwarelifecycle.MVPLiveCoverage + "\nKaring connectivity evidence: " + softwarelifecycle.MVPKaringEvidence + "\n")
+			if attempt.ProxyProfile != "" {
+				body.WriteString("Proxy profile: " + attempt.ProxyProfile + "\n")
+			}
 			if httpLiveAttempt(*attempt) {
 				body.WriteString("Subscription transport: " + softwarelifecycle.MVPHTTPTransportDisclosure + "\n")
 			}
@@ -633,6 +636,7 @@ type v3QualificationAttempt struct {
 	OwnerException             string                                    `json:"owner_exception,omitempty"`
 	Packages                   v3QualificationPackages                   `json:"packages"`
 	ProxyPackage               v3PackageIdentity                         `json:"proxy_package"`
+	ProxyProfile               string                                    `json:"proxy_profile,omitempty"`
 	RequiredScenarios          []string                                  `json:"required_scenarios"`
 	RunAttempt                 int                                       `json:"run_attempt"`
 	Runner                     acceptanceVPSRunner                       `json:"runner"`
@@ -653,6 +657,9 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 // validV3AttemptDeclaredFields is shared by unsigned preparation and signing.
 // Signing separately binds the workflow identity and candidate release index.
 func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qualificationFacts) bool {
+	if !validProxyProfile(attempt) {
+		return false
+	}
 	if attempt.Live89CorrectionReview != nil && (!attempt.Live89CorrectionReview.valid(preflight.Commit) || preflight.Candidate.BTag != live89CorrectionTag || preflight.Candidate.BSequence != live89CorrectionSequence || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.Support == nil || attempt.Support.Scope != softwarelifecycle.SubscriptionCleanInstallOnly || attempt.OwnerException != "" || attempt.LateConfirmationReview != nil || attempt.KaringResponseLimitSeconds != 0) {
 		return false
 	}

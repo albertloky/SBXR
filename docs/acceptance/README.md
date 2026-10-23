@@ -14,9 +14,9 @@ applies only to the existing host shape with that prerequisite and requires fres
 host evidence. It adds no journey or general host authorization.
 
 [ADR-0032](../adr/0032-qualified-publication-retry.md) permits publication after
-successful exact-candidate qualification and cleanup, without a second publication
-approval. Main divergence still needs exact review; publication rechecks authentication
-and unchanged bytes. Failed publication preserves qualification for transparent retry.
+successful exact-candidate qualification and cleanup, followed by Owner approval
+and explicit stable-workflow dispatch. Main divergence still needs exact review;
+publication rechecks authentication and unchanged bytes. Failed publication preserves qualification for transparent retry.
 
 ## Dated evidence and historical contracts
 

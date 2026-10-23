@@ -10,22 +10,23 @@ job failure must not consume an otherwise qualified candidate. This refines the
 separate publication approval and failure/burn rules in ADR-0016, ADR-0028 and
 ADR-0030. Historical signed records and their actual outcomes remain intact.
 
-## Qualification is the publication authority
+## Qualification and explicit publication approval
 
 Stable publication requires the successful signed qualification for the exact
 candidate: required native checks, all live journeys in its declared scope,
 actual complete removal and host/client/secret cleanup, unchanged asset names,
 sizes and digests, and authenticated manifest, workflow and release proofs.
-Passing these checks permits stable publication without another human
-`stable-publication` environment approval. The workflow automatically binds its
-publication decision chain to the verified preflight facts and decision. It
-performs no new `acceptance-vps` host probe merely to publish already tested files.
-Successful completion of the official `Construct qualified drafts` workflow on
-`main` in this repository automatically starts the stable workflow through
-`workflow_run` for the current clean-install-only scope. Historical scopes retain
-explicit dispatch. Failed or foreign-repository runs cannot start publication.
-Manual dispatch remains available for a retry of the same qualification run or
-explicit abandonment.
+The Owner's current no-publication-before-approval direction, reflected in this
+2026-10-23 local refinement, supersedes the automatic `workflow_run` trigger
+previously specified here. Passing qualification makes the candidate eligible;
+publication still requires the Owner's explicit approval and then manual
+`stable.yml` dispatch on `main`, naming the successful `qualification_run_id`.
+Qualification completion alone never starts publication. The workflow retains
+its authenticated successful-run binding and automatically binds its publication
+decision chain to the verified preflight facts and decision. It performs no new
+`acceptance-vps` host probe merely to publish already tested files and adds no
+separate `stable-publication` environment ceremony. Manual dispatch also permits
+a retry of the same qualification run or explicit abandonment within approved scope.
 
 Each publication attempt rechecks the original qualification, current release
 state, release history and exact downloaded bytes. Changed candidate source or
@@ -37,7 +38,8 @@ ordered commits, bind the candidate SHA, current main SHA and divergence digest,
 and assess missing security fixes and continued evidence applicability. Missing
 or stale review pauses publication; a candidate missing security fixes needs a
 replacement candidate and its qualification. The automatic decision binding
-replaces the protected-environment approval ceremony, including after review.
+retains the exact evidence chain after manual dispatch, including after review;
+it does not replace the Owner's publication approval.
 Fresh main observations still bound the race immediately before publication.
 
 ## Publication failures preserve qualification

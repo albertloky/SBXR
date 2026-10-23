@@ -160,7 +160,7 @@ func attemptScenarios(attempt v3QualificationAttempt) []string {
 }
 
 func validAttemptSupport(attempt v3QualificationAttempt) bool {
-	if attempt.Support == nil || !validSupportDeclaration(*attempt.Support) || attempt.Sources == nil || len(attempt.Support.Sources) != len(attempt.Sources) || !slices.Equal(attempt.RequiredScenarios, attemptScenarios(attempt)) {
+	if !validProxyProfile(attempt) || attempt.Support == nil || !validSupportDeclaration(*attempt.Support) || attempt.Sources == nil || len(attempt.Support.Sources) != len(attempt.Sources) || !slices.Equal(attempt.RequiredScenarios, attemptScenarios(attempt)) {
 		return false
 	}
 	if attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly {
