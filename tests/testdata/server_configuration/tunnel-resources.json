@@ -1,0 +1,5 @@
+[
+  "/etc/systemd/system/sbxr-tunnel.service root:root 0644 one-link sha256:8cbdb814ad6115c86f2b6df12002cf13b157777217777f3a5d32cf1f6d3bae9a",
+  "/etc/systemd/system/sbxr-tunnel.service.sbxr-next root-owned synchronized no-replace publication",
+  "/etc/systemd/system/multi-user.target.wants/sbxr-tunnel.service root-owned symlink ../sbxr-tunnel.service"
+]

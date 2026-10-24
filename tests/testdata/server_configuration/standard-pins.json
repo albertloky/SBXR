@@ -1,0 +1,22 @@
+{
+  "APTKeyPath": "/etc/apt/keyrings/sagernet.asc",
+  "APTKeySHA256": "803d5a2f09fe9d360008161aa2684e7f49a211d48a4116d0651b08bdd90bdea1",
+  "APTKeyURL": "https://sing-box.app/gpg.key",
+  "APTSourcePath": "/etc/apt/sources.list.d/sagernet.sources",
+  "Architecture": "amd64",
+  "ConfigurationPath": "/etc/sing-box/config.json",
+  "Group": "sing-box",
+  "ListenerPort": "443",
+  "LockPath": "/run/lock/sbxr.lock",
+  "OwnershipNextPath": "/var/lib/sbxr/.proxy-ownership.json.next",
+  "OwnershipPath": "/var/lib/sbxr/proxy-ownership.json",
+  "PackageArtifactPath": "/var/lib/sbxr/sing-box_1.14.3_amd64.deb",
+  "PackageName": "sing-box",
+  "PackageSHA256": "ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e",
+  "PackageSize": 32297878,
+  "PackageVersion": "1.14.3",
+  "Service": "sing-box.service",
+  "ServiceUnitPath": "/usr/lib/systemd/system/sing-box.service",
+  "StatePath": "/var/lib/sing-box",
+  "User": "sing-box"
+}

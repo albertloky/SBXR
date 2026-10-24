@@ -1,0 +1,25 @@
+[Unit]
+Description=SBXR dedicated Cloudflare Tunnel connector
+Wants=network-online.target
+After=network-online.target sing-box.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=tunnel-token:/etc/cloudflared/sbxr.token
+ExecStart=/usr/bin/cloudflared --config /dev/null --no-autoupdate tunnel --metrics 127.0.0.1:0 run --token-file %d/tunnel-token
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillMode=control-group
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
+StandardInput=null
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
