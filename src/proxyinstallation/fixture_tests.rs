@@ -398,3 +398,61 @@ fn prepared_authority_cannot_cross_adapter_or_fixture_boundaries() {
     assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
     assert!(!root2.0.join("var/lib/sbxr/proxy-ownership.json").exists());
 }
+
+#[test]
+fn broader_record_decoding_never_expands_the_standard_fixture_adapters_authority() {
+    for tunnel in [false, true] {
+        let root = Fixture::new();
+        let mut journey = root.create();
+        if tunnel {
+            let initial = OwnershipRecord::new_tunnel_setup(
+                release(),
+                "8.8.8.8",
+                &sha256_hex(FIXTURE_CONFIGURATION),
+                crate::records::TunnelAuthority::new(
+                    "12345678-1234-1234-1234-123456789abc",
+                    &"d".repeat(64),
+                    &"e".repeat(64),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            journey.store.publish(None, &initial).unwrap();
+        } else {
+            assert_eq!(
+                perform(&mut journey, Action::StartSetup).outcome,
+                Outcome::SetupComplete
+            );
+            let source = journey.store.load().unwrap().current.unwrap();
+            let credential =
+                crate::subscription_artifact::SubscriptionCredential::parse(&"A".repeat(43))
+                    .unwrap();
+            let next = source
+                .record
+                .begin_http_enablement(
+                    &"1".repeat(32),
+                    &credential,
+                    &"3".repeat(32),
+                    &"d".repeat(64),
+                )
+                .unwrap();
+            journey.store.publish(Some(source.bytes()), &next).unwrap();
+        }
+        let before = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+        assert_eq!(
+            journey.review(Action::Status).status,
+            Status::ProblemDetected
+        );
+        for action in [
+            Action::StartSetup,
+            Action::FinishSetup,
+            Action::FinishCleanup,
+        ] {
+            assert!(journey.review(action).prepared.is_none());
+        }
+        assert_eq!(
+            fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+            before
+        );
+    }
+}

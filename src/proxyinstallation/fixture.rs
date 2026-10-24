@@ -47,7 +47,9 @@ impl FixtureInstallation {
         let snapshot = self.store.load().map_err(|_| ())?;
         let observation = self.host.inspect(&self.release).map_err(|_| ())?;
         if snapshot.current.as_ref().is_some_and(|current| {
-            current.record.release_identity() != self.release
+            current.record.schema() != 1
+                || current.record.tunnel_authority().is_some()
+                || current.record.release_identity() != self.release
                 || current.record.configuration_sha256() != sha256_hex(FIXTURE_CONFIGURATION)
                 || current.record.lock_provisioning_sha256().is_none()
         }) {

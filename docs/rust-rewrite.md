@@ -1,4 +1,4 @@
-# Rust rewrite: first local setup slice
+# Rust rewrite: local implementation increments
 
 This isolated workspace contains the start of the Owner-requested full Rust
 rewrite. It is an implementation increment, not a release or a deployable
@@ -63,7 +63,9 @@ or Karing verification.
 | `src/terminal.rs` | Numbered menu and wizard through Review/Execute; explicit simulation/fixture labels |
 | `src/host.rs`, `src/host/` | Fixed command templates, marked fixture roots, read-only file evidence and bound filesystem effects; no process runner |
 | `src/subscription_artifact.rs` | Pure VLESS/VMess client encoding, HTTP link/token syntax and redacted secret-bearing types |
-| `src/records.rs`, `src/records/` | Strict validated Standard schema-1 and Installed Record codecs, canonical wire bytes and legal setup checkpoints |
+| `src/records.rs`, `src/records/` | Strict schema-1/schema-2 historical authority, Installed Record codecs, exact ownership proofs and current HTTP/setup transitions |
+| `src/server_configuration.rs` | Pure supplied-identity sing-box configuration, pinned package metadata and exact dedicated tunnel unit |
+| `src/subscription_serving.rs` | Bounded HTTP runtime, constant-time credential verification, per-peer limits and complete cancellation |
 | `src/durable.rs` | Protected fixed-name record publication, directory locking, exact source/target comparison, fsync and recovery inspection |
 | `src/*_tests.rs` | Adjacent domain/orchestration and terminal boundary tests |
 | `tests/menu.rs` | Real Rust executable subprocess tests |
@@ -71,6 +73,8 @@ or Karing verification.
 The first slice used only Rust's standard library. The durable foundation adds
 pinned Serde/serde_json for strict typed records, SHA-256 for the existing digest
 contract, and rustix for safe descriptor-relative Unix filesystem operations.
+Pinned httparse supplies the bounded HTTP syntax parser; subtle supplies the
+constant-time digest comparison. Cargo.lock preserves exact registry checksums.
 No Go subprocess bridge, protocol plugin mechanism or migration framework is
 part of the Rust product.
 The Cargo manifest disables publication. Rust 1.90.0 is pinned for reproducible
@@ -79,10 +83,10 @@ local development; it is not a release-toolchain qualification claim.
 Independent parity checks now live in `tests/parity.rs` and
 `tests/testdata/parity/`. Preserve their assertions and fixtures. They exposed
 and now guard expiration of earlier Prepared Actions after every later Review,
-including Status and View details. Server configuration/secret generation,
-Subscription Serving, Software Lifecycle and a real Ubuntu Host Adapter remain
-unimplemented scopes that can be assigned separately after their contracts are
-read. The integration owner should coordinate new `src/lib.rs` exports.
+including Status and View details. Pure server configuration and HTTP Subscription Serving are now implemented
+through public library APIs. Cryptographic generation, product orchestration,
+Software Lifecycle and a real Ubuntu Host Adapter remain separate integration
+scopes; the CLI still constructs only the Standard simulator.
 
 ## Local commands and evidence
 
@@ -120,13 +124,15 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
 
 - Real root-only Ubuntu admission, whole-host/package locks, fresh observations,
   timeouts/cancellation, ownership publication/fsync and protected file handling.
-- Full schema-2/subscription/tunnel/removal records and production integration of
-  the new Standard schema-1 filesystem foundation. Physical crash/power-loss and
-  native Linux durability qualification remain untested.
+- Production integration of the strict records and Standard filesystem foundation.
+  Historical schema-2, tunnel, HTTPS and removal records decode without migration;
+  only current HTTP and setup transitions have writers. Physical crash/power-loss
+  and native Linux durability qualification remain untested.
 - Real sing-box config validation, cryptographic key/Client Identity generation,
   confirmed client disclosure, identity revocation and sequential cutover.
-- HTTP Subscription Serving and independent link rotation; optional VMess with
-  dedicated Owner-installed cloudflared and honest pending/verified checks.
+- Product-level HTTP serving/rotation orchestration and protected service/firewall
+  installation; optional VMess/cloudflared prerequisite inspection and integration.
+  Pure rendering, bounded HTTP runtime and durable HTTP transitions are available.
 - Complete removal and interrupted removal preserving foreign/shared resources;
   Software Lifecycle Check/Recover and exact historical transaction readers.
 - Other statuses/actions, full details and display-incomplete behavior for secret
@@ -146,14 +152,18 @@ prereleases; this increment does not independently verify or use those releases.
 
 ## Durable foundation increment
 
-`records::OwnershipRecord` supports the exact Standard setup schema-1 subset:
-required fields, ordered permitted resources, the optional exact lock-provisioning
-authority and all fourteen setup phases. Legacy schema-1 without that optional
+`records::OwnershipRecord` supports Standard setup schema-1 and the current and
+historical schema-2 authority structures: exact required fields, ordered permitted
+resources, creating/finishing releases, lock/tunnel, HTTP/HTTPS subscription,
+certificate/identity operations, retained HTTPS and removal authority. It retains
+all fourteen setup phases and the removal phase. Legacy schema-1 without that optional
 authority remains readable and is not converted on read. Unknown/duplicate keys,
 escaped duplicate keys, nulls, wrong types, nested arrays where objects are
 required, trailing documents, invalid digest/identity/resource facts and
-contradictory phase/direction/checkpoints refuse. Schema 2, tunnel and removal
-records refuse; they are not silently reduced to schema 1.
+contradictory phase/direction/checkpoints refuse. Historical decoding preserves
+authority; it never silently reduces records or enables in-place migration.
+Canonical null completed-effect slices for Go link rotation/repair remain valid;
+object authorities cannot be null or positional arrays.
 
 `OwnershipRecord::decode(&[u8])` returns a validated record. `encode()` returns
 Go's field order and trailing newline. Its full Standard output is checked
@@ -166,7 +176,7 @@ executable, release, signature or attestation.
 
 Public record types have private validated data and no public Serde implementation
 that could bypass validation. Ownership Record Debug and all errors omit raw
-input. Only fixed secret-free fields can be encoded; no UUID, private key,
+input. Only fixed secret-free fields can be encoded; no Client Access UUID, private key,
 bearer credential or client artifact is represented.
 
 `durable::OwnershipStore::open(path, owner_uid)` opens an existing absolute
@@ -181,8 +191,8 @@ The store reads/writes only `proxy-ownership.json` and
 `.proxy-ownership.json.next`. Files must be regular, one-link, expected-owner,
 0600, bounded and bound to the checked inode. `load()` preserves original bytes
 and never rewrites or promotes staged data. Writes require canonical exact
-source bytes and either the identical record or one legal setup/cleanup
-checkpoint; they cannot change installation identity, configuration digest,
+source bytes and either the identical record, one legal setup/cleanup checkpoint,
+or a supported current HTTP transition; they cannot change installation identity, configuration digest,
 resource authority or reverse a committed direction.
 
 `publish(expected_bytes, &next)` exclusively creates or verifies the exact staged
@@ -194,9 +204,10 @@ reports `Publication::Unchanged`; a rename or later failure reports
 reestablishes file and directory durability before relying on an observed target.
 No error causes rollback, replacement of unknown residue or recursive cleanup.
 
-`Snapshot::recovery()` reports Absent, Cleanup, FinishSetup, Running (record phase
-only) or Refused. Staged-only initial authority and a staged activation boundary
-refuse automatic recovery. A committed authoritative record never selects
+`Snapshot::recovery()` distinguishes Absent, setup Cleanup/FinishSetup, Running
+(record phase only), subscription cleanup/forward, identity cleanup/forward,
+historical certificate/migration, Removal and Refused. Staged-only initial
+authority, operation admission and commit barriers refuse automatic recovery. A committed authoritative record never selects
 cleanup. Known precommit staging can be replayed only by an explicit exact
 publication retry. These APIs do not authorize resource effects, confirm Owner
 intent or prove runtime health; future orchestration must supply those checks.
@@ -302,3 +313,79 @@ task-specific Cargo target directory. These are macOS filesystem/codec tests,
 not Ubuntu/systemd/package verification, traffic, Karing, native Linux durability,
 physical power-loss or packaged deployment qualification. No original Go checkout
 or live resource is changed by this increment.
+
+
+## Schema-2 authority and real HTTP/configuration increment
+
+Current HTTP writers are small pure transitions on validated `OwnershipRecord`:
+`begin/advance/commit/cleanup_http_enablement`,
+`begin/advance/complete/cleanup_http_link_rotation`,
+`begin/advance/complete/cleanup_http_runtime_repair`, and
+`mark_subscription_compromised`. They serialize only supplied credential hashes.
+Enablement follows Go checkpoints 0,1,2,3,8..15,22,23; every unfinished checkpoint
+still requires cleanup until explicit final commitment. Link rotation keeps source
+selection before commitment and target selection afterward. Compromise remains
+sticky through cleanup and clears only with completed rotation. Runtime repair
+commits forward before recording/restarting its unchanged generation; only accepted
+completion removes its marker. Callers must prove each real effect before advancing.
+
+Every transition preserves configuration, installation identity, exact resource
+ordering and the creating release for each retained resource. `permits_successor`
+compares only exact supported targets. It rejects skipped/reversed checkpoints,
+creator rewrites and late tunnel attachment. `new_tunnel_setup` binds a dedicated
+owner-provided tunnel before initial setup only. These pure APIs do not validate
+prerequisite files, generate credentials, confirm Owner intent or authorize effects.
+
+Historical HTTPS enablement/renewal/rotation/repair, certificate activation,
+Client Identity cutover/revocation, transport retirement/migration and removal
+records remain readable. Unsupported writers are unavailable. In particular no
+migration flag can be cleared through current HTTP APIs, and a recorded source
+revocation cannot be reversed. The Standard fixture journey explicitly refuses
+schema-2 and tunnel records until matching host effects/orchestration exist.
+
+Real protected-file publication tests reopen each HTTP checkpoint and inject
+pre/post rename and synchronization failures around enablement/rotation/repair
+commit boundaries. Staging cannot admit an operation or grant forward effects.
+Uncertain publication requires rereading and synchronizing the selected target;
+a committed rotation never returns to its source. This remains macOS fixture
+filesystem evidence, not physical crash or native Linux durability qualification.
+
+The adjacent record fixtures contain 67 valid Go-generated canonical records and
+144 adversarial mutations independently rejected by Go and Rust. They cover
+nested unknown/duplicate/escaped keys, missing/positional/null authority, resource
+and creator tampering, contradictory targets/completed effects, revocation
+barriers and retirement/removal bounds. See
+`src/records/testdata/authority/README.md` for regeneration and provenance.
+
+`server_configuration` renders actual sing-box Standard/optional VMess bytes,
+UUID-only replacements, pinned package metadata and the dedicated tunnel unit.
+Its 64 Go vectors and six goldens check byte parity, including JSON escaping and
+redacted diagnostics. No random generation, X25519 public derivation, arbitrary
+existing-config decoding or execution of sing-box/systemd is included.
+
+`subscription_serving` serves real authenticated artifacts through a supplied
+IPv4-matching TCP listener. It has eight workers, an 8192-byte header bound,
+five-second absolute connection deadlines, bounded peer rate accounting and
+joined cancellation. It uses constant-time SHA-256 digest comparison over canonical
+encoded tokens. All refusals conceal raw input; secrets appear only in explicit
+artifact accessors and authenticated responses. Runtime inspection distinguishes
+prepared state from a running service. The eventual production role must bind
+protected records/profile/process identity to the fixed recorded IPv4 and TCP8443.
+No private role/CLI, host service/firewall integration or legacy TLS runtime exists.
+
+The serving corpus has 65 Go request expectations: 63 match; Rust deliberately
+refuses two malformed forms accepted by Go (a spaced field name and obsolete
+folding). Review accepted the stricter parser boundary because these forms are
+outside the ordinary client contract and introduce parsing ambiguity. RFC9112
+[section 5](https://www.rfc-editor.org/rfc/rfc9112.html#section-5) defines field
+syntax and deprecates folding. SBXR retains its concealed 404 for these refusals;
+this does not claim the RFC's specified 400 response behavior. Tests and fixture
+metadata preserve both Go and Rust statuses explicitly.
+
+The integrated runtime tests use only synthetic credentials and loopback ephemeral
+ports, including valid VLESS/VMess responses, header limits, slow input, overload,
+actual-peer limits, cancellation and secret-free subprocess output. Two pinned
+registry dependencies (`httparse` 1.10.1, `subtle` 2.6.1) were resolved offline from
+the local Cargo cache. Evidence is under `.scratch/acceptance/rust-authority/`;
+worker provenance remains under `rust-server/` and `rust-serving/`. No production
+system, VPS, Karing, release signing or publication was exercised.

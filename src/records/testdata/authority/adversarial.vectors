@@ -1,0 +1,1017 @@
+[
+  {
+    "name": "http-active:/schema:remove:0",
+    "fixture": "http-active",
+    "path": "/schema",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/schema:set:1",
+    "fixture": "http-active",
+    "path": "/schema",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/phase:remove:2",
+    "fixture": "http-active",
+    "path": "/phase",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/phase:set:3",
+    "fixture": "http-active",
+    "path": "/phase",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/unfinished_direction:remove:4",
+    "fixture": "http-active",
+    "path": "/unfinished_direction",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/unfinished_direction:set:5",
+    "fixture": "http-active",
+    "path": "/unfinished_direction",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/release_identity:remove:6",
+    "fixture": "http-active",
+    "path": "/release_identity",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/release_identity:set:7",
+    "fixture": "http-active",
+    "path": "/release_identity",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/proxy_package_identity:remove:8",
+    "fixture": "http-active",
+    "path": "/proxy_package_identity",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/proxy_package_identity:set:9",
+    "fixture": "http-active",
+    "path": "/proxy_package_identity",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/public_ipv4:remove:10",
+    "fixture": "http-active",
+    "path": "/public_ipv4",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/public_ipv4:set:11",
+    "fixture": "http-active",
+    "path": "/public_ipv4",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/destination_address:remove:12",
+    "fixture": "http-active",
+    "path": "/destination_address",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/destination_address:set:13",
+    "fixture": "http-active",
+    "path": "/destination_address",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/destination_server_name:remove:14",
+    "fixture": "http-active",
+    "path": "/destination_server_name",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/destination_server_name:set:15",
+    "fixture": "http-active",
+    "path": "/destination_server_name",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/configuration_sha256:remove:16",
+    "fixture": "http-active",
+    "path": "/configuration_sha256",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/configuration_sha256:set:17",
+    "fixture": "http-active",
+    "path": "/configuration_sha256",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/permitted_resources:remove:18",
+    "fixture": "http-active",
+    "path": "/permitted_resources",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/permitted_resources:set:19",
+    "fixture": "http-active",
+    "path": "/permitted_resources",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/cleanup_checkpoint:remove:20",
+    "fixture": "http-active",
+    "path": "/cleanup_checkpoint",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/cleanup_checkpoint:set:21",
+    "fixture": "http-active",
+    "path": "/cleanup_checkpoint",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/removal_checkpoint:remove:22",
+    "fixture": "http-active",
+    "path": "/removal_checkpoint",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/removal_checkpoint:set:23",
+    "fixture": "http-active",
+    "path": "/removal_checkpoint",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/resource_creating_releases:remove:24",
+    "fixture": "http-active",
+    "path": "/resource_creating_releases",
+    "operation": "remove",
+    "value": null
+  },
+  {
+    "name": "http-active:/resource_creating_releases:set:25",
+    "fixture": "http-active",
+    "path": "/resource_creating_releases",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-active:/serving/unexpected:set:26",
+    "fixture": "http-active",
+    "path": "/serving/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/serving:set:27",
+    "fixture": "http-active",
+    "path": "/serving",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-active:/subscription_resources/unexpected:set:28",
+    "fixture": "http-active",
+    "path": "/subscription_resources/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/subscription_resources:set:29",
+    "fixture": "http-active",
+    "path": "/subscription_resources",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-active:/release_identity/unexpected:set:30",
+    "fixture": "http-active",
+    "path": "/release_identity/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/release_identity:set:31",
+    "fixture": "http-active",
+    "path": "/release_identity",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-active:/resource_creating_releases/0/unexpected:set:32",
+    "fixture": "http-active",
+    "path": "/resource_creating_releases/0/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/resource_creating_releases/0:set:33",
+    "fixture": "http-active",
+    "path": "/resource_creating_releases/0",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-active:/lock_provisioning/unexpected:set:34",
+    "fixture": "http-active",
+    "path": "/lock_provisioning/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/lock_provisioning:set:35",
+    "fixture": "http-active",
+    "path": "/lock_provisioning",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-tunnel:/tunnel/unexpected:set:36",
+    "fixture": "http-tunnel",
+    "path": "/tunnel/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-tunnel:/tunnel:set:37",
+    "fixture": "http-tunnel",
+    "path": "/tunnel",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/unexpected:set:38",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement:set:39",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/serving/unexpected:set:40",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/serving/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/serving:set:41",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/serving",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/resources/unexpected:set:42",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/resources/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/resources:set:43",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/resources",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/unexpected:set:44",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation:set:45",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/source/unexpected:set:46",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/source/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/source:set:47",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/source",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/target/unexpected:set:48",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/target/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/target:set:49",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/target",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/unexpected:set:50",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-repair-target:/subscription_repair:set:51",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/source/unexpected:set:52",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/source/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/source:set:53",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/source",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/target/unexpected:set:54",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/target/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/target:set:55",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/target",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/unexpected:set:56",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation:set:57",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/subscription/unexpected:set:58",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/subscription/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/subscription:set:59",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/subscription",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/subscription/source/unexpected:set:60",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/subscription/source/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/subscription/source:set:61",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/subscription/source",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "client-rotation-i:/proxy_startup/unexpected:set:62",
+    "fixture": "client-rotation-i",
+    "path": "/proxy_startup/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "client-rotation-i:/proxy_startup:set:63",
+    "fixture": "client-rotation-i",
+    "path": "/proxy_startup",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "https-active:/renewal/unexpected:set:64",
+    "fixture": "https-active",
+    "path": "/renewal/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "https-active:/renewal:set:65",
+    "fixture": "https-active",
+    "path": "/renewal",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "https-activation-a:/certificate_activation/unexpected:set:66",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "https-activation-a:/certificate_activation:set:67",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "https-activation-a:/certificate_activation/source/unexpected:set:68",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation/source/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "https-activation-a:/certificate_activation/source:set:69",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation/source",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "https-activation-a:/certificate_activation/target/unexpected:set:70",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation/target/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "https-activation-a:/certificate_activation/target:set:71",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation/target",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-retired-https:/https_retirement/unexpected:set:72",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-retired-https:/https_retirement:set:73",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-retired-https:/https_retirement/serving/unexpected:set:74",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/serving/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-retired-https:/https_retirement/serving:set:75",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/serving",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-retired-https:/https_retirement/renewal/unexpected:set:76",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/renewal/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-retired-https:/https_retirement/renewal:set:77",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/renewal",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-retired-https:/https_retirement/resources/unexpected:set:78",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/resources/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-retired-https:/https_retirement/resources:set:79",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/resources",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "profile-removal-c:/finishing_release_identity/unexpected:set:80",
+    "fixture": "profile-removal-c",
+    "path": "/finishing_release_identity/unexpected",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "profile-removal-c:/finishing_release_identity:set:81",
+    "fixture": "profile-removal-c",
+    "path": "/finishing_release_identity",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-active:/serving/http:set:82",
+    "fixture": "http-active",
+    "path": "/serving/http",
+    "operation": "set",
+    "value": false
+  },
+  {
+    "name": "http-active:/serving/credential_sha256:set:83",
+    "fixture": "http-active",
+    "path": "/serving/credential_sha256",
+    "operation": "set",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "http-active:/serving/link_id:set:84",
+    "fixture": "http-active",
+    "path": "/serving/link_id",
+    "operation": "set",
+    "value": "00000000000000000000000000000000"
+  },
+  {
+    "name": "http-active:/serving/link_id:set:85",
+    "fixture": "http-active",
+    "path": "/serving/link_id",
+    "operation": "set",
+    "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "http-active:/serving/certificate_generation:set:86",
+    "fixture": "http-active",
+    "path": "/serving/certificate_generation",
+    "operation": "set",
+    "value": 1
+  },
+  {
+    "name": "http-active:/serving/certificate_sha256:set:87",
+    "fixture": "http-active",
+    "path": "/serving/certificate_sha256",
+    "operation": "set",
+    "value": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+  },
+  {
+    "name": "http-active:/subscription_resources/public_ipv4:set:88",
+    "fixture": "http-active",
+    "path": "/subscription_resources/public_ipv4",
+    "operation": "set",
+    "value": "8.8.4.4"
+  },
+  {
+    "name": "http-active:/subscription_resources/recorder_directory_created:set:89",
+    "fixture": "http-active",
+    "path": "/subscription_resources/recorder_directory_created",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/subscription_resources/snapd_created:set:90",
+    "fixture": "http-active",
+    "path": "/subscription_resources/snapd_created",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-active:/permitted_resources:set:91",
+    "fixture": "http-active",
+    "path": "/permitted_resources",
+    "operation": "set",
+    "value": [
+      "foreign"
+    ]
+  },
+  {
+    "name": "http-active:/resource_creating_releases:set:92",
+    "fixture": "http-active",
+    "path": "/resource_creating_releases",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-active:/serving/certificate_sha256:set:93",
+    "fixture": "http-active",
+    "path": "/serving/certificate_sha256",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-tunnel:/lock_provisioning:set:94",
+    "fixture": "http-tunnel",
+    "path": "/lock_provisioning",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-tunnel:/tunnel/tunnel_id:set:95",
+    "fixture": "http-tunnel",
+    "path": "/tunnel/tunnel_id",
+    "operation": "set",
+    "value": "../foreign"
+  },
+  {
+    "name": "http-tunnel:/tunnel/token_sha256:set:96",
+    "fixture": "http-tunnel",
+    "path": "/tunnel/token_sha256",
+    "operation": "set",
+    "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/checkpoint:set:97",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/checkpoint",
+    "operation": "set",
+    "value": 24
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/credential_sha256:set:98",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/credential_sha256",
+    "operation": "set",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/serving/link_id:set:99",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/serving/link_id",
+    "operation": "set",
+    "value": "44444444444444444444444444444444"
+  },
+  {
+    "name": "http-enable-x:/subscription_enablement/resources/snapd_created:set:100",
+    "fixture": "http-enable-x",
+    "path": "/subscription_enablement/resources/snapd_created",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/direction:set:101",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/direction",
+    "operation": "set",
+    "value": "cleanup"
+  },
+  {
+    "name": "http-rotate-b:/subscription_rotation/direction:set:102",
+    "fixture": "http-rotate-b",
+    "path": "/subscription_rotation/direction",
+    "operation": "set",
+    "value": "forward"
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/target/link_id:set:103",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/target/link_id",
+    "operation": "set",
+    "value": "11111111111111111111111111111111"
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/target/http:set:104",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/target/http",
+    "operation": "set",
+    "value": false
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/completed_effects:set:105",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/completed_effects",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-rotate-c:/subscription_rotation/effects:set:106",
+    "fixture": "http-rotate-c",
+    "path": "/subscription_rotation/effects",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "http-repair-a:/subscription_repair/direction:set:107",
+    "fixture": "http-repair-a",
+    "path": "/subscription_repair/direction",
+    "operation": "set",
+    "value": "forward"
+  },
+  {
+    "name": "http-repair-c:/subscription_repair/target:set:108",
+    "fixture": "http-repair-c",
+    "path": "/subscription_repair/target",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/target/link_id:set:109",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/target/link_id",
+    "operation": "set",
+    "value": "44444444444444444444444444444444"
+  },
+  {
+    "name": "http-repair-target:/subscription_repair/correction:set:110",
+    "fixture": "http-repair-target",
+    "path": "/subscription_repair/correction",
+    "operation": "set",
+    "value": "renew owned certificate"
+  },
+  {
+    "name": "http-repair-c:/subscription_repair/completed_effects:set:111",
+    "fixture": "http-repair-c",
+    "path": "/subscription_repair/completed_effects",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/direction:set:112",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/direction",
+    "operation": "set",
+    "value": "cleanup"
+  },
+  {
+    "name": "client-rotation-h:/client_identity_rotation/direction:set:113",
+    "fixture": "client-rotation-h",
+    "path": "/client_identity_rotation/direction",
+    "operation": "set",
+    "value": "forward"
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/completed_effects:set:114",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/completed_effects",
+    "operation": "set",
+    "value": []
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/target_configuration_sha256:set:115",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/target_configuration_sha256",
+    "operation": "set",
+    "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  {
+    "name": "client-rotation-i:/configuration_sha256:set:116",
+    "fixture": "client-rotation-i",
+    "path": "/configuration_sha256",
+    "operation": "set",
+    "value": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  {
+    "name": "client-rotation-j:/configuration_sha256:set:117",
+    "fixture": "client-rotation-j",
+    "path": "/configuration_sha256",
+    "operation": "set",
+    "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  {
+    "name": "client-rotation-i:/proxy_startup:set:118",
+    "fixture": "client-rotation-i",
+    "path": "/proxy_startup",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "client-rotation-i:/client_identity_rotation/subscription/target_artifact_sha256:set:119",
+    "fixture": "client-rotation-i",
+    "path": "/client_identity_rotation/subscription/target_artifact_sha256",
+    "operation": "set",
+    "value": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  {
+    "name": "https-active:/serving/certificate_generation:set:120",
+    "fixture": "https-active",
+    "path": "/serving/certificate_generation",
+    "operation": "set",
+    "value": 0
+  },
+  {
+    "name": "https-active:/renewal/public_ipv4:set:121",
+    "fixture": "https-active",
+    "path": "/renewal/public_ipv4",
+    "operation": "set",
+    "value": "8.8.4.4"
+  },
+  {
+    "name": "https-active:/renewal/invocation:set:122",
+    "fixture": "https-active",
+    "path": "/renewal/invocation",
+    "operation": "set",
+    "value": "foreign"
+  },
+  {
+    "name": "https-activation-a:/certificate_activation/target/link_id:set:123",
+    "fixture": "https-activation-a",
+    "path": "/certificate_activation/target/link_id",
+    "operation": "set",
+    "value": "44444444444444444444444444444444"
+  },
+  {
+    "name": "https-activation-b:/certificate_activation/target/certificate_generation:set:124",
+    "fixture": "https-activation-b",
+    "path": "/certificate_activation/target/certificate_generation",
+    "operation": "set",
+    "value": 0
+  },
+  {
+    "name": "http-retired-https:/https_retirement/configuration_mode:set:125",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/configuration_mode",
+    "operation": "set",
+    "value": 511
+  },
+  {
+    "name": "http-retired-https:/https_retirement/serving/http:set:126",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/serving/http",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-retired-https:/https_retirement/resources/http:set:127",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/resources/http",
+    "operation": "set",
+    "value": true
+  },
+  {
+    "name": "http-retired-https:/https_retirement/configuration_sha256:set:128",
+    "fixture": "http-retired-https",
+    "path": "/https_retirement/configuration_sha256",
+    "operation": "set",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "name": "http-migration-pending:/subscription_transport_migration:set:129",
+    "fixture": "http-migration-pending",
+    "path": "/subscription_transport_migration",
+    "operation": "set",
+    "value": false
+  },
+  {
+    "name": "http-migration-pending:/https_retirement/serving/link_id:set:130",
+    "fixture": "http-migration-pending",
+    "path": "/https_retirement/serving/link_id",
+    "operation": "set",
+    "value": "44444444444444444444444444444444"
+  },
+  {
+    "name": "profile-removal-c:/removal_checkpoint:set:131",
+    "fixture": "profile-removal-c",
+    "path": "/removal_checkpoint",
+    "operation": "set",
+    "value": 12
+  },
+  {
+    "name": "profile-removal-c:/finishing_release_identity:set:132",
+    "fixture": "profile-removal-c",
+    "path": "/finishing_release_identity",
+    "operation": "set",
+    "value": null
+  },
+  {
+    "name": "schema2-software-removal:/removal_checkpoint:set:133",
+    "fixture": "schema2-software-removal",
+    "path": "/removal_checkpoint",
+    "operation": "set",
+    "value": 4
+  },
+  {
+    "name": "http-active:link_id:duplicate:134",
+    "fixture": "http-active",
+    "path": "link_id",
+    "operation": "duplicate",
+    "value": null
+  },
+  {
+    "name": "http-active:link_id:escaped_duplicate:135",
+    "fixture": "http-active",
+    "path": "link_id",
+    "operation": "escaped_duplicate",
+    "value": null
+  },
+  {
+    "name": "http-rotate-c:operation_id:duplicate:136",
+    "fixture": "http-rotate-c",
+    "path": "operation_id",
+    "operation": "duplicate",
+    "value": null
+  },
+  {
+    "name": "http-rotate-c:operation_id:escaped_duplicate:137",
+    "fixture": "http-rotate-c",
+    "path": "operation_id",
+    "operation": "escaped_duplicate",
+    "value": null
+  },
+  {
+    "name": "client-rotation-i:source_configuration_sha256:duplicate:138",
+    "fixture": "client-rotation-i",
+    "path": "source_configuration_sha256",
+    "operation": "duplicate",
+    "value": null
+  },
+  {
+    "name": "client-rotation-i:source_configuration_sha256:escaped_duplicate:139",
+    "fixture": "client-rotation-i",
+    "path": "source_configuration_sha256",
+    "operation": "escaped_duplicate",
+    "value": null
+  },
+  {
+    "name": "http-retired-https:recorder_id:duplicate:140",
+    "fixture": "http-retired-https",
+    "path": "recorder_id",
+    "operation": "duplicate",
+    "value": null
+  },
+  {
+    "name": "http-retired-https:recorder_id:escaped_duplicate:141",
+    "fixture": "http-retired-https",
+    "path": "recorder_id",
+    "operation": "escaped_duplicate",
+    "value": null
+  },
+  {
+    "name": "http-active:schema:duplicate:142",
+    "fixture": "http-active",
+    "path": "schema",
+    "operation": "duplicate",
+    "value": null
+  },
+  {
+    "name": "http-active:schema:escaped_duplicate:143",
+    "fixture": "http-active",
+    "path": "schema",
+    "operation": "escaped_duplicate",
+    "value": null
+  }
+]

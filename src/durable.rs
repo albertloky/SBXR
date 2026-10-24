@@ -1,7 +1,10 @@
-//! Protected filesystem publication for setup authority, disconnected from main.
+//! Protected filesystem publication for validated setup and subscription authority.
 //! The directory lock serializes this store only; it does not replace SBXR's
 //! production whole-host/package locks or authorize any proxy resource effect.
-use crate::records::{MAX_RECORD_BYTES, OwnershipRecord, RecoveryDirection, SetupPhase};
+use crate::records::{
+    ChangeDirection, MAX_RECORD_BYTES, OwnershipRecord, PendingChange, RecoveryDirection,
+    SetupPhase,
+};
 use rustix::{
     fs::{self, AtFlags, FileType, FlockOperation, Mode, OFlags, RenameFlags, Stat},
     io::Errno,
@@ -76,6 +79,39 @@ pub enum Recovery {
     FinishSetup,
     Running,
     Refused,
+    Removal,
+    SubscriptionCleanup,
+    SubscriptionForward,
+    ClientIdentityCleanup,
+    ClientIdentityForward,
+    Historical,
+}
+fn recovery(record: &OwnershipRecord) -> Recovery {
+    match record.pending_change() {
+        Some(PendingChange::Enablement { .. }) => Recovery::SubscriptionCleanup,
+        Some(
+            PendingChange::LinkRotation { direction, .. }
+            | PendingChange::RuntimeOrCertificateRepair { direction, .. },
+        ) => match direction {
+            ChangeDirection::Cleanup => Recovery::SubscriptionCleanup,
+            ChangeDirection::Forward => Recovery::SubscriptionForward,
+        },
+        Some(PendingChange::ClientIdentityRotation { direction, .. }) => match direction {
+            ChangeDirection::Cleanup => Recovery::ClientIdentityCleanup,
+            ChangeDirection::Forward => Recovery::ClientIdentityForward,
+        },
+        Some(
+            PendingChange::HistoricalCertificateActivation { .. }
+            | PendingChange::HistoricalTransportMigration,
+        ) => Recovery::Historical,
+        Some(PendingChange::Removal { .. }) => Recovery::Removal,
+        None => match record.recovery_direction() {
+            RecoveryDirection::Cleanup => Recovery::Cleanup,
+            RecoveryDirection::FinishSetup => Recovery::FinishSetup,
+            RecoveryDirection::None => Recovery::Running,
+            RecoveryDirection::Removal => Recovery::Removal,
+        },
+    }
 }
 impl Snapshot {
     /// Inspection never promotes staging, rewrites bytes, or chooses a new target.
@@ -87,18 +123,35 @@ impl Snapshot {
                 Recovery::Refused
             };
         };
-        if self.staged.as_ref().is_some_and(|staged| {
-            !current.record.permits_successor(&staged.record)
-                || current.record.recovery_direction() == RecoveryDirection::Cleanup
-                    && staged.record.recovery_direction() != RecoveryDirection::Cleanup
-        }) {
-            return Recovery::Refused;
+        let direction = recovery(&current.record);
+        if let Some(staged) = &self.staged {
+            let target = recovery(&staged.record);
+            // Staging never grants operation admission or crosses a commit barrier.
+            // Exact explicit publication is required before any forward effect.
+            let crosses_barrier = match direction {
+                Recovery::Cleanup => target != Recovery::Cleanup,
+                Recovery::Running => target != Recovery::Running,
+                Recovery::SubscriptionCleanup => {
+                    target != Recovery::SubscriptionCleanup && target != Recovery::Running
+                }
+                Recovery::ClientIdentityCleanup => {
+                    target != Recovery::ClientIdentityCleanup && target != Recovery::Running
+                }
+                _ => false,
+            };
+            let enablement_commit = matches!(
+                current.record.pending_change(),
+                Some(PendingChange::Enablement { .. })
+            ) && staged.record.pending_change().is_none()
+                && staged.record.serving_authority().is_some();
+            if crosses_barrier
+                || enablement_commit
+                || !current.record.permits_successor(&staged.record)
+            {
+                return Recovery::Refused;
+            }
         }
-        match current.record.recovery_direction() {
-            RecoveryDirection::Cleanup => Recovery::Cleanup,
-            RecoveryDirection::FinishSetup => Recovery::FinishSetup,
-            RecoveryDirection::None => Recovery::Running,
-        }
+        direction
     }
 }
 

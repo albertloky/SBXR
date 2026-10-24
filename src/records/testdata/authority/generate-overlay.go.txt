@@ -1,0 +1,42 @@
+package proxyinstallation
+import("encoding/json";"os";"path/filepath";"strings";"testing";"crypto/sha256";"encoding/hex";host "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host";"github.com/albertloky/SBXR/internal/softwarelifecycle")
+func TestRustAuthorityFixtures(t *testing.T){
+ out:=os.Getenv("SBXR_AUTHORITY_FIXTURES")
+ h:=func(c string,n int)string{return strings.Repeat(c,n)}
+ hash:=func(s string)string{v:=sha256.Sum256([]byte(s));return hex.EncodeToString(v[:])}
+ release:=softwarelifecycle.ReleaseIdentity{Repository:"albertloky/SBXR",Tag:"v3.1.118",Commit:h("a",40),IndexSHA256:h("b",64)}
+ base:=newOwnershipRecord(release,host.Preflight{PublicIPv4:"8.8.8.8"},host.Destination{Address:"google.com:443",ServerName:"google.com"},[]byte("fixture"));base.ConfigurationSHA256=h("c",64);base.Resources=recordResources(base,false)
+ save:=func(name string,r ownershipRecord){body:=ownershipBytes(r);if _,valid:=decodeOwnership(body);!valid{t.Fatalf("invalid Go fixture %s",name)};if e:=os.WriteFile(filepath.Join(out,name+".json"),body,0600);e!=nil{t.Fatal(e)}}
+ clone:=func(r ownershipRecord)ownershipRecord{var v ownershipRecord;if json.Unmarshal(ownershipBytes(r),&v)!=nil{t.Fatal("clone")};return v}
+ save("schema1-setup",base)
+ tunnel:=host.TunnelAuthority{TunnelID:"12345678-1234-1234-1234-123456789abc",TokenSHA256:h("d",64),BinarySHA256:h("e",64)}
+ tunnelRecord:=clone(base);tunnelRecord.Tunnel=&tunnel;tunnelRecord.Resources=recordResources(tunnelRecord,false);save("schema1-tunnel",tunnelRecord)
+ base.Phase=runningPhase;base.Direction=noDirection;base.Resources=recordResources(base,false);save("schema1-running",base)
+ idle:=clone(base);idle.Schema=2;updateSubscriptionResources(&idle,release);save("schema2-idle",idle)
+ tr:=clone(idle);tr.Tunnel=&tunnel;updateSubscriptionResources(&tr,release);save("schema2-tunnel",tr)
+ http:=host.ServingAuthority{HTTP:true,LinkID:h("1",32),CredentialSHA256:hash(h("A",43))}
+ httpResources:=host.SubscriptionResourcesForEnablement("8.8.8.8",host.SubscriptionPreflight{HTTP:true})
+ for _,cp:=range []int{0,1,2,3,8,9,10,11,12,13,14,15,22,23}{r:=clone(idle);e:=subscriptionEnablement{Checkpoint:cp,LinkID:http.LinkID,CredentialSHA256:http.CredentialSHA256,RecorderID:h("3",32),Resources:&httpResources};if cp>=8{e.Serving=&http};r.Enablement=&e;updateSubscriptionResources(&r,release);save("http-enable-"+string(rune('a'+cp)),r)}
+ active:=clone(idle);active.Serving=&http;active.SubscriptionResources=&httpResources;updateSubscriptionResources(&active,release);save("http-active",active)
+ activeTunnel:=clone(active);activeTunnel.Tunnel=&tunnel;updateSubscriptionResources(&activeTunnel,release);save("http-tunnel",activeTunnel)
+ compromised:=clone(active);compromised.SubscriptionCompromised=true;save("http-compromised",compromised)
+ rotate:=func(base ownershipRecord,prefix string){source:=*base.Serving;target:=source;target.LinkID=h("4",32);target.CredentialSHA256=hash(h("B",42)+"A");for i,cp:=range []subscriptionRotationCheckpoint{rotationTargetAuthorized,rotationStopAuthorized,rotationCommitted}{r:=clone(base);r.Rotation=&subscriptionRotation{OperationID:h("6",32),Kind:"rotate subscription link",Direction:"cleanup",Effects:subscriptionRotationEffects,Source:source,Target:target,Checkpoint:cp};if i==1{r.Rotation.Completed=[]string{"target prepared"}};if i==2{r.Rotation.Direction="forward";r.Rotation.Completed=[]string{"target prepared","source stopped"};r.Serving=&target};updateSubscriptionResources(&r,release);save(prefix+string(rune('a'+i)),r)}}
+ rotate(active,"http-rotate-")
+ runtimeRepair:=func(base ownershipRecord,prefix string){for i,cp:=range []subscriptionRepairCheckpoint{repairPrepared,repairCommitted,repairAccepted}{r:=clone(base);r.Repair=&subscriptionRepair{OperationID:h("7",32),Kind:"repair subscription",Direction:"cleanup",Correction:repairRuntime,Effects:[]string{"restart owned serving runtime"},Checkpoint:cp,Source:*r.Serving};if i>0{r.Repair.Direction="forward"};if i==2{r.Repair.Target=r.Serving;r.Repair.Completed=r.Repair.Effects};updateSubscriptionResources(&r,release);save(prefix+string(rune('a'+i)),r);if i==1{r.Repair.Target=r.Serving;updateSubscriptionResources(&r,release);save(prefix+"target",r)}}}
+ runtimeRepair(active,"http-repair-")
+ tls:=host.ServingAuthority{LinkID:http.LinkID,CredentialSHA256:http.CredentialSHA256,CertificateGeneration:1,CertificateSHA256:[4]string{h("8",64),h("9",64),h("a",64),h("b",64)}}
+ renewal:=host.RenewalAuthority{RecorderID:h("3",32),Lineage:"sbxr-subscription",PublicIPv4:"8.8.8.8",Invocation:host.OfficialRenewalInvocation}
+ tlsResources:=host.SubscriptionResourceAuthority{PublicIPv4:"8.8.8.8",FirewallSHA256:h("d",64),SnapdCreated:true,RecorderDirectoryCreated:true}
+ legacy:=clone(idle);legacy.Serving=&tls;legacy.Renewal=&renewal;legacy.SubscriptionResources=&tlsResources;updateSubscriptionResources(&legacy,release);save("https-active",legacy)
+ rotate(legacy,"https-rotate-");runtimeRepair(legacy,"https-runtime-repair-")
+ for _,cp:=range []int{0,4,8,23}{r:=clone(idle);e:=subscriptionEnablement{Checkpoint:cp,LinkID:tls.LinkID,CredentialSHA256:tls.CredentialSHA256,RecorderID:renewal.RecorderID};if cp>=4{e.Resources=&tlsResources};if cp>=8{e.Serving=&tls;e.Renewal=&renewal};r.Enablement=&e;updateSubscriptionResources(&r,release);save("https-enable-"+string(rune('a'+cp)),r)}
+ targetTLS:=tls;targetTLS.CertificateGeneration=2;targetTLS.CertificateSHA256=[4]string{h("c",64),h("d",64),h("e",64),h("f",64)}
+ for i,cp:=range []certificateActivationCheckpoint{activationTargetRecorded,activationTargetAccepted}{r:=clone(legacy);r.Activation=&certificateActivation{Source:tls,Target:targetTLS,Checkpoint:cp};if i==1{r.Serving=&targetTLS};updateSubscriptionResources(&r,release);save("https-activation-"+string(rune('a'+i)),r)}
+ for i,cp:=range []subscriptionRepairCheckpoint{repairPrepared,repairCommitted,repairAccepted}{r:=clone(legacy);r.Repair=&subscriptionRepair{OperationID:h("7",32),Kind:"repair subscription",Direction:"cleanup",Correction:repairCertificate,Effects:[]string{"renew owned certificate","activate published certificate","resolve renewal evidence"},Checkpoint:cp,Source:tls};if i>0{r.Repair.Direction="forward"};if i==2{r.Repair.Target=&targetTLS;r.Serving=&targetTLS;r.Repair.Completed=r.Repair.Effects};updateSubscriptionResources(&r,release);save("https-certificate-repair-"+string(rune('a'+i)),r);if i==1{r.Repair.Target=&targetTLS;r.Repair.Completed=[]string{"certificate published"};updateSubscriptionResources(&r,release);save("https-certificate-repair-target",r)}}
+ startup:=host.ProxyStartupAuthority{DropInSHA256:hash(host.ProxyStartupDropIn),DirectoryCreated:true}
+ sr:=clone(active);sr.Startup=&startup;updateSubscriptionResources(&sr,release);save("http-startup",sr)
+ for i,policy:=range clientIdentityCheckpointPolicies{r:=clone(sr);direction:="cleanup";if policy.forward{direction="forward"};rotation:=clientIdentityRotation{OperationID:h("6",32),Direction:direction,Effects:clientIdentityRotationEffects,Completed:append([]string{},clientIdentityRotationEffects[:i]...),Source:h("c",64),Target:h("d",64),Checkpoint:policy.checkpoint,Subscription:&host.ClientIdentitySubscription{Source:http,Target:http,SourceArtifactSHA256:h("e",64),TargetArtifactSHA256:h("f",64)}};r.ClientRotation=&rotation;if policy.targetCanonical{r.ConfigurationSHA256=rotation.Target};updateSubscriptionResources(&r,release);save("client-rotation-"+string(rune('a'+i)),r)}
+ retired:=clone(active);retired.HTTPSRetirement=&host.HTTPSRetirementAuthority{Serving:tls,Renewal:renewal,Resources:tlsResources,ConfigurationMode:0600,ConfigurationSHA256:h("a",64),EvidenceSHA256:h("b",64)};updateSubscriptionResources(&retired,release);save("http-retired-https",retired);retired.TransportMigrating=true;updateSubscriptionResources(&retired,release);save("http-migration-pending",retired)
+ remove:=newRemovalOwnershipRecord(release);save("schema1-software-removal",remove);remove=removalAuthority(remove,release);remove.RemovalCheckpoint=3;save("schema2-software-removal",remove)
+ for i,r:=range []ownershipRecord{base,active,legacy,activeTunnel}{r=clone(r);r.Phase=removalCommitted;r.Direction=removalRequired;r=removalAuthority(r,release);r.RemovalCheckpoint=11;save("profile-removal-"+string(rune('a'+i)),r)}
+}

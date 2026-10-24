@@ -1,11 +1,19 @@
-//! Strict, secret-free codecs for Standard setup schema-1 authority.
-//! Schema 2, tunnel, subscriptions and removal remain unsupported and refuse.
+//! Strict, secret-free historical authority codecs and current HTTP transitions.
+//! Decoding grants no host effect, migration or release-verification authority.
+mod authority;
 mod identity;
+mod operations;
 mod ownership;
+mod resources;
+mod retirement;
+mod transitions;
+mod validation;
+pub use authority::{ServingAuthority, SubscriptionResources, TunnelAuthority, tunnel_unit_sha256};
 pub use identity::{InstalledRecord, ReleaseIdentity};
 pub use ownership::{OwnershipRecord, RecoveryDirection, SetupPhase};
 use sha2::{Digest, Sha256};
 use std::fmt;
+pub use transitions::{ChangeDirection, HTTP_ENABLEMENT_CHECKPOINTS, PendingChange};
 
 pub const MAX_RECORD_BYTES: usize = 64 * 1024;
 
@@ -59,6 +67,35 @@ where
     decoder.deserialize_map(ObjectVisitor(std::marker::PhantomData))
 }
 
+fn optional_object<'de, D, T>(decoder: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    object(decoder).map(Some)
+}
+fn optional_objects<'de, D, T>(decoder: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    struct Entry<T>(T);
+    impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Entry<T> {
+        fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+            object(decoder).map(Self)
+        }
+    }
+    let values = <Vec<Entry<T>> as serde::Deserialize>::deserialize(decoder)?;
+    Ok(Some(values.into_iter().map(|v| v.0).collect()))
+}
+fn true_only<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<bool, D::Error> {
+    let value = <bool as serde::Deserialize>::deserialize(decoder)?;
+    if !value {
+        return Err(serde::de::Error::custom("true required"));
+    }
+    Ok(true)
+}
+
 fn encode<T: serde::Serialize>(record: &T) -> Result<Vec<u8>, RecordError> {
     let mut bytes = serde_json::to_vec(record).map_err(|_| RecordError)?;
     bytes.push(b'\n');
@@ -71,3 +108,7 @@ fn encode<T: serde::Serialize>(record: &T) -> Result<Vec<u8>, RecordError> {
 #[cfg(test)]
 #[path = "records_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "authority_tests.rs"]
+mod authority_tests;

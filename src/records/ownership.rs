@@ -1,6 +1,7 @@
 use super::ReleaseIdentity;
 use super::identity::WireReleaseIdentity;
-use super::{RecordError, decode, encode, lower_hex, sha256_hex};
+use super::{RecordError, decode, encode, sha256_hex};
+use super::{authority::*, operations::*, resources::resources, retirement::WireRetirement};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{fmt, net::IpAddr};
 
@@ -36,6 +37,8 @@ pub enum SetupPhase {
     ServiceStarted,
     #[serde(rename = "Running")]
     Running,
+    #[serde(rename = "Removal committed")]
+    RemovalCommitted,
 }
 
 const PHASES: [SetupPhase; 14] = [
@@ -63,11 +66,14 @@ pub enum RecoveryDirection {
     FinishSetup,
     #[serde(rename = "none")]
     None,
+    #[serde(rename = "removal required")]
+    Removal,
 }
 impl SetupPhase {
     pub fn recovery_direction(self) -> RecoveryDirection {
         match self {
             Self::Running => RecoveryDirection::None,
+            Self::RemovalCommitted => RecoveryDirection::Removal,
             Self::ActivationCommitted | Self::ServiceEnabled | Self::ServiceStarted => {
                 RecoveryDirection::FinishSetup
             }
@@ -91,10 +97,10 @@ fn string_enum<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LockProvisioning {
-    unit_sha256: String,
+pub(super) struct LockProvisioning {
+    pub unit_sha256: String,
 }
-fn lock_digest() -> String {
+pub(super) fn lock_digest() -> String {
     sha256_hex(include_bytes!("lock-provision.service"))
 }
 fn nonnull_optional<'de, D: Deserializer<'de>>(
@@ -105,34 +111,120 @@ fn nonnull_optional<'de, D: Deserializer<'de>>(
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WireOwnershipRecord {
-    schema: u32,
+pub(super) struct WireOwnershipRecord {
+    pub schema: u32,
     #[serde(deserialize_with = "string_enum")]
-    phase: SetupPhase,
+    pub phase: SetupPhase,
     #[serde(deserialize_with = "string_enum")]
-    unfinished_direction: RecoveryDirection,
+    pub unfinished_direction: RecoveryDirection,
     #[serde(deserialize_with = "super::object")]
-    release_identity: WireReleaseIdentity,
-    proxy_package_identity: String,
-    public_ipv4: String,
-    destination_address: String,
-    destination_server_name: String,
-    configuration_sha256: String,
-    permitted_resources: Vec<String>,
-    cleanup_checkpoint: u32,
-    removal_checkpoint: u32,
+    pub release_identity: WireReleaseIdentity,
+    pub proxy_package_identity: String,
+    pub public_ipv4: String,
+    pub destination_address: String,
+    pub destination_server_name: String,
+    pub configuration_sha256: String,
+    pub permitted_resources: Vec<String>,
+    pub cleanup_checkpoint: u32,
+    pub removal_checkpoint: u32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_objects"
+    )]
+    pub resource_creating_releases: Option<Vec<WireReleaseIdentity>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub finishing_release_identity: Option<WireReleaseIdentity>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub serving: Option<WireServing>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub renewal: Option<WireRenewal>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub certificate_activation: Option<WireActivation>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub subscription_enablement: Option<WireEnablement>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub subscription_rotation: Option<WireRotation>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub subscription_repair: Option<WireRepair>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub subscription_compromised: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub subscription_resources: Option<WireSubscriptionResources>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub proxy_startup: Option<WireStartup>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "nonnull_optional"
     )]
-    lock_provisioning: Option<LockProvisioning>,
+    pub lock_provisioning: Option<LockProvisioning>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub tunnel: Option<WireTunnel>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub client_identity_rotation: Option<WireClientRotation>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::optional_object"
+    )]
+    pub https_retirement: Option<WireRetirement>,
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        deserialize_with = "super::true_only"
+    )]
+    pub subscription_transport_migration: bool,
 }
 
 /// Validated authority only; raw secrets and unsupported operation fields cannot
 /// be represented. No Serde implementation bypasses this type's validation.
 #[derive(Clone, PartialEq, Eq)]
-pub struct OwnershipRecord(WireOwnershipRecord);
+pub struct OwnershipRecord(pub(super) WireOwnershipRecord);
 impl fmt::Debug for OwnershipRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OwnershipRecord")
@@ -160,6 +252,21 @@ impl OwnershipRecord {
             permitted_resources: vec![],
             cleanup_checkpoint: 0,
             removal_checkpoint: 0,
+            resource_creating_releases: None,
+            finishing_release_identity: None,
+            serving: None,
+            renewal: None,
+            certificate_activation: None,
+            subscription_enablement: None,
+            subscription_rotation: None,
+            subscription_repair: None,
+            subscription_compromised: false,
+            subscription_resources: None,
+            proxy_startup: None,
+            tunnel: None,
+            client_identity_rotation: None,
+            https_retirement: None,
+            subscription_transport_migration: false,
             lock_provisioning: Some(LockProvisioning {
                 unit_sha256: lock_digest(),
             }),
@@ -167,31 +274,18 @@ impl OwnershipRecord {
         wire.permitted_resources = resources(&wire);
         Self::validated(wire)
     }
-    fn validated(wire: WireOwnershipRecord) -> Result<Self, RecordError> {
-        if wire.schema != 1
-            || !wire.release_identity.valid()
-            || wire.proxy_package_identity != PACKAGE_IDENTITY
-            || !public_ipv4(&wire.public_ipv4)
-            || wire.destination_address != "google.com:443"
-            || wire.destination_server_name != "google.com"
-            || !lower_hex(&wire.configuration_sha256, 64)
-            || wire.permitted_resources != resources(&wire)
-            || wire.removal_checkpoint != 0
-            || wire.cleanup_checkpoint > 8
-            || wire.unfinished_direction != wire.phase.recovery_direction()
-            || wire.unfinished_direction != RecoveryDirection::Cleanup
-                && wire.cleanup_checkpoint != 0
-            || wire
-                .lock_provisioning
-                .as_ref()
-                .is_some_and(|l| l.unit_sha256 != lock_digest())
-        {
+    pub(super) fn validated(wire: WireOwnershipRecord) -> Result<Self, RecordError> {
+        if !super::validation::valid(&wire) {
             return Err(RecordError);
         }
         Ok(Self(wire))
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, RecordError> {
-        Self::validated(decode(bytes)?)
+        let wire = decode(bytes)?;
+        if !super::validation::valid_shapes(bytes) {
+            return Err(RecordError);
+        }
+        Self::validated(wire)
     }
     pub fn encode(&self) -> Result<Vec<u8>, RecordError> {
         encode(&self.0)
@@ -251,10 +345,11 @@ impl OwnershipRecord {
         self == next
             || self.next_setup_checkpoint().as_ref() == Ok(next)
             || self.next_cleanup_checkpoint().as_ref() == Ok(next)
+            || self.http_successor(next)
     }
 }
 
-fn public_ipv4(value: &str) -> bool {
+pub(super) fn public_ipv4(value: &str) -> bool {
     let Ok(address) = value.parse::<IpAddr>() else {
         return false;
     };
@@ -273,7 +368,7 @@ fn public_ipv4(value: &str) -> bool {
         || a == 203 && b == 0 && c == 113)
 }
 
-fn resources(wire: &WireOwnershipRecord) -> Vec<String> {
+pub(super) fn base_resources(wire: &WireOwnershipRecord) -> Vec<String> {
     let mut resources: Vec<String> = vec![
         "/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-1".into(),
         "/var/lib/.sbxr-removal.json root:root 0600 one-link finalization authority".into(),
