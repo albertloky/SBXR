@@ -378,3 +378,35 @@ fn canonical_latest_metadata_never_bypasses_native_signature_verification() {
     ));
     assert_eq!(f.0, 0);
 }
+
+#[test]
+fn public_exact_tag_is_not_latest_or_an_unsigned_structural_shortcut() {
+    for selected in ["v3.2.1", "v9.9.9"] {
+        let mut f = Fixture::new();
+        let wire: serde_json::Value = serde_json::from_slice(&f.metadata).unwrap();
+        let actual = wire["tag_name"].as_str().unwrap().to_owned();
+        let tag = if selected == "v3.2.1" {
+            actual.as_str()
+        } else {
+            selected
+        };
+        let request = AcquisitionRequest::release_metadata(tag).unwrap();
+        f.bodies.insert(request.url().into(), f.metadata.clone());
+        assert!(
+            AuthenticatedArchive::acquire_public_tag(
+                &mut f,
+                tag,
+                Architecture::Amd64,
+                &SelectionBudget::new()
+            )
+            .is_err()
+        );
+        assert_eq!(f.requests.first().unwrap(), request.url());
+        assert!(!f.requests.iter().any(|s| s.contains("/releases/assets/")));
+        assert_eq!(
+            f.requests.iter().any(|s| s.contains("attestations")),
+            tag == actual
+        );
+        assert!(!f.requests.iter().any(|s| s.ends_with("/latest")));
+    }
+}

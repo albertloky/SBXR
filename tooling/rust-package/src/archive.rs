@@ -110,3 +110,84 @@ pub fn unpack_archive(body: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(tar[512..512 + size].to_vec())
 }
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use sbxr::release_identity::{
+        AssetProof, ReleaseIndex, ReleaseSupport, SupportScope, read_executable_identity,
+    };
+    use std::{fs, path::PathBuf};
+    struct Directory(PathBuf);
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    #[test]
+    fn historical_go_packages_keep_exact_pinned_proof_and_cannot_be_constructed_as_rust() {
+        let path = std::env::temp_dir().join(format!("go-package-{}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        let root = Directory(path);
+        let tag = "v3.2.1";
+        let commit = "a".repeat(40);
+        let mut hashes = Vec::new();
+        for (arch, bytes) in [
+            (
+                Architecture::Amd64,
+                include_bytes!("../../../tests/testdata/release_identity/go-amd64-valid.bin")
+                    .as_slice(),
+            ),
+            (
+                Architecture::Arm64,
+                include_bytes!("../../../tests/testdata/release_identity/go-arm64-valid.bin")
+                    .as_slice(),
+            ),
+        ] {
+            let identity = read_executable_identity(bytes).unwrap();
+            assert!(package_executable(identity.payload(), tag, &commit, 200, arch).is_err());
+            let executable = stamp_executable(identity.payload(), tag, &commit, 200, arch).unwrap();
+            let mut tar = tar_header(executable.len()).to_vec();
+            tar.extend_from_slice(&executable);
+            tar.resize(tar.len().div_ceil(512) * 512 + 1024, 0);
+            let archive = gzip(&tar, false, MAX_EXECUTABLE_BYTES).unwrap();
+            hashes.push(sbxr::records::sha256_hex(&executable));
+            fs::write(
+                root.0.join(format!("sbxr-linux-{}.tar.gz", arch.as_str())),
+                archive,
+            )
+            .unwrap();
+        }
+        let installer = format!(
+            "# Historical inert bootstrap fixture; never execute\nREPOSITORY='albertloky/SBXR'\nTAG='{tag}'\nCOMMIT='{commit}'\nSEQUENCE='200'\nAMD64_EXECUTABLE_SHA256='{}'\nARM64_EXECUTABLE_SHA256='{}'\n",
+            hashes[0], hashes[1]
+        );
+        fs::write(root.0.join("install.sh"), installer.as_bytes()).unwrap();
+        let proofs = [
+            "install.sh",
+            "sbxr-linux-amd64.tar.gz",
+            "sbxr-linux-arm64.tar.gz",
+        ]
+        .iter()
+        .map(|n| AssetProof::for_bytes(n, &fs::read(root.0.join(n)).unwrap()).unwrap())
+        .collect();
+        let support = ReleaseSupport::new(SupportScope::CleanInstallOnly, vec![]).unwrap();
+        let index = ReleaseIndex::build(tag, &commit, 200, proofs, Some(support)).unwrap();
+        fs::write(root.0.join("release-index.json"), index.bytes()).unwrap();
+        assert!(crate::verify_package(&root.0, Architecture::Amd64).is_ok());
+        assert!(crate::verify_package(&root.0, Architecture::Arm64).is_ok());
+        fs::remove_file(root.0.join("release-index.json")).unwrap();
+        assert!(
+            crate::build_index(&root.0, tag, &commit, 200).is_err(),
+            "new production construction remains Rust-only"
+        );
+        fs::write(root.0.join("release-index.json"), index.bytes()).unwrap();
+        // Original raw-byte/digest pins still reject mutation before any adoption.
+        fs::write(
+            root.0.join("install.sh"),
+            installer.replace("SEQUENCE='200'", "SEQUENCE='201'"),
+        )
+        .unwrap();
+        assert!(crate::verify_package(&root.0, Architecture::Amd64).is_err());
+    }
+}

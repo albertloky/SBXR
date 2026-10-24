@@ -148,24 +148,22 @@ fn cli(arguments: &[&str]) -> std::process::Output {
         .unwrap()
 }
 fn populate(directory: &Path) {
-    let mut installer = format!(
-        "#!/bin/sh\n# SYNTHETIC BINDING FIXTURE ONLY; NEVER RUN\nexit 97\nREPOSITORY='albertloky/SBXR'\nTAG='{TAG}'\nCOMMIT='{COMMIT}'\nSEQUENCE='193'\n"
-    );
+    let mut hashes = Vec::new();
     for architecture in [Architecture::Amd64, Architecture::Arm64] {
         let archive =
             package_executable(&fixture(architecture), TAG, COMMIT, 193, architecture).unwrap();
-        installer.push_str(&format!(
-            "{}_EXECUTABLE_SHA256='{}'\n",
-            architecture.as_str().to_uppercase(),
-            sha256_hex(&unpack_archive(&archive).unwrap())
-        ));
+        hashes.push(sha256_hex(&unpack_archive(&archive).unwrap()));
         fs::write(
             directory.join(format!("sbxr-linux-{}.tar.gz", architecture.as_str())),
             archive,
         )
         .unwrap();
     }
-    fs::write(directory.join("install.sh"), installer).unwrap();
+    fs::write(
+        directory.join("install.sh"),
+        sbxr_rust_package::bootstrap(TAG, COMMIT, 193, &hashes[0], &hashes[1]).unwrap(),
+    )
+    .unwrap();
 }
 fn index(directory: &Path) {
     let index = build_index(directory, TAG, COMMIT, 193).unwrap();
@@ -177,9 +175,7 @@ fn cli_round_trip_preserves_exact_four_assets_and_canonical_go_index() {
     let scratch = Directory::new();
     let assets = scratch.0.join("assets");
     fs::create_dir(&assets).unwrap();
-    let mut installer = format!(
-        "#!/bin/sh\n# SYNTHETIC; NEVER RUN\nexit 97\nREPOSITORY='albertloky/SBXR'\nTAG='{TAG}'\nCOMMIT='{COMMIT}'\nSEQUENCE='193'\n"
-    );
+    let mut hashes = Vec::new();
     for architecture in [Architecture::Amd64, Architecture::Arm64] {
         let input = scratch.0.join("input");
         fs::write(&input, fixture(architecture)).unwrap();
@@ -207,14 +203,14 @@ fn cli_round_trip_preserves_exact_four_assets_and_canonical_go_index() {
         );
         let message: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(message["outcome"], "packaged-local");
-        installer.push_str(&format!(
-            "{}_EXECUTABLE_SHA256='{}'\n",
-            architecture.as_str().to_uppercase(),
-            message["executable_sha256"].as_str().unwrap()
-        ));
+        hashes.push(message["executable_sha256"].as_str().unwrap().to_owned());
         assert!(!cli(&args).status.success(), "must never overwrite");
     }
-    fs::write(assets.join("install.sh"), installer).unwrap();
+    fs::write(
+        assets.join("install.sh"),
+        sbxr_rust_package::bootstrap(TAG, COMMIT, 193, &hashes[0], &hashes[1]).unwrap(),
+    )
+    .unwrap();
     let output = assets.join("release-index.json");
     let result = cli(&[
         "index",
@@ -487,5 +483,150 @@ fn metadata_cli_and_argument_refusals_are_local_and_secret_safe() {
         assert!(!result.status.success());
         assert!(!String::from_utf8_lossy(&result.stderr).contains("PRIVATE-SENTINEL"));
         assert!(result.stdout.is_empty());
+    }
+}
+
+#[test]
+fn bootstrap_cli_is_exclusive_identity_bound_and_preserves_shell_safety() {
+    let scratch = Directory::new();
+    let output = scratch.0.join("install.sh");
+    let args = [
+        "bootstrap",
+        "--tag",
+        TAG,
+        "--commit",
+        COMMIT,
+        "--sequence",
+        "193",
+        "--amd64-executable-sha256",
+        &"a".repeat(64),
+        "--arm64-executable-sha256",
+        &"b".repeat(64),
+        "--output",
+        output.to_str().unwrap(),
+    ];
+    assert!(cli(&args).status.success());
+    let body = fs::read(&output).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let text = String::from_utf8(body.clone()).unwrap();
+    assert!(!text.contains("{{."));
+    assert!(text.contains("ROOT=''\n"));
+    for safety in [
+        "--proto '=https'",
+        "RESTORING_REMOVAL",
+        "restoration_stage_safe",
+        "verify_executable_identity",
+        "CONCURRENT-MUTATION",
+        "exec 9",
+        "release_refused",
+        "expected=embedded",
+        "REMOVAL_INDEX_SHA",
+    ] {
+        assert!(
+            text.contains(safety),
+            "missing preserved safeguard {safety}"
+        );
+    }
+    assert!(
+        Command::new("/bin/bash")
+            .arg("-n")
+            .arg(&output)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(!cli(&args).status.success());
+    assert_eq!(fs::read(&output).unwrap(), body);
+    assert!(
+        sbxr_rust_package::bootstrap(
+            "v1.2.3';exit 0",
+            COMMIT,
+            1,
+            &"a".repeat(64),
+            &"b".repeat(64)
+        )
+        .is_err()
+    );
+    assert!(
+        sbxr_rust_package::bootstrap(TAG, COMMIT, 0, &"a".repeat(64), &"b".repeat(64)).is_err()
+    );
+}
+
+#[test]
+fn assembly_verifies_both_native_inputs_without_extracting_or_executing() {
+    for bad in [false, true] {
+        let scratch = Directory::new();
+        let mut paths = Vec::new();
+        for arch in [Architecture::Amd64, Architecture::Arm64] {
+            let selected = if bad && arch == Architecture::Arm64 {
+                Architecture::Amd64
+            } else {
+                arch
+            };
+            let archive =
+                package_executable(&fixture(selected), TAG, COMMIT, 193, selected).unwrap();
+            let path = scratch
+                .0
+                .join(format!("sbxr-linux-{}.tar.gz", arch.as_str()));
+            fs::write(&path, archive).unwrap();
+            paths.push(path);
+        }
+        let output = scratch.0.join("assets");
+        let result = Command::new("/usr/bin/python3")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("assemble.py"))
+            .args([
+                "--tool",
+                env!("CARGO_BIN_EXE_sbxr-rust-package"),
+                "--tag",
+                TAG,
+                "--commit",
+                COMMIT,
+                "--sequence",
+                "193",
+                "--amd64",
+                paths[0].to_str().unwrap(),
+                "--arm64",
+                paths[1].to_str().unwrap(),
+                "--output",
+                output.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.success(),
+            !bad,
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        if bad {
+            assert!(!output.join("install.sh").exists());
+        } else {
+            assert_eq!(
+                verify_package(&output, Architecture::Amd64)
+                    .unwrap()
+                    .sequence(),
+                193
+            );
+            assert_eq!(
+                fs::read(output.join("sbxr-linux-amd64.tar.gz")).unwrap(),
+                fs::read(&paths[0]).unwrap()
+            );
+            assert!(
+                Command::new("/bin/bash")
+                    .arg("-n")
+                    .arg(output.join("install.sh"))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        assert!(
+            paths.iter().all(|p| p.exists()),
+            "input archives must be preserved"
+        );
     }
 }

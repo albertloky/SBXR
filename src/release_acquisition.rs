@@ -173,12 +173,41 @@ impl AuthenticatedArchive {
         architecture: Architecture,
         budget: &SelectionBudget,
     ) -> Result<Self> {
+        Self::acquire_public_request(
+            transport,
+            AcquisitionRequest::latest_metadata(),
+            None,
+            architecture,
+            budget,
+        )
+    }
+    /// Repository verification only: an immutable public exact tag still needs
+    /// native signatures, Acceptance Record, index and executable verification.
+    pub fn acquire_public_tag(
+        transport: &mut impl AcquisitionTransport,
+        tag: &str,
+        architecture: Architecture,
+        budget: &SelectionBudget,
+    ) -> Result<Self> {
         budget.check()?;
-        let request = AcquisitionRequest::latest_metadata();
+        let request = AcquisitionRequest::release_metadata(tag)?;
+        Self::acquire_public_request(transport, request, Some(tag), architecture, budget)
+    }
+    fn acquire_public_request(
+        transport: &mut impl AcquisitionTransport,
+        request: AcquisitionRequest,
+        tag: Option<&str>,
+        architecture: Architecture,
+        budget: &SelectionBudget,
+    ) -> Result<Self> {
+        budget.check()?;
         let response = transport.get(&request, budget)?;
         let bytes = trust::read_complete_json_response(response, request.max_bytes(), budget)?;
         let value = trust::json_object(&bytes, MAX_INDEX_BYTES)?;
         let wire: WireRelease = serde_json::from_value(value).map_err(|_| TrustError::Refused)?;
+        if tag.is_some_and(|tag| tag != wire.tag_name) {
+            return Err(TrustError::Refused);
+        }
         let digest = wire
             .assets
             .iter()

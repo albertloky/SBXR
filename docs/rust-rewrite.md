@@ -73,7 +73,7 @@ or Karing verification.
 | `src/host/network.rs` | Direct verified TLS 1.3 public-IP/destination checks and exact IPv4 TCP443 bind admission |
 | `src/host/system.rs` | Fixed managed command adapter with retained lock, pinned DEB and exclusive identity checks |
 | `src/artifact_trust.rs` | Real offline Sigstore verification against pinned roots/policies, exact authenticated claims and bounded acquisition interface |
-| `tooling/rust-package/` | Separate offline deterministic package/index CLI using the product release inspector |
+| `tooling/rust-package/` | Rust package/bootstrap/index and fixed public-proof CLI, native build/assembly and local source-only snapshots |
 | `src/identity_generation.rs` | Ephemeral X25519/UUID/credential generation, injected entropy and Go-compatible validation |
 | `src/release_acquisition.rs`, `src/release_acquisition/` | Exact-tag authenticated archive acquisition, Installed Record derivation and separate current-byte binding |
 | `src/host/restoration.rs`, `src/host/filesystem/restoration.rs` | Exact committed-finisher recovery, retained exclusion, prefix staging and record-first file publication; injected roots only |
@@ -1793,3 +1793,79 @@ Remaining finite release work:
 New HTTPS/ACME/renewal creation, automatic migration and incoming software Update
 remain intentional exclusions. No host/VPS, credential/security, upload, signing,
 push or publication action occurred in this increment.
+
+
+## Local bootstrap and workflow integration (base 7bf9437)
+
+The Rust repository CLI now generates the standalone installer directly from the
+preserved self-contained shell contract. Concrete Rust and Go generation for the
+same identity produced **76,739 identical bytes**. The Go implementation remains
+unchanged. New four-asset construction requires two strict Rust executables,
+canonical retained compiler/target/source metadata and the complete generated
+bootstrap bytes. Read-only historical Go verification retains its pinned ELF/Go
+proof and both executable pins; mixed-language sets and new Go construction are
+refused. The fixed public Latest/exact-tag commands use the existing real bounded
+HTTPS, Sigstore, Acceptance Record, index and archive chain. They supply no URL,
+candidate or test-verifier bypass.
+
+The workflow definitions now build each musl architecture on its matching native
+Linux runner, then reuse those same archives for independent assembly and exact
+byte checks. The repository-only Go qualification engine, signed decision chain,
+cleanup/failure handling and manual stable publication remain. The smoke check
+exercises closed public/private dispatch as a non-root user; it is not a root
+installation or Owner-journey qualification. No remote workflow was dispatched,
+no provisioning helper was run locally, and production admission remains closed.
+The prepared native requirements and exact commands are in
+[`tooling/rust-package/linux-validation.md`](../tooling/rust-package/linux-validation.md).
+
+Local validation passed **544 product unit/integration tests**, **one compile-fail
+doctest**, **12 packaging tests**, **4 Python tooling tests** and **19 repository
+workflow regressions**, plus format, strict all-target Clippy and Mac builds.
+Safe YAML parsing, action pins, dependency graphs and **44 Bash run blocks**
+passed offline syntax checks. The retained Go installer matrix passed **24**
+top-level tests with one preexisting Linux/amd64 terminal-execution skip on this
+Mac. Its foreign-mode fixture requests 0644 through os.WriteFile: an outer 077
+umask actually creates 0600 and falsely labels a valid file foreign. The fixture
+modes were measured; rerunning in an explicit 022 subshell passes. CI now gives
+retained Go checks that context. The bootstrap still sets 077 internally, and no
+production permission or Go implementation check was relaxed.
+
+Eight mutations were caught: exact-tag selection, whole-bootstrap binding,
+Rust-only construction, source-secret exclusion, command-local source metadata,
+accepted public-proof outcome, clean-install declaration scope and required
+capture-file presence. One construction mutation initially survived a fixture
+that refused too early; the fixture was corrected to reach that guard and the
+mutation was caught. Every changed source was restored. The unchanged marker
+scan found no matches in the Mac development product/template/refusal captures;
+this is not a native-release artifact scan. Evidence remains in
+`.scratch/acceptance/rust-release-wire/`.
+
+The new source-snapshot helper imports only exact clean committed Git objects.
+It writes a deterministic local source archive, per-file manifest and archive
+hash/size, excludes local/scratch/build/credential roots, and retains the committed
+public and synthetic offline fixtures, including the public pinned DEB. The
+read-only verifier requires an externally pinned manifest hash and refuses
+missing, extra, changed or symlinked source. The final-commit archive is prepared
+locally after committing; its exact identity is in the local handoff, never
+uploaded as part of this increment.
+
+Current finite remaining release work:
+
+1. Validate the exact source on native Linux, including cancellation, proc/cgroup,
+   systemd, retained locks, crash durability and exact-finisher execution. The Mac
+   still lacks both musl standard libraries/native compilers and a prepared Linux
+   runtime; no tool was installed and no current-source Linux pass is claimed.
+2. Run the integrated native AMD64/ARM64 musl build and packaging checks. The
+   configuration is implemented, but actual product artifacts and remote CI
+   execution remain unverified here.
+3. Complete the reviewed authenticated candidate-gateway acquisition and
+   qualification activation path, and check the retained live driver/collectors
+   against Rust. Public immutable-release authentication does not authorize a
+   candidate; production gates must stay closed until those boundaries qualify.
+4. Qualify the five HTTP journeys for the exact packaged candidate, with complete
+   cleanup. Optional VMess still needs separately bound two-node evidence. Stable
+   publication requires its existing specific approval and signed eligibility.
+
+New HTTPS/ACME/renewal creation, automatic migration and incoming Update remain
+intentional exclusions. No live host/VPS, security/credential, upload, push,
+signing or publication action occurred.

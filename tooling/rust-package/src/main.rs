@@ -1,8 +1,8 @@
 use sbxr::records::sha256_hex;
 use sbxr::release_identity::{Architecture, MAX_EXECUTABLE_BYTES, rust_artifact_metadata};
 use sbxr_rust_package::{
-    PackageError, Result, build_index, package_executable, read_input, unpack_archive,
-    verify_package, write_exclusive,
+    PackageError, Result, bootstrap, build_index, package_executable, read_input, unpack_archive,
+    verify_package, write_exclusive, write_script_exclusive,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -33,6 +33,17 @@ fn run() -> Result<serde_json::Value> {
             "executable",
             "output",
         ],
+        "inspect-archive" => &["tag", "commit", "sequence", "architecture", "archive"],
+        "bootstrap" => &[
+            "tag",
+            "commit",
+            "sequence",
+            "amd64-executable-sha256",
+            "arm64-executable-sha256",
+            "output",
+        ],
+        "verify-public-latest" => &[],
+        "verify-public-release" => &["tag"],
         "index" => &["tag", "commit", "sequence", "directory", "output"],
         "verify-package" => &["directory", "architecture"],
         "metadata" => &["commit", "architecture", "output"],
@@ -86,6 +97,70 @@ fn run() -> Result<serde_json::Value> {
                 "executable_sha256":digest, "archive_sha256":sha256_hex(&archive)}),
             )
         }
+        "verify-public-latest" | "verify-public-release" => {
+            if command == "verify-public-release" {
+                sbxr::release_identity::ReleaseIdentity::new(
+                    value(&options, "tag")?,
+                    &"a".repeat(40),
+                    &"a".repeat(64),
+                )
+                .map_err(|_| PackageError("arguments"))?;
+            }
+            let mut transport = sbxr::release_https::HttpsTransport::new()
+                .map_err(|_| PackageError("public-transport"))?;
+            let budget = sbxr::artifact_trust::SelectionBudget::new();
+            let result = if command == "verify-public-latest" {
+                sbxr::release_acquisition::AuthenticatedArchive::acquire_latest(
+                    &mut transport,
+                    Architecture::Amd64,
+                    &budget,
+                )
+            } else {
+                sbxr::release_acquisition::AuthenticatedArchive::acquire_public_tag(
+                    &mut transport,
+                    value(&options, "tag")?,
+                    Architecture::Amd64,
+                    &budget,
+                )
+            };
+            Ok(public_result(result))
+        }
+        "inspect-archive" => {
+            let arch = architecture(&options)?;
+            let bytes = read_input(Path::new(value(&options, "archive")?), MAX_EXECUTABLE_BYTES)?;
+            let executable = unpack_archive(&bytes)?;
+            let identity = sbxr::release_identity::read_executable_identity(&executable)
+                .map_err(|_| PackageError("identity"))?;
+            if identity.tag() != value(&options, "tag")?
+                || identity.commit() != value(&options, "commit")?
+                || identity.sequence() != sequence()?
+                || identity.architecture() != arch
+                || sbxr::release_identity::inspect_linux_artifact(&executable, arch)
+                    .map_err(|_| PackageError("executable"))?
+                    .kind()
+                    != sbxr::release_identity::ArtifactKind::Rust
+            {
+                return Err(PackageError("executable"));
+            }
+            Ok(
+                serde_json::json!({"outcome":"inspected-local","architecture":arch.as_str(),"executable_sha256":sha256_hex(&executable)}),
+            )
+        }
+        "bootstrap" => {
+            let output = Path::new(value(&options, "output")?);
+            if output.file_name().is_none_or(|n| n != "install.sh") {
+                return Err(PackageError("bootstrap-name"));
+            }
+            let bytes = bootstrap(
+                value(&options, "tag")?,
+                value(&options, "commit")?,
+                sequence()?,
+                value(&options, "amd64-executable-sha256")?,
+                value(&options, "arm64-executable-sha256")?,
+            )?;
+            write_script_exclusive(output, &bytes)?;
+            Ok(serde_json::json!({"outcome":"bootstrap-local"}))
+        }
         "index" => {
             let output = Path::new(value(&options, "output")?);
             if output.file_name().is_none_or(|n| n != "release-index.json") {
@@ -130,6 +205,41 @@ fn main() {
         Err(error) => {
             eprintln!("{error}");
             std::process::exit(1);
+        }
+    }
+}
+
+fn public_result(
+    result: std::result::Result<
+        sbxr::release_acquisition::AuthenticatedArchive,
+        sbxr::artifact_trust::TrustError,
+    >,
+) -> serde_json::Value {
+    match result {
+        Ok(archive) => {
+            let identity = archive.record().release_identity();
+            serde_json::json!({"outcome":"accepted", "release_identity":{"commit":identity.commit(),"release_index_sha256":identity.index_sha256(),"repository":identity.repository(),"tag":identity.tag()},"sequence":archive.record().sequence()})
+        }
+        Err(error) => {
+            serde_json::json!({"outcome": if error==sbxr::artifact_trust::TrustError::Unavailable {"unavailable"} else {"refused"}, "release_identity":null,"sequence":null})
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn public_verifier_failure_never_emits_an_accepted_identity() {
+        for (error, outcome) in [
+            (sbxr::artifact_trust::TrustError::Refused, "refused"),
+            (sbxr::artifact_trust::TrustError::Interrupted, "refused"),
+            (sbxr::artifact_trust::TrustError::Unavailable, "unavailable"),
+        ] {
+            assert_eq!(
+                public_result(Err(error)),
+                serde_json::json!({"outcome":outcome,"release_identity":null,"sequence":null})
+            );
         }
     }
 }

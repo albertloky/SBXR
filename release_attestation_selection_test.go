@@ -58,7 +58,7 @@ func TestStableFailureUsesTheSameTaggedPublicVerifier(t *testing.T) {
 	workflow := string(body)
 	failure := workflow[strings.Index(workflow, "  finalize-failure:"):]
 	for _, required := range []string{
-		`go run ./cmd/sbxr-release verify-public-release -tag "$tag"`,
+		`cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-release -tag "$tag"`,
 		`.outcome == "accepted" and .release_identity == $expected.release_identity and .sequence == $expected.sequence`,
 		`curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$name"`,
 	} {

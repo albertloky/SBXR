@@ -117,10 +117,16 @@ pub(crate) fn asset_files(directory: &Path, names: &[&str]) -> Result<BTreeMap<S
     Ok(bodies)
 }
 pub fn write_exclusive(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_mode(path, bytes, 0o600)
+}
+pub fn write_script_exclusive(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_mode(path, bytes, 0o700)
+}
+fn write_mode(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(mode)
         .open(path)
         .map_err(|_| PackageError("output"))?;
     // Failed partial outputs stay for inspection; an existing output is never replaced.

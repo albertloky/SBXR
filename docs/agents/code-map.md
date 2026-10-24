@@ -20,7 +20,13 @@ linker script for explicitly selected pinned Linux musl release builds;
 `src/build_identity.rs` checks the loaded statement independently of authentication.
 Identity generation, structural
 release inspection and offline Sigstore authentication have separate modules and
-adjacent/integration tests. `tooling/rust-package/` is the separate offline CLI.
+adjacent/integration tests. `tooling/rust-package/` owns the Rust repository packaging/public-proof CLI,
+byte-preserved standalone bootstrap, native musl builder, four-asset assembly and
+local source snapshot/manifest verification. Its `linux-validation.md` lists
+prepared-builder commands. The workflow definitions build native archives once
+per architecture, reuse them for independent assembly checks and retain signed
+qualification/manual publication gates. No workflow/provisioning follows from
+local fixture success.
 Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decoding
 is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
 public proofs and the repository evidence example cover actual acquisition.

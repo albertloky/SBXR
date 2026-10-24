@@ -45,7 +45,7 @@ issuance or a new upgrade writer to this clean-install release.
 | Removal / retained authority | Exact ownership, forward-only retry, current artifacts, active/retired HTTPS cleanup and exact finisher restoration | Foreign resources; new conversion writer; unsupported historical states must remain explicit | Native removal, actual restored-finisher exec and crash durability |
 | Lifecycle Status / Check | Protected local pair/lock/transaction inspection; authenticated qualified Latest; same-release current; newer clean-install refusal | No Update action; unverified release, concurrent change and incomplete pair | Current Linux observation and public acquisition qualification |
 | Lifecycle Recover | No-op when Ready; review/default-No and exact committed-removal finisher restoration, preserving proxy journal | Unknown/unproved direction, legacy Go update transaction (requires its original exact release), stale review or conflicting pair | Native exact-inode takeover; legacy transaction mutation is not offered by this Rust release |
-| Public entry / release | Zero arguments compose the existing Owner and lifecycle; private-role argument contract stays fixed | Unsupported/unqualified native entry never falls back to simulation | Native current-source verification of cancellation and retained ELF identity, both musl architectures, bootstrap/CI and five exact-candidate live journeys |
+| Public entry / release | Zero arguments compose the existing Owner and lifecycle; private-role argument contract stays fixed | Unsupported/unqualified native entry never falls back to simulation | Native current-source verification of cancellation and retained ELF identity, actual builds for both musl architectures, execution of the integrated bootstrap/CI definitions and five exact-candidate live journeys |
 
 The implementation and validation status of this increment is recorded in the
 Rust handoff and `.scratch/acceptance/rust-entry/`. Production dispatch remains
@@ -80,3 +80,21 @@ absent. Musl targets/cross-compilers are also absent. Linux signal/systemd/cgrou
 full native static builds, bootstrap/workflows and exact-candidate live journeys
 remain unqualified. Evidence and the finite remaining checklist are in the latest
 Rust handoff increment and `.scratch/acceptance/rust-cancel-build/`.
+
+## Local release integration (base 7bf9437)
+
+Rust now generates the byte-preserved standalone bootstrap and constructs the
+clean-install-only four-asset set. New construction requires two strictly proved
+Rust executables and the complete exact bootstrap; read-only historical Go
+verification retains its pinned proof and original digest binding contract.
+Public/tagged release verification uses real existing Sigstore authentication,
+never a structural/test shortcut. Both workflow matrices select matching native
+musl builders, then reuse the archives for independent asset checks. Signed
+qualification, cleanup, failure handling and manual stable publication remain.
+
+These are local code/configuration results. Current native gates are still
+closed. Actual musl builds, Linux runtime/systemd/cgroup behavior, candidate-gateway
+authentication/qualification activation, Rust live-driver compatibility and the
+five exact-candidate HTTP journeys are not established by fixture tests or YAML
+syntax checks. Source-only archive creation and manifest verification are local;
+transfer/upload remains separately authorized. See the latest handoff increment.
