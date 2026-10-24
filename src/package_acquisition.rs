@@ -453,6 +453,16 @@ pub struct InstalledPackage {
     pub exact_held_package: bool,
     pub apt_hold: bool,
 }
+/// Healthy held installation, not merely package presence or an APT selection.
+/// dpkg's third status column must be blank (trimmed by CommandOutput), so
+/// reinstall-required and incomplete states never become running authority.
+pub(crate) fn exact_held_package(text: &str) -> bool {
+    let fields: Vec<_> = text.split_whitespace().collect();
+    fields.len() == 3
+        && fields[0] == PINNED_SING_BOX.version
+        && fields[1] == PINNED_SING_BOX.architecture
+        && fields[2] == "hi"
+}
 pub fn inspect_installed(
     runner: &impl CommandRunner,
     stop: &Cancellation,
@@ -489,7 +499,7 @@ pub fn inspect_installed(
     }
     Ok(InstalledPackage {
         present: true,
-        exact_held_package: parts[2] == "hi",
+        exact_held_package: exact_held_package(package.text()?),
         apt_hold,
     })
 }

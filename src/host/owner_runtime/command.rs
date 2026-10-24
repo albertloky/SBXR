@@ -220,7 +220,17 @@ impl OwnerIo for NativeIo {
             return Err(HostError::Foreign);
         }
         let package = self.query(Observation::Package, ctx)?;
-        if package.code() != 0 || package.text()? != "1.14.3 amd64 ii" {
+        let hold = self.query(Observation::Hold, ctx)?;
+        if package.code() != 0
+            || !crate::package_acquisition::exact_held_package(package.text()?)
+            || hold.code() != 0
+            || hold
+                .text()?
+                .lines()
+                .filter(|line| *line == "sing-box")
+                .count()
+                != 1
+        {
             return Err(HostError::Foreign);
         }
         let result = native_command(

@@ -1869,3 +1869,58 @@ Current finite remaining release work:
 New HTTPS/ACME/renewal creation, automatic migration and incoming Update remain
 intentional exclusions. No live host/VPS, security/credential, upload, push,
 signing or publication action occurred.
+
+
+## Held-package, HTTP profile and independent Owner admission repair (base 6eb134b)
+
+Three independent review findings were reproduced by four original project-owned
+socket-free regressions before production edits: healthy held sing-box was
+refused, a proved VLESS+VMess configuration could not enable HTTP, a failed first
+Owner adapter hid removal, and overlapping setup actions routed back to the
+failed adapter rather than the module that admitted them.
+
+The shared pinned-package predicate now requires dpkg's healthy held `hi` state.
+Owner runtime observations, native configuration validation, disclosure and
+Standard package facts use the same predicate. APT hold remains independently
+required; `ii` with a reported hold, incomplete/error states, changed versions or
+architectures cannot prove Running. The generic presence inspection still keeps
+recoverable package presence separate from healthy held authority. The native
+fixture's contradictory `ii`/APT-hold input now models actual `hi` output.
+
+HTTP authority admits the exact supported two-node configuration with its
+validated Ownership Record and protected configuration bytes. It retains exact
+release, Running/recovery direction, hash, group/mode/link, transaction and
+pending-change checks. A dedicated connector authority cannot bind a single-node
+configuration. HTTP effects neither reacquire nor modify the independently owned
+connector; unavailable public VMess verification never becomes a false pass.
+Enable, rotate, repair and recovery preserve the tunnel authority and configuration.
+
+Owner admission now reviews available journeys independently, keeps legal actions
+bound to the adapter that actually admitted them, and uses the first available
+adapter for status/details. A failed initial adapter or transient details reopen
+cannot hide separately observed removal. Selected mutation still reopens and
+reviews its own adapter. Later Review revokes the opaque action and drops its
+retained writer before another journey opens; the real OwnershipStore exclusion
+is covered by a socket-free regression.
+
+Validation passed **204 selected product tests** (32 library, 172 integration),
+**12 packaging tests**, format, strict all-target Clippy and a Mac build. The ten
+new library tests include **42 injected HTTP interruption cases**, unsafe/stale
+configuration preservation, cross-owner refusal and retained writer lifetime.
+Six targeted mutations were caught: healthy hold, two-node admission, independent
+first-adapter failure, admitted-action routing, profile/authority consistency and
+configuration digest binding. Every mutated source was restored byte-for-byte.
+An added stale-file fixture initially tried to add a second VMess inbound to an
+already two-node configuration; it was corrected to construct a valid changed
+profile before asserting refusal. No production assertion was relaxed. Original
+before/after failures and final results remain in
+`.scratch/acceptance/rust-review-fixes/`.
+
+The selected Client Identity integration run deliberately excludes its accepted
+TCP-socket/child regression. Listener-dependent runtime/serving/native tunnel,
+process-inspection and the full product suite were not executed in this repair.
+No previously denied listener/ps operation was retried. Linux runtime/systemd,
+actual musl builds and packaged qualification remain unverified; all production
+and publication gates stay closed. The local source archive for `6eb134b` remains
+unchanged and is stale for the repaired source. No upload, push, signing, live
+credential/security or host/VPS effect occurred.

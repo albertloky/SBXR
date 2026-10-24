@@ -513,3 +513,6 @@ fn historical_serving_unit_recognition_is_removal_only() {
             .is_err()
     );
 }
+
+#[path = "package_tests.rs"]
+mod package_tests;

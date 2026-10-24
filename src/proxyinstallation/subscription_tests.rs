@@ -1656,7 +1656,7 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
             O::Listener10000 => String::new(),
             O::Architecture => "amd64".into(),
             O::Enabled => "enabled".into(),
-            O::Package => "1.14.3 amd64 ii".into(),
+            O::Package => "1.14.3 amd64 hi".into(),
             O::Hold => "sing-box".into(),
             O::UnitOwner => "sing-box: /usr/lib/systemd/system/sing-box.service".into(),
             O::User => format!(
@@ -2771,3 +2771,6 @@ fn owner_http_cancellation_reaches_effect_context_and_recovers_only_cleanup() {
     .unwrap();
     assert!(record.http_operation().unwrap().is_none());
 }
+
+#[path = "http_admission_tests.rs"]
+mod http_admission_tests;

@@ -167,12 +167,11 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
             return self.refusal();
         };
         let mut legal = Vec::new();
+        let mut routes = Vec::new();
         let mut primary = None;
-        for (i, journey) in journeys.iter().copied().enumerate() {
-            let module = match self.sources.open(journey) {
-                Ok(m) => m,
-                Err(_) if i > 0 => continue,
-                Err(_) => return self.refusal(),
+        for journey in journeys.iter().copied() {
+            let Ok(module) = self.sources.open(journey) else {
+                continue;
             };
             let reviewed = module.review(Action::Status);
             for a in reviewed
@@ -183,13 +182,14 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
             {
                 if !legal.contains(&a) {
                     legal.push(a);
+                    routes.push((a, journey));
                 }
             }
-            if i == 0 {
-                primary = Some(reviewed);
+            if primary.is_none() {
+                primary = Some((journey, reviewed));
             }
         }
-        let Some(mut reviewed) = primary else {
+        let Some((primary_journey, mut reviewed)) = primary else {
             return self.refusal();
         };
         legal.push(Action::ViewDetails);
@@ -198,10 +198,13 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
         reviewed.prepared = None;
         if matches!(action, Action::Status | Action::ViewDetails) {
             if action == Action::ViewDetails {
-                let Ok(module) = self.sources.open(journeys[0]) else {
-                    return self.refusal();
-                };
-                reviewed.details = module.review(action).details;
+                match self.sources.open(primary_journey) {
+                    Ok(module) => reviewed.details = module.review(action).details,
+                    Err(_) => {
+                        reviewed.status = Status::ProblemDetected;
+                        reviewed.details = vec!["The primary details adapter became unavailable; independently observed actions must be reviewed before execution.".into()];
+                    }
+                }
             }
             return reviewed;
         }
@@ -209,7 +212,7 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
             reviewed.refusal = Some("The action is unavailable for the observed Owner state.");
             return reviewed;
         }
-        let Some(journey) = journeys.into_iter().find(|j| j.accepts(action)) else {
+        let Some((_, journey)) = routes.into_iter().find(|(a, _)| *a == action) else {
             return self.refusal();
         };
         let Ok(module) = self.sources.open(journey) else {
@@ -277,3 +280,7 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
         self.link.take()
     }
 }
+
+#[cfg(test)]
+#[path = "owner_tests.rs"]
+mod tests;

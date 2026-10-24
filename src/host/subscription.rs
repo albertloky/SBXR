@@ -177,7 +177,6 @@ impl<'a, B: HttpRuntime> ProtectedHttpHost<'a, B> {
         if record.release_identity() != self.authenticated.record().release_identity()
             || record.phase() != crate::records::SetupPhase::Running
             || record.recovery_direction() != crate::records::RecoveryDirection::None
-            || record.tunnel_authority().is_some()
         {
             return Err(HostError::Foreign);
         }
@@ -220,8 +219,15 @@ impl<'a, B: HttpRuntime> ProtectedHttpHost<'a, B> {
             }
         }
 
-        crate::server_configuration::ServerConfiguration::decode_supported(&configuration)
-            .map_err(|_| HostError::Foreign)?;
+        let configuration =
+            crate::server_configuration::ServerConfiguration::decode_supported(&configuration)
+                .map_err(|_| HostError::Foreign)?;
+        // HTTP changes own no connector resources. Retain the fully validated
+        // record/digest/profile binding without requiring connector reacquisition
+        // or changing its independent authority during subscription recovery.
+        if record.tunnel_authority().is_some() && configuration.is_standard_only() {
+            return Err(HostError::Foreign);
+        }
         record.http_operation().map_err(|_| HostError::Foreign)?;
         Ok(())
     }

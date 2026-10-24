@@ -373,7 +373,7 @@ impl Facts {
             {
                 return Err(HostError::Foreign);
             }
-            held_package = parts[2] == "hi";
+            held_package = crate::package_acquisition::exact_held_package(values[0].text()?);
         }
         if values[1].code() != 0 {
             return Err(HostError::Unsafe);

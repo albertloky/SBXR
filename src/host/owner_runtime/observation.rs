@@ -2,7 +2,7 @@ use super::command::{Property as P, Unit as U};
 use super::*;
 impl<I: OwnerIo> OwnerRuntime<'_, I> {
     pub(super) fn package(&self, c: &StartContext) -> Result<(), HostError> {
-        if self.text(Observation::Package, c)? != "1.14.3 amd64 ii"
+        if !crate::package_acquisition::exact_held_package(&self.text(Observation::Package, c)?)
             || self
                 .text(Observation::Hold, c)?
                 .lines()

@@ -97,7 +97,8 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
             .ok_or(HostError::Foreign)?;
         let apt_source =
             source_proof.gid == self.fs.gid && source == super::super::linux::APT_SOURCE;
-        let package = self.text(Observation::Package, c)? == "1.14.3 amd64 ii";
+        let package =
+            crate::package_acquisition::exact_held_package(&self.text(Observation::Package, c)?);
         let hold = self
             .text(Observation::Hold, c)?
             .lines()
