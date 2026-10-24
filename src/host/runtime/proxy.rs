@@ -1,15 +1,11 @@
 //! Concrete protected proxy-start checks and atomic one-use cutover gate.
 use super::{material::RuntimeFiles, *};
 use crate::{
-    host::process::{Cancellation as CommandCancellation, CommandRunner, NativeReadOnly, Query},
+    host::process::{CommandRunner, NativeReadOnly, Query},
     private_roles::Role,
     runtime_handoff::{LinuxPeers, PeerObservations},
 };
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::path::PathBuf;
 pub struct ProxyRuntimeHost<'a, P, R> {
     files: RuntimeFiles<'a>,
     peers: P,
@@ -17,6 +13,18 @@ pub struct ProxyRuntimeHost<'a, P, R> {
     socket: Option<PathBuf>,
 }
 impl<'a> ProxyRuntimeHost<'a, LinuxPeers, NativeReadOnly> {
+    /// Local private startup revalidates an already installed protected pair.
+    /// This is not signed acquisition or permission to install supplied bytes.
+    pub fn native_local_unreleased(
+        record: &'a crate::records::InstalledRecord,
+    ) -> Result<Self, HostError> {
+        Ok(Self {
+            files: RuntimeFiles::native_record(record)?,
+            peers: LinuxPeers,
+            runner: NativeReadOnly,
+            socket: None,
+        })
+    }
     /// Real Linux observations/effects are implemented but public dispatch remains
     /// closed. The caller must supply proof of the actual native current process.
     pub fn native_unreleased(authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
@@ -61,13 +69,13 @@ impl<'a, P: PeerObservations, R: CommandRunner> ProxyRuntimeHost<'a, P, R> {
         let body = self.files.ownership()?;
         let current = self.peers.current()?;
         if current.uid != self.files.fs.uid
-            || current.executable_sha256 != self.files.authenticated.record().executable_sha256()
+            || current.executable_sha256 != self.files.record.executable_sha256()
         {
             return Err(Error::Refused);
         }
         context.check()?;
         let record = OwnershipRecord::decode(&body).map_err(refused)?;
-        if record.release_identity() != self.files.authenticated.record().release_identity() {
+        if record.release_identity() != self.files.record.release_identity() {
             return Err(Error::Refused);
         }
         self.verify_startup(&record, context)?;
@@ -85,39 +93,13 @@ impl<'a, P: PeerObservations, R: CommandRunner> ProxyRuntimeHost<'a, P, R> {
         Ok(gate)
     }
     fn condition(&self, context: &StartContext) -> Result<Vec<u8>, Error> {
-        context.check()?;
-        let stop = CommandCancellation::new();
-        let done = AtomicBool::new(false);
-        struct Finish<'a>(&'a AtomicBool);
-        impl Drop for Finish<'_> {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
+        let output = super::command::run(context, |stop| {
+            self.runner.query(Query::ProxyStartCondition, stop)
+        })?;
+        if output.code() != 0 {
+            return Err(Error::Refused);
         }
-        std::thread::scope(|scope| {
-            let finished = Finish(&done);
-            let forward = std::thread::Builder::new()
-                .name("sbxr-runtime-cancel".into())
-                .spawn_scoped(scope, || {
-                    while !done.load(Ordering::Acquire) {
-                        if context.check().is_err() {
-                            stop.cancel();
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                })
-                .map_err(refused)?;
-            let output = self.runner.query(Query::ProxyStartCondition, &stop);
-            drop(finished);
-            forward.join().map_err(refused)?;
-            context.check()?;
-            let output = output.map_err(refused)?;
-            if output.code() != 0 {
-                return Err(Error::Refused);
-            }
-            Ok(output.text().map_err(refused)?.as_bytes().to_vec())
-        })
+        Ok(output.text().map_err(refused)?.as_bytes().to_vec())
     }
 }
 impl<P: PeerObservations, R: CommandRunner> ProxyStartHost for ProxyRuntimeHost<'_, P, R> {
@@ -136,8 +118,7 @@ impl<P: PeerObservations, R: CommandRunner> ProxyStartHost for ProxyRuntimeHost<
                 };
                 let expected = self.peers.peer(&stream)?;
                 if expected.uid != self.files.fs.uid
-                    || expected.executable_sha256
-                        != self.files.authenticated.record().executable_sha256()
+                    || expected.executable_sha256 != self.files.record.executable_sha256()
                 {
                     return Err(Error::Refused);
                 }
@@ -155,12 +136,12 @@ impl<P: PeerObservations, R: CommandRunner> ProxyStartHost for ProxyRuntimeHost<
         self.files.installed()?;
         let current = self.peers.current()?;
         if current.uid != self.files.fs.uid
-            || current.executable_sha256 != self.files.authenticated.record().executable_sha256()
+            || current.executable_sha256 != self.files.record.executable_sha256()
         {
             return Err(Error::Refused);
         }
         context.check()?;
-        Ok(self.files.authenticated.record().release_identity())
+        Ok(self.files.record.release_identity())
     }
     fn ownership(&self) -> Result<Vec<u8>, Error> {
         self.files.ownership()

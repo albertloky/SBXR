@@ -3,7 +3,7 @@ use super::*;
 use crate::host::linux::observation;
 pub(super) struct RuntimeFiles<'a> {
     pub fs: ProtectedFs,
-    pub authenticated: &'a AuthenticatedInstalled,
+    pub record: &'a crate::records::InstalledRecord,
 }
 impl<'a> RuntimeFiles<'a> {
     pub fn injected(
@@ -15,7 +15,7 @@ impl<'a> RuntimeFiles<'a> {
         }
         let files = Self {
             fs: ProtectedFs::open(root)?,
-            authenticated,
+            record: authenticated.record(),
         };
         files.installed().map_err(|_| HostError::Foreign)?;
         Ok(files)
@@ -24,7 +24,33 @@ impl<'a> RuntimeFiles<'a> {
         crate::host::linux::require_native_environment()?;
         let files = Self {
             fs: ProtectedFs::native()?,
-            authenticated,
+            record: authenticated.record(),
+        };
+        files.installed().map_err(|_| HostError::Foreign)?;
+        Ok(files)
+    }
+    pub fn archive(
+        root: &Path,
+        archive: &'a crate::release_acquisition::AuthenticatedArchive,
+    ) -> Result<Self, HostError> {
+        let fs = if root == Path::new("/") {
+            crate::host::linux::require_native_environment()?;
+            ProtectedFs::native()?
+        } else {
+            ProtectedFs::open(root)?
+        };
+        let files = Self {
+            fs,
+            record: archive.record(),
+        };
+        files.installed().map_err(|_| HostError::Foreign)?;
+        Ok(files)
+    }
+    pub fn native_record(record: &'a crate::records::InstalledRecord) -> Result<Self, HostError> {
+        crate::host::linux::require_native_environment()?;
+        let files = Self {
+            fs: ProtectedFs::native()?,
+            record,
         };
         files.installed().map_err(|_| HostError::Foreign)?;
         Ok(files)
@@ -33,7 +59,7 @@ impl<'a> RuntimeFiles<'a> {
         if observation::read_installed(&self.fs)
             .map_err(refused)?
             .as_ref()
-            != Some(self.authenticated.record())
+            != Some(self.record)
         {
             return Err(Error::Refused);
         }

@@ -137,39 +137,28 @@ results and a subprocess transcript are retained under
 `.scratch/acceptance/rust-bootstrap/`. These are macOS arm64 local observations,
 not native Ubuntu, packaged deployment, release qualification or Karing evidence.
 
-## Parity gaps that remain required
+## Current finite parity checklist
 
-- A complete authenticated native entry: actual bounded HTTP acquisition,
-  current-executable/release/index/archive authority, native prerequisites and
-  qualification bindings. Fixed system effects, UID/GID publication, retained
-  locks and direct network/bind admission now exist, tested through temporary
-  roots, fake command transports and nonprivileged loopback. Native execution
-  remains explicitly unavailable until these complete inputs are connected.
-- Production integration of the strict records and Standard filesystem foundation.
-  Historical schema-2, tunnel, HTTPS and removal records decode without migration;
-  only current HTTP and setup transitions have writers. Physical crash/power-loss
-  and native Linux durability qualification remain untested.
-- Packaged sing-box validation and product integration of the ephemeral identity
-  generators, confirmed client disclosure, revocation and sequential cutover.
-- Product-level HTTP serving/rotation orchestration and protected service/firewall
-  installation; optional VMess/cloudflared prerequisite inspection and integration.
-  Pure rendering, bounded HTTP runtime and durable HTTP transitions are available.
-- Complete removal and interrupted removal preserving foreign/shared resources;
-  Software Lifecycle Check/Recover and exact historical transaction readers.
-- Other statuses/actions, full details and display-incomplete behavior for secret
-  disclosures. Only setup outcomes are currently implemented in Rust.
-- Native Linux amd64/arm64 musl builds, retained Rust build-section embedding,
-  bootstrap/workflow integration and authenticated extraction. Explicit Rust ELF
-  and historical Go proofs, real offline attestation verification and local package
-  tooling exist. They do not establish a clean-source build, complete positive
-  SBXR release authentication or deployment qualification.
-- All five current live acceptance journeys and publication approval. No live
-  VPS, Karing, credentials, security setting, signing or publication action was
-  attempted for this increment.
+The dated increments below retain their original evidence. This table is the
+current work index; implemented library code is distinct from wired product
+journeys and native/deployment validation. Historical decoders preserve evidence
+without enabling in-place Go-to-Rust migration.
 
-The reference docs' dated stable-release claim was not refreshed here. The parent
-reports verified stable `v3.1.118` / `192`, with `v3.1.119` and `v3.1.120` failed
-prereleases; this increment does not independently verify or use those releases.
+| Path | Implemented now | Concrete remaining completion |
+|---|---|---|
+| Native public entry and Standard setup/recovery | Shared Review/Execute, wizard/default-No, durable setup and direction, real protected file/system adapters, identity generation and pinned acquisition; fixture end-to-end checks | Wire installed native zero-argument frontend and acquired/generated/recovered inputs to StandardInstallation, including product progress/errors and actual sing-box validation. Public entry remains explicitly simulated. |
+| Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
+| HTTP enablement, link rotation and repair | Strict schema-2 codecs/writers, bounded serving, source/target selection, proxy gate and service primitives | Product Review/Execute and recovery effects for firewall, unit/token/state/staging publication, readiness probes, revocation and finish/cleanup; preserve exact canonical/staged two-link proof. |
+| Client Identity and client disclosure | Entropy, UUID/key validation, server/client encoders, historical rotation codecs and cutover selection | Durable Client Identity writers and full sequential rotation/compromise effects; reviewed secret disclosure, complete details/statuses and display-incomplete behavior. |
+| Optional VMess/tunnel | Rendering, client artifacts, identity generation and strict tunnel authority records | Dedicated owner-installed cloudflared prerequisite/ownership inspection, setup/recovery effects, bounded connection probe and product journey. No general protocol plug-in architecture. |
+| Removal and Software Lifecycle | Standard removal/finalizer model and injected effects; signed exact-release acquisition and missing-member restoration in injected roots | Auxiliary removal and native restored-finisher launch/authentication; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
+| Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
+| Deployment qualification | Local tests and parent Linux evidence for its named earlier snapshot | All five current live journeys for the exact packaged Rust candidate, followed by any separately authorized signing/publication. No local test result is deployment qualification. |
+
+Pinned key/DEB acquisition is integrated through opaque `VerifiedPackage` into
+`SetupMaterial`. The genuine inert DEB remains an explicit 32.3 MB fixture so
+production-pin positive and mutation cases stay reproducible offline. It is not
+part of the product binary. No new archive or upload is created by that decision.
 
 
 ## Durable foundation increment
@@ -974,3 +963,102 @@ parity, retained Rust build sections and bootstrap/workflow integration remain
 unfinished. Exact missing-member restoration remains injected-root only. No
 native root effect, new source upload, signing, push or publication occurred.
 These tests do not qualify a Rust deployment or enable Go-to-Rust migration.
+
+
+## Concrete serving and private-service composition increment
+
+`ServingRuntimeHost` now supplies the complete current Standard HTTP runtime
+boundary: freshly protected installed/ownership/configuration/group/unit files,
+known state children and startup overrides, exact enablement link, pending/final
+absence, a real listener, periodic public-IP checking and joined shutdown. It
+never opens the sandbox-hidden bearer token or treats the auxiliary state file
+as authority. The native observer independently checks the actual singleton
+fixed cgroup, effective UID, all capability sets, NoNewPrivileges and EACCES for
+the token, staging, proc and host system-control paths. Missing paths do not
+count as inaccessible. No mount, capability, cgroup or security setting is changed.
+
+The sandbox-visible `SandboxProcess` carries actual PID, UID, fixed cgroup and
+kernel AT_EXECFN, with no invented executable digest or process start ticks.
+Rustix's `runtime` plus `use-libc-auxv` features select direct libc getauxval for
+static musl. The weak/dlsym variant would not resolve in a static executable;
+the default raw auxv fallback can attempt hidden proc on older kernels. The
+selected safe API avoids both routes without adding unsafe product code.
+
+Systemd v255's [fixed execution path](https://raw.githubusercontent.com/systemd/systemd/v255/src/core/exec-invoke.c)
+uses fexecve/execveat; [Linux v6.8's exec implementation](https://raw.githubusercontent.com/torvalds/linux/v6.8/fs/exec.c)
+can therefore report `/dev/fd/N` as kernel execfn. The receiver recognizes only
+the fixed pathname or canonical nonnegative descriptor form and never opens,
+follows or selects executable authority from that name. Unit/cgroup/loaded-build
+and independent Owner-side image checks remain required. A regression covers
+both supported forms and malformed, overflow, traversal and alternate paths.
+`acquire_serving_start` rechecks these observations, matches actual SO_PEERCRED
+UID, receives exactly one close-on-exec descriptor and revalidates its protected
+inode/exclusion. Owner-side `Handoff::service` still independently authenticates
+the full child executable and stable kernel process identity before lending.
+Ordinary starts never create a missing lock; borrowed descriptions never unlock
+the retained Owner or serialize new durable authority.
+
+The current Go early-boot unit permits only AF_UNIX. Therefore private startup
+performs local protected installed-pair status checks, as Go does, rather than
+requiring impossible online acquisition inside that unit. Proxy/provision roles
+also compare the actual proc-observed running image. The proc-hidden serving
+role instead combines fixed unit/cgroup/sandbox, kernel execfn, loaded Rust build
+commit and protected Rust installed-pair proof. These local checks do not create
+`AuthenticatedArchive` or `AuthenticatedInstalled` acquisition proofs. Installation
+continues to require the real signed acquisition boundary; no signature callback,
+structural-only artifact trust or test verifier was added to production.
+
+`NativePrivateRuntime` is wired into main's exact private argument dispatcher.
+It maps only stopped serving/successful authorization or provisioning to exit 0;
+renewal roles retain their refusal codes. A development binary has no released
+`SBXR_BUILD_COMMIT`, retained Rust release artifact or musl release build and
+refuses before network, signal registration, lock creation or service effects.
+This does not open the public native setup frontend. Release-build metadata and
+Linux systemd validation remain explicit prerequisites.
+
+`ServiceController` composes retained Owner authority, exact installed/current
+proof, fixed unit/authority checks, bounded systemctl commands and joined lending.
+Its native command adapter accepts only a closed action enum, uses the verified
+fixed executable/cwd, enforces the startup deadline/cancellation, bounds output
+and rechecks both process-file and Owner identity. Starts recheck unchanged
+Ownership Record bytes. Proxy cutover consumes the existing gate lease. Stop
+completion is distinct from quiescence: a separate native observation checks
+bounded cgroup-v2 population and an actual wildcard TCP8443 bind. No absence of
+a listener alone proves accepted work has stopped.
+
+Public-IP checks use the existing verified HTTPS transport with asynchronous DNS,
+fixed api.ipify.org, bounded canonical public IPv4 bytes, no redirects/content
+encoding and cancellation. The watcher uses the Go one-minute interval and joins
+before return. SIGINT/SIGTERM cancellation uses the existing pinned Tokio with
+its signal feature; only signal-hook-registry 1.4.8 was added to the lockfiles.
+The old HostLock lending and Linux store-unlock fixes remain separate and intact.
+
+The completed `package_acquisition` module is exported normally. It verifies
+complete pinned armored-key/DEB bytes and exact control version/architecture,
+authorizes each bounded HTTPS redirect before sending it and retains independent
+dpkg/APT hold observations. `SetupMaterial::from_acquired_package` and
+`recover_acquired_package` consume its opaque verified material through existing
+pin checks. The recovered configuration is retained rather than regenerated.
+The complete vendor DEB fixture is kept deliberately: the real production-pin
+positive/mutation checks require those bytes for offline reproducibility. No
+package is extracted, installed or executed by these tests.
+
+Concrete portable checks exercise actual protected files, Unix descriptor
+passing, retained locks, loopback HTTP response bytes, cancellation/joining,
+periodic public-IP failure, foreign/pending material and child-image refusals.
+The new fixed HTTPS probe also exercises actual TLS loopback and stalled-body
+cancellation. A disposable nonprivileged sleep process exercises cancellation,
+termination and reaping. Native systemctl, capability/proc-hidden sandbox,
+SIGINT/SIGTERM registration and fixed public listener branches have not been
+executed on this Mac. They require Linux validation, not a simulation fallback.
+Local integration evidence is `.scratch/acceptance/rust-runtime/`.
+
+Validation completed 339 product tests in the full combined offline suite under
+umask 077, followed by the additional descriptor-execfn regression and all 25
+affected handoff integration tests (340 distinct product cases). The current
+focused runtime tests, strict all-target Clippy, format, Mac build and eight
+packaging tests/checks/build also pass. A scoped removal of the receiver's
+process-stability recheck made its changed-identity regression fail; exact source
+was restored and that test passed. Temporary fixture roots were cleaned.
+Current Linux branches, native signals/systemd/sandbox effects and deployment
+qualification remain unexecuted. No new upload, push or publication occurred.

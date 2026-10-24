@@ -356,7 +356,12 @@ fn running_http() -> (OwnershipRecord, Vec<u8>) {
 fn sandbox() -> ServingSandbox {
     ServingSandbox {
         effective_uid: 0,
-        process: process(123, SUBSCRIPTION_CGROUP, 0),
+        process: SandboxProcess {
+            pid: 123,
+            uid: 0,
+            cgroup: SUBSCRIPTION_CGROUP.into(),
+            executable_path: "/usr/local/bin/sbxr".into(),
+        },
         capabilities: [0; 4],
         no_new_privileges: true,
         inaccessible: [PathAccess::PermissionDenied; 5],

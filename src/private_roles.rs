@@ -27,8 +27,8 @@ impl Role {
 pub trait Runtime {
     fn invoke(&mut self, role: Role) -> u8;
 }
-/// A native factory is deliberately absent until its authenticated inputs,
-/// runtime-start handoff and prerequisite integration are complete.
+/// Explicit unavailable adapter for callers without native released-build inputs.
+/// Concrete native composition lives in host::runtime and remains prerequisite-gated.
 pub struct NativeUnavailable;
 impl Runtime for NativeUnavailable {
     fn invoke(&mut self, role: Role) -> u8 {

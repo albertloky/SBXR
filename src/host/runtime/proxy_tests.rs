@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    host::process::CommandOutput,
+    host::process::{Cancellation as CommandCancellation, CommandOutput},
     records::{SetupPhase, sha256_hex},
     runtime_handoff::{Handoff, ProcessIdentity},
 };
@@ -11,7 +11,7 @@ use std::{
         net::UnixListener,
     },
     sync::atomic::{AtomicUsize, Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 const CONDITION: &str = "{ path=/usr/local/bin/sbxr ; argv[]=/usr/local/bin/sbxr --proxy-start-authorize ; ignore_errors=no ; }";

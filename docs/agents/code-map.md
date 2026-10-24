@@ -25,9 +25,14 @@ Runtime-start descriptor lending and serving composition are `src/runtime_handof
 Concrete proxy-start checks, protected material and scoped cutover publication are
 `src/host/runtime/{proxy,material,gate}.rs`; `src/host/runtime_io.rs` provides bounded
 Unix transport. The one-use consume effect is `src/host/filesystem/runtime.rs`.
-These native library adapters are tested through explicit injected roots and
-process/command observations; native serving and private dispatch remain closed.
-Fixed private dispatch is `src/private_roles.rs`.
+Concrete serving/sandbox observations and fixed service control are
+`src/host/runtime/{serving,serving_environment,control}.rs`. Private native
+composition is `src/host/runtime/native_dispatch.rs`, with joined signals in
+`shutdown.rs`; `src/private_roles.rs` owns exact argument dispatch. Development
+builds fail closed before native effects. Tests use explicit injected roots,
+process/command observations and real local sockets; new native execution is
+unvalidated. Pinned key/DEB acquisition is `src/package_acquisition.rs`, consumed
+by `src/host/linux/material.rs`.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

@@ -118,3 +118,21 @@ implemented by this increment. A service with hidden /proc cannot substitute
 synthetic process facts. Portable tests are not Linux execution or deployment
 qualification. The parent separately validated the earlier 0940fc9 snapshot plus
 its Linux patch; that evidence does not cover these newer native branches.
+
+## Sandbox-safe core receiver and native composition
+
+The subsequent core increment adds a separate `SandboxProcess` (actual PID/UID,
+fixed cgroup and kernel execfn), because hidden proc cannot supply start ticks or
+an executable digest. No placeholder full ProcessIdentity is constructed.
+`acquire_serving_start` applies Go's receiver-side peer-UID/held-descriptor checks
+and stable sandbox-visible observations. The existing Owner-side Handoff still
+checks complete child executable/process proof. Existing sandbox failure
+assertions remain; the fixture process literal now states only available facts.
+
+The core concrete serving tests use real protected files, HTTP/Unix sockets and
+descriptor lending with explicit synthetic kernel/service observations. Native
+private dispatch revalidates local installed status and does not attempt online
+acquisition in the AF_UNIX-only boot unit. It never constructs an authenticated
+acquisition result from those local status checks. Native serving/start/stop,
+quiescence and signal code is implemented but requires Linux execution and a
+valid released Rust build; ordinary development binaries still refuse.

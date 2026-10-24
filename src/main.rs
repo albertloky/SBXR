@@ -4,7 +4,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if let Some(code) =
-        sbxr::private_roles::dispatch(&arguments, &mut sbxr::private_roles::NativeUnavailable)
+        sbxr::private_roles::dispatch(&arguments, &mut sbxr::host::runtime::NativePrivateRuntime)
     {
         return ExitCode::from(code);
     }

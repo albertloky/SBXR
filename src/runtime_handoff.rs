@@ -4,6 +4,7 @@
 //! selects an executable from arguments/environment. Native dispatch must supply
 //! authenticated installed identity and complete fresh protected host observations.
 //! A private CLI role alone is never permission. Legacy TLS remains refused.
+mod sandbox;
 use crate::{
     private_roles::Role,
     records::{
@@ -21,6 +22,7 @@ use rustix::{
         SendAncillaryBuffer, SendAncillaryMessage, SendFlags,
     },
 };
+pub use sandbox::{SandboxProcess, acquire_serving_start};
 use std::{
     fmt,
     io::{Read, Write},
@@ -783,7 +785,7 @@ pub enum PathAccess {
 /// staging, proc, systemd, dbus. The Host observes capabilities and NNP directly.
 pub struct ServingSandbox {
     pub effective_uid: u32,
-    pub process: ProcessIdentity,
+    pub process: SandboxProcess,
     pub capabilities: [u64; 4],
     pub no_new_privileges: bool,
     pub inaccessible: [PathAccess; 5],
@@ -792,7 +794,7 @@ pub struct ServingSandbox {
 impl ServingSandbox {
     pub fn validate(&self) -> Result<(), Error> {
         if self.effective_uid != 0
-            || !self.process.accepts(Role::SubscriptionServing, 0)
+            || !self.process.accepts(0)
             || self.capabilities != [0; 4]
             || !self.no_new_privileges
             || self.inaccessible != [PathAccess::PermissionDenied; 5]
@@ -813,9 +815,10 @@ pub enum WatchOutcome {
     Cancelled,
     PublicIpv4Failed,
 }
-/// Protected observation boundary. No default successes or native implementation
-/// exist. Production installed_identity must authenticate exact installed/current
-/// bytes under this lock (and committed-update authority only when borrowed).
+/// Protected observation boundary with no success defaults. The concrete Host
+/// validates protected installed status under the lock; this never manufactures
+/// signed acquisition trust or a proc-based current-image proof in the sandbox.
+/// Historical committed-update runtime remains unsupported by the native adapter.
 pub trait ServingHost: Sync {
     fn acquire_start(&self, context: &StartContext) -> Result<StartLock, Error>;
     fn installed_identity(

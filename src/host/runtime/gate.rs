@@ -37,7 +37,7 @@ impl CutoverGate {
             owner: owner.clone(),
             body: format!("{hash}\n").into_bytes(),
             finished: false,
-            executable_sha256: files.authenticated.record().executable_sha256().into(),
+            executable_sha256: files.record.executable_sha256().into(),
         };
         gate.fs
             .publish_bytes(

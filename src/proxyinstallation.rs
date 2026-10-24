@@ -1,6 +1,7 @@
 //! Proxy Installation owns review, confirmation, setup direction, and recovery.
 //! Explicit simulation and filesystem-fixture adapters share Review/Execute.
-//! No live host adapter or deployment capability is implemented.
+//! Public native setup remains unavailable. Native library adapters and private
+//! dispatch require their explicit installed/release prerequisites.
 mod fixture;
 pub use fixture::{FixtureInstallation, StandardInstallation};
 mod removal;

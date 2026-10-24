@@ -68,6 +68,42 @@ impl HttpsTransport {
         let client = builder.build().map_err(|_| TrustError::Unavailable)?;
         Ok(Self { runtime, client })
     }
+    /// Fixed sandbox-safe public IPv4 probe. Uses asynchronous DNS and the same
+    /// verified TLS transport; no getent subprocess or /proc access is required.
+    pub(crate) fn public_ipv4(&self, budget: &SelectionBudget) -> Result<std::net::Ipv4Addr> {
+        self.ipv4_at("https://api.ipify.org/", budget)
+    }
+    fn ipv4_at(&self, url: &str, budget: &SelectionBudget) -> Result<std::net::Ipv4Addr> {
+        budget.check()?;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(TrustError::Unavailable);
+        }
+        let result = self.runtime.block_on(async {
+            tokio::select! {
+                result = async {
+                    let mut response = self.client.get(url).header(header::ACCEPT_ENCODING,"identity")
+                        .timeout(budget.deadline().saturating_duration_since(std::time::Instant::now()))
+                        .send().await.map_err(|_| TrustError::Unavailable)?;
+                    if response.status() != 200 || response.headers().contains_key(header::CONTENT_ENCODING)
+                        || response.headers().contains_key(header::LOCATION)
+                        || response.content_length().is_some_and(|n| n > 64) { return Err(TrustError::Refused); }
+                    let mut body = Vec::new();
+                    while let Some(chunk) = response.chunk().await.map_err(|_| TrustError::Unavailable)? {
+                        budget.check()?;
+                        if chunk.len() > 64usize.saturating_sub(body.len()) { return Err(TrustError::Refused); }
+                        body.extend_from_slice(&chunk);
+                    }
+                    let text = std::str::from_utf8(&body).map_err(|_| TrustError::Refused)?.trim();
+                    let ip: std::net::Ipv4Addr = text.parse().map_err(|_| TrustError::Refused)?;
+                    if text != ip.to_string() || !crate::records::ownership_public_ipv4(text) { return Err(TrustError::Refused); }
+                    Ok(ip)
+                } => result,
+                _ = async { loop { if budget.check().is_err() { break; } tokio::time::sleep(POLL).await; } } => Err(TrustError::Interrupted),
+            }
+        });
+        budget.check()?;
+        result
+    }
     async fn fetch(
         &self,
         request: &AcquisitionRequest,

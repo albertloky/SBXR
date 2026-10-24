@@ -249,3 +249,42 @@ fn unresolved_dns_is_cancelled_before_any_socket_or_late_success() {
     drop(t);
     assert!(dropped.load(Ordering::Acquire));
 }
+
+#[test]
+fn serving_ipv4_probe_uses_real_tls_bounded_canonical_body_and_no_redirect() {
+    for (response, accepted) in [
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n8.8.8.8\n".to_vec(),true),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\n127.0.0.1".to_vec(),false),
+        (b"HTTP/1.1 302 Found\r\nLocation: https://example.invalid/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),false),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 65\r\nConnection: close\r\n\r\n".to_vec(),false),
+        (b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),false),
+    ] {
+        let (address,server)=server(response,false);
+        let transport=transport(vec![("api.github.com",address)]);
+        let result=transport.ipv4_at("https://api.github.com/",&SelectionBudget::new());
+        assert_eq!(result.is_ok(),accepted);
+        if accepted {assert_eq!(result.unwrap(),std::net::Ipv4Addr::new(8,8,8,8));}
+        let request=String::from_utf8(server.join().unwrap()).unwrap().to_ascii_lowercase();
+        assert!(!request.contains("authorization:") && !request.contains("cookie:"));
+    }
+}
+#[test]
+fn serving_public_ip_cancellation_interrupts_actual_stalled_tls_body() {
+    let (address, server) = server(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n".to_vec(),
+        true,
+    );
+    let transport = transport(vec![("api.github.com", address)]);
+    let budget = SelectionBudget::new();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(65));
+            budget.cancel();
+        });
+        assert!(matches!(
+            transport.ipv4_at("https://api.github.com/", &budget),
+            Err(TrustError::Interrupted)
+        ));
+    });
+    server.join().unwrap();
+}

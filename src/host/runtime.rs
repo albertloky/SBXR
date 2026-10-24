@@ -1,7 +1,15 @@
 //! Private-role protected-file integration. Injected roots remain explicit fixtures.
+mod command;
+mod native_dispatch;
+mod shutdown;
+pub use native_dispatch::NativePrivateRuntime;
+mod control;
 mod gate;
+pub use control::{NativeServiceCommands, ServiceAction, ServiceCommands, ServiceController};
 mod material;
 mod proxy;
+mod serving;
+mod serving_environment;
 use super::{HostError, filesystem::ProtectedFs, linux::observation, locks::HostLock};
 use crate::{
     private_roles::{Role, Runtime},
@@ -13,6 +21,8 @@ use crate::{
 pub use gate::CutoverGate;
 pub use proxy::ProxyRuntimeHost;
 use rustix::fs::Mode;
+pub use serving::ServingRuntimeHost;
+pub use serving_environment::{NativeServingEnvironment, ServingEnvironment};
 use std::path::Path;
 const STARTUP: &[u8] = b"[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n";
 pub struct InjectedRuntime<'a> {
