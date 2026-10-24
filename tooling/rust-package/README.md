@@ -65,7 +65,7 @@ Go command's `-flag value`, refuses unknown/duplicate/missing flags, and emits
 fixed diagnostics without input values. Success outcomes explicitly say local.
 
 ```sh
-# Generate shared bytes for a future build's retained ELF section.
+# Inspect the canonical bytes shared with the product build script.
 "$tool" metadata --commit "$commit" --architecture amd64 --output "$metadata"
 
 # Supply an already-built Rust ELF. Output basename must match architecture.
@@ -97,10 +97,10 @@ require `/usr/bin/python3` and `/usr/bin/mkfifo`.
 Remaining work outside this directory's ownership:
 
 - Build the production executable for native Linux musl amd64 and arm64 with
-  the pinned compiler, retained `.sbxr.rust` section and `.comment`. `metadata`
-  generates section content but does not embed it or attest to a build. The
-  commit remains an unauthenticated claim until clean-source build/provenance
-  checks independently bind it.
+  the pinned compiler, retained `.sbxr.rust` section and `.comment`. The product
+  `build.rs` now embeds the section for an explicitly selected release build;
+  `metadata` emits the identical statement for inspection. Neither attests to a
+  build. Clean-source/provenance checks must independently bind the source claim.
 - Retain the existing bootstrap generator's authenticated download,
   attestation/Acceptance Record, host/path and exact-removal-finisher safeguards.
   Constant agreement here does not validate shell semantics or authentication.
@@ -112,3 +112,43 @@ Remaining work outside this directory's ownership:
 At implementation time this macOS arm64 environment had Rust 1.90.0 for the
 host and x86_64 Linux GNU standard libraries, with no installed musl target or
 amd64/arm64 musl cross-linker. No native Linux build or deployment was attempted.
+
+## Retained product build identity
+
+In a clean, reviewed source checkout on an equipped Linux build host, use the
+pinned Rust 1.90.0 toolchain. The controlled input is a lowercase full Git commit:
+
+```sh
+SBXR_BUILD_COMMIT="$(git rev-parse HEAD)" cargo build --locked --offline \
+  --release --target x86_64-unknown-linux-musl
+# Repeat on the equipped arm64 builder with aarch64-unknown-linux-musl.
+```
+
+This is a build command, not install or execution approval. `build.rs` refuses a
+stamped debug profile, non-musl/unsupported target, invalid commit or different
+compiler version/commit. It generates a linker script with explicit section bytes
+and a matching loaded statement; no unsafe Rust attribute, assembler dependency
+or post-link source-claim injection is used. Normal development builds retain no
+released identity. The inherited internal retained-commit key is always overridden.
+Packaging still requires static ELF, correct architecture/entry/text, exact
+canonical metadata, pinned compiler comment and matching executable trailer.
+Authentication, signer/provenance and Acceptance Record checks remain separate.
+Native public **and private** dispatch stay closed pending qualification.
+
+The optional offline mechanics check uses only already installed tools:
+
+```sh
+python3 tooling/rust-package/tests/build_identity.py \
+  --root "$PWD" --run "$PWD/.scratch/acceptance/<fresh-run>" \
+  --rustc /absolute/path/to/rustc --linker /absolute/path/to/rust-lld \
+  --clang /absolute/path/to/clang --package "$tool"
+```
+
+It compiles the actual build script, tests refusal/normal development/controlled
+release output, links a tiny no-stdlib AMD64 Rust object and an ARM64 assembly
+fixture with `--gc-sections`, then invokes the existing structural package checks.
+It never runs a generated ELF. The GNU-core/assembly inputs carry **synthetic musl
+statements** to test linker mechanics only; they are not production SBXR musl
+builds or authenticated artifacts. Changed statement commits must fail packaging
+for `executable`, with no archive written. Disposable compiler/linker fixtures are
+removed on success and failure; command/outcome logs remain in the selected run.

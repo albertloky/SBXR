@@ -259,6 +259,7 @@ struct Backend {
     quiescence_blocked: bool,
     probe_blocked: bool,
     advance_rate_clock: bool,
+    cancel_on_reload: Option<Cancellation>,
 }
 impl Backend {
     fn new(
@@ -279,6 +280,7 @@ impl Backend {
             quiescence_blocked: false,
             probe_blocked: false,
             advance_rate_clock: false,
+            cancel_on_reload: None,
         }
     }
     fn stop(&mut self) {
@@ -325,6 +327,12 @@ impl HttpRuntime for Backend {
     ) -> Result<(), HostError> {
         owner.verify()?;
         self.trace.push(effect);
+        if effect == SystemEffect::Reload
+            && let Some(stop) = self.cancel_on_reload.take()
+        {
+            stop.cancel();
+            ctx.check().map_err(|_| HostError::Cancelled)?;
+        }
         match effect {
             SystemEffect::Reload => {}
             SystemEffect::EnableFirewall => {
@@ -2719,4 +2727,47 @@ fn composed_owner_and_lifecycle_menu_keep_current_identity_and_never_offer_updat
         configuration
     );
     assert!(!root.0.join(TOKEN).exists());
+}
+
+#[test]
+fn owner_http_cancellation_reaches_effect_context_and_recovers_only_cleanup() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = archive
+        .bind_current(
+            archive.executable(),
+            archive.executable(),
+            &crate::artifact_trust::SelectionBudget::new(),
+        )
+        .unwrap();
+    let session = Cancellation::new();
+    let mut m = module(&root, &proof, archive).with_cancellation(session.clone());
+    m.host_mut().backend_mut().cancel_on_reload = Some(session.clone());
+    let result = execute(&mut m, Action::EnableSubscription);
+    assert!(session.is_cancelled());
+    assert_ne!(result.outcome, Outcome::SubscriptionEnabled);
+    assert_eq!(m.host().backend().trace, vec![SystemEffect::Reload]);
+    assert!(m.take_subscription_link().is_none());
+    let bytes = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+    let record = OwnershipRecord::decode(&bytes).unwrap();
+    assert!(record.http_operation().unwrap().is_some());
+    assert!(record.serving_authority().is_none());
+    let stale = m.review(Action::FinishSubscriptionChange).prepared.unwrap();
+    let mut m = m.with_cancellation(Cancellation::new());
+    assert_eq!(
+        m.execute(stale, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    assert_eq!(
+        execute(&mut m, Action::FinishSubscriptionChange).outcome,
+        Outcome::SubscriptionChangeCleanedUp
+    );
+    assert!(!root.0.join(TOKEN).exists());
+    assert!(m.host().backend().active.is_none());
+    let record = OwnershipRecord::decode(
+        &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(record.http_operation().unwrap().is_none());
 }

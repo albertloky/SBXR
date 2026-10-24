@@ -138,6 +138,7 @@ pub struct Installed<T> {
     transport: T,
     prepared: Option<Snapshot>,
     finisher: Option<RestoredFinisher>,
+    stop: crate::subscription_serving::Cancellation,
 }
 impl<T: AcquisitionTransport> Installed<T> {
     pub fn new(host: LifecycleHost, transport: T) -> Self {
@@ -146,7 +147,14 @@ impl<T: AcquisitionTransport> Installed<T> {
             transport,
             prepared: None,
             finisher: None,
+            stop: crate::subscription_serving::Cancellation::new(),
         }
+    }
+    pub fn with_cancellation(mut self, stop: crate::subscription_serving::Cancellation) -> Self {
+        self.stop = stop;
+        self.prepared = None;
+        self.finisher = None;
+        self
     }
     fn finish_check(
         &self,
@@ -267,7 +275,7 @@ impl<T: AcquisitionTransport> Interface for Installed<T> {
         let latest = AuthenticatedArchive::acquire_latest(
             &mut self.transport,
             arch,
-            &SelectionBudget::new(),
+            &SelectionBudget::new().with_cancellation(self.stop.clone()),
         );
         self.finish_check(&before, latest)
     }
@@ -333,7 +341,7 @@ impl<T: AcquisitionTransport> Interface for Installed<T> {
                 ..result
             };
         };
-        let budget = SelectionBudget::new();
+        let budget = SelectionBudget::new().with_cancellation(self.stop.clone());
         let archive = match AuthenticatedArchive::acquire(
             &mut self.transport,
             release,
@@ -352,6 +360,10 @@ impl<T: AcquisitionTransport> Interface for Installed<T> {
         self.finish_recovery(prepared, &archive, &budget)
     }
     fn take_finisher(&mut self) -> Option<RestoredFinisher> {
+        if self.stop.is_cancelled() {
+            self.finisher = None;
+            return None;
+        }
         self.finisher.take()
     }
 }

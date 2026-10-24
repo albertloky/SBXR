@@ -83,7 +83,7 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
 }
 impl<I: OwnerIo> HttpRuntime for OwnerRuntime<'_, I> {
     fn facts(&self) -> Result<RuntimeFacts, HostError> {
-        let c = Self::context();
+        let c = self.context();
         self.installed()?;
         let r = self.record()?;
         let ip = self.io.public_ipv4(&c)?.to_string();
@@ -213,7 +213,7 @@ impl<I: OwnerIo> crate::host::identity::IdentityRuntime for OwnerRuntime<'_, I> 
         self.service(ServiceAction::Reload, owner, None, c)
     }
     fn admit_identity(&self, r: &OwnershipRecord) -> Result<(), HostError> {
-        let c = Self::context();
+        let c = self.context();
         self.installed()?;
         if self.io.public_ipv4(&c)?.to_string() != r.public_ipv4() || !self.proxy_running(r, &c)? {
             return Err(HostError::Foreign);
@@ -227,11 +227,11 @@ impl<I: OwnerIo> crate::host::identity::IdentityRuntime for OwnerRuntime<'_, I> 
         Ok(())
     }
     fn subscription_route(&self, _: &OwnershipRecord) -> Result<bool, HostError> {
-        self.serving_routes(&Self::context())?;
+        self.serving_routes(&self.context())?;
         Ok(true)
     }
     fn identity_quiescence(&self, r: &OwnershipRecord) -> Result<ci::Quiescence, HostError> {
-        let c = Self::context();
+        let c = self.context();
         let proxy = self.quiescence(U::Proxy, &c)?;
         let serving = r.serving_authority().is_none()
             || self.quiescence(U::Subscription, &c)? && self.io.port_available(8443, &c)?;
@@ -283,7 +283,7 @@ impl<I: OwnerIo> crate::host::identity::IdentityRuntime for OwnerRuntime<'_, I> 
         Ok(())
     }
     fn verify_identity_running(&self, r: &OwnershipRecord) -> Result<(), HostError> {
-        if self.proxy_running(r, &Self::context())? {
+        if self.proxy_running(r, &self.context())? {
             Ok(())
         } else {
             Err(HostError::Foreign)

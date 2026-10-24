@@ -683,14 +683,15 @@ fn ws_deadline_and_cancellation_interrupt_a_stalled_read() {
     for cancel in [false, true] {
         let (local, a) = ws_server(false, ReplyMode::Stall);
         let mut t = t::TunnelInstallation::new(Harness::new(network(local, local)));
-        let stop = Cancellation::new();
+        let session = sbxr::subscription_serving::Cancellation::new();
+        let stop = Cancellation::from(session.clone());
         let started = Instant::now();
         thread::scope(|scope| {
             if cancel {
-                let stop = stop.clone();
+                let session = session.clone();
                 scope.spawn(move || {
                     thread::sleep(Duration::from_millis(40));
-                    stop.cancel();
+                    session.cancel();
                 });
             }
             let result = t.check_connection_with_entropy(
@@ -746,7 +747,9 @@ fn cancelled_session_uses_independent_process_group_cleanup() {
     h.child_mode = "blocked-stdin".into();
     let spawned = h.spawned.clone();
     let mut t = t::TunnelInstallation::new(h);
-    let result = t.check_connection(&Cancellation::new());
+    let session = sbxr::subscription_serving::Cancellation::new();
+    let result = t.check_connection(&Cancellation::from(session.clone()));
+    assert!(session.is_cancelled());
     assert_eq!(result.problem(), Some(ProbeProblem::Cancelled));
     assert_reaped(spawned.lock().unwrap().unwrap());
 }

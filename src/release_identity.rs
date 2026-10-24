@@ -29,8 +29,8 @@ pub const RELEASE_ASSET_NAMES: [&str; 4] = [
 ];
 pub const SUBSCRIPTION_UPDATE_CONTRACT: &str = "sbxr-subscription-update-v1";
 pub const RUST_ARTIFACT_SECTION: &str = ".sbxr.rust";
-pub const RUST_COMPILER: &str = "rustc 1.90.0";
-pub const RUST_COMPILER_COMMENT: &[u8] = b"rustc version 1.90.0 (1159e78c4 2025-09-14)";
+pub const RUST_COMPILER: &str = crate::build_metadata::COMPILER;
+pub const RUST_COMPILER_COMMENT: &[u8] = crate::build_metadata::COMPILER_COMMENT;
 
 /// Secret-free refusal: raw documents, build settings and payloads are omitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -626,18 +626,7 @@ struct RustArtifactMetadata {
 /// Build tooling must embed these bytes once as a retained PROGBITS section.
 /// It must also retain rustc's `.comment`; this statement is not an attestation.
 pub fn rust_artifact_metadata(commit: &str, architecture: Architecture) -> Result<Vec<u8>> {
-    if !lower_hex(commit, 40) {
-        return Err(ReleaseError);
-    }
-    encode(&RustArtifactMetadata {
-        schema: "sbxr-rust-artifact-v1".into(),
-        repository: REPOSITORY.into(),
-        package: "sbxr".into(),
-        compiler: RUST_COMPILER.into(),
-        target: architecture.rust_target().into(),
-        profile: "release".into(),
-        commit: commit.into(),
-    })
+    crate::build_metadata::metadata(commit, architecture.rust_target()).ok_or(ReleaseError)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtifactKind {
@@ -676,7 +665,9 @@ pub fn inspect_linux_artifact(
             }
             let metadata: RustArtifactMetadata = decode(section.bytes, MAX_IDENTITY_BYTES)?;
             let expected = rust_artifact_metadata(identity.commit(), architecture)?;
-            if metadata != decode::<RustArtifactMetadata>(&expected, MAX_IDENTITY_BYTES)? {
+            if section.bytes != expected
+                || metadata != decode::<RustArtifactMetadata>(&expected, MAX_IDENTITY_BYTES)?
+            {
                 return Err(ReleaseError);
             }
             let comment = elf.sections.get(".comment").ok_or(ReleaseError)?;

@@ -54,6 +54,7 @@ type Result<T> = std::result::Result<T, TrustError>;
 pub struct SelectionBudget {
     deadline: Instant,
     cancelled: AtomicBool,
+    parent: Option<crate::subscription_serving::Cancellation>,
 }
 impl Default for SelectionBudget {
     fn default() -> Self {
@@ -68,7 +69,13 @@ impl SelectionBudget {
         Self {
             deadline: deadline.min(Instant::now() + SELECTION_TIMEOUT),
             cancelled: AtomicBool::new(false),
+            parent: None,
         }
+    }
+    /// Couple acquisition and verification to the enclosing Owner session.
+    pub fn with_cancellation(mut self, stop: crate::subscription_serving::Cancellation) -> Self {
+        self.parent = Some(stop);
+        self
     }
     pub fn deadline(&self) -> Instant {
         self.deadline
@@ -77,7 +84,13 @@ impl SelectionBudget {
         self.cancelled.store(true, Ordering::Release);
     }
     pub fn check(&self) -> Result<()> {
-        if self.cancelled.load(Ordering::Acquire) || Instant::now() >= self.deadline {
+        if self.cancelled.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(crate::subscription_serving::Cancellation::is_cancelled)
+            || Instant::now() >= self.deadline
+        {
             Err(TrustError::Interrupted)
         } else {
             Ok(())

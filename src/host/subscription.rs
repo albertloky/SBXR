@@ -113,6 +113,13 @@ pub struct ProtectedHttpHost<'a, B> {
 impl<'a>
     ProtectedHttpHost<'a, super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>>
 {
+    pub fn with_native_cancellation(
+        mut self,
+        stop: crate::subscription_serving::Cancellation,
+    ) -> Self {
+        self.backend = self.backend.with_cancellation(stop);
+        self
+    }
     pub fn native_unreleased(authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
         let host = Self {

@@ -164,7 +164,10 @@ fn bounded_http_probe_requires_actual_artifact_and_rejects_changed_envelope() {
             address,
             &credential,
             b"expected artifact\n",
-            &OwnerRuntime::<NativeIo>::context(),
+            &StartContext::new(
+                Cancellation::new(),
+                Instant::now() + runtime_handoff::START_TIMEOUT,
+            ),
         );
         server.join().unwrap();
         assert_eq!(result.is_ok(), !bad);
@@ -353,6 +356,7 @@ fn historical_native_observation_refuses_foreign_routes_and_identifies_live_atte
             routes: false,
         },
         probe: None,
+        stop: Cancellation::new(),
     };
     let record = runtime.record().unwrap();
     let attempt = crate::host::historical::UnfinishedRenewal {
@@ -487,6 +491,7 @@ fn historical_serving_unit_recognition_is_removal_only() {
             routes: true,
         },
         probe: None,
+        stop: Cancellation::new(),
     };
     for (index, unit) in crate::host::historical::known_serving_units()
         .iter()
@@ -494,19 +499,17 @@ fn historical_serving_unit_recognition_is_removal_only() {
     {
         root.write(crate::host::subscription::UNIT, unit, 0o644);
         assert_eq!(
-            runtime
-                .serving_routes(&OwnerRuntime::<RenewalIo>::context())
-                .is_ok(),
+            runtime.serving_routes(&runtime.context()).is_ok(),
             index == 0
         );
         runtime
-            .serving_routes_for_removal(&OwnerRuntime::<RenewalIo>::context())
+            .serving_routes_for_removal(&runtime.context())
             .unwrap();
     }
     root.write(crate::host::subscription::UNIT, b"foreign service", 0o644);
     assert!(
         runtime
-            .serving_routes_for_removal(&OwnerRuntime::<RenewalIo>::context())
+            .serving_routes_for_removal(&runtime.context())
             .is_err()
     );
 }

@@ -45,7 +45,7 @@ issuance or a new upgrade writer to this clean-install release.
 | Removal / retained authority | Exact ownership, forward-only retry, current artifacts, active/retired HTTPS cleanup and exact finisher restoration | Foreign resources; new conversion writer; unsupported historical states must remain explicit | Native removal, actual restored-finisher exec and crash durability |
 | Lifecycle Status / Check | Protected local pair/lock/transaction inspection; authenticated qualified Latest; same-release current; newer clean-install refusal | No Update action; unverified release, concurrent change and incomplete pair | Current Linux observation and public acquisition qualification |
 | Lifecycle Recover | No-op when Ready; review/default-No and exact committed-removal finisher restoration, preserving proxy journal | Unknown/unproved direction, legacy Go update transaction (requires its original exact release), stale review or conflicting pair | Native exact-inode takeover; legacy transaction mutation is not offered by this Rust release |
-| Public entry / release | Zero arguments compose the existing Owner and lifecycle; private-role argument contract stays fixed | Unsupported/unqualified native entry never falls back to simulation | Native current-source verification, retained ELF identity, both musl architectures, bootstrap/CI and five exact-candidate live journeys |
+| Public entry / release | Zero arguments compose the existing Owner and lifecycle; private-role argument contract stays fixed | Unsupported/unqualified native entry never falls back to simulation | Native current-source verification of cancellation and retained ELF identity, both musl architectures, bootstrap/CI and five exact-candidate live journeys |
 
 The implementation and validation status of this increment is recorded in the
 Rust handoff and `.scratch/acceptance/rust-entry/`. Production dispatch remains
@@ -60,3 +60,23 @@ simulation-fallback regression failed before correction and passed afterward.
 All temporary roots were cleaned. Evidence: `.scratch/acceptance/rust-entry/`.
 These checks cover implemented paths and explicit refusals; none qualifies
 native Linux effects, actual finisher exec, outside traffic, Karing or a release.
+
+## Cancellation/build-identity increment (base 795006b)
+
+Native Owner/private entry now shares scoped cancellation with acquisition,
+transaction, probe and bounded child adapters. Fixture interruption/recovery and
+late-approval/disclosure refusal are tested; retained lock lifetime is preserved.
+The controlled pinned Linux-musl release build now emits canonical retained and
+loaded Rust metadata, and structural package verification checks the unchanged
+compiler/trailer/ELF bindings. Signature/provenance authentication is independent.
+Both public and private qualification gates remain closed.
+
+543 product tests, one compile-fail doctest, 8 packaging tests, 17 installed-tool
+compiler/linker/package checks and 7 mutations passed, followed by the final
+scoped checks/Clippy/build after source restoration. The linker inputs are inert
+no-stdlib/assembly fixtures with synthetic metadata, not production SBXR builds.
+Current-source GNU cross-check stopped in ring because `x86_64-linux-gnu-gcc` is
+absent. Musl targets/cross-compilers are also absent. Linux signal/systemd/cgroup,
+full native static builds, bootstrap/workflows and exact-candidate live journeys
+remain unqualified. Evidence and the finite remaining checklist are in the latest
+Rust handoff increment and `.scratch/acceptance/rust-cancel-build/`.

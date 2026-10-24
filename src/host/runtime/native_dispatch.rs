@@ -9,20 +9,12 @@ use crate::{
 };
 use std::time::Instant;
 pub struct NativePrivateRuntime;
-fn released_build() -> Result<(), Error> {
-    super::super::linux::require_native_environment().map_err(refused)?;
-    let commit = option_env!("SBXR_BUILD_COMMIT").ok_or(Error::Refused)?;
-    if commit.len() != 40
-        || !commit
-            .bytes()
-            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-        || cfg!(debug_assertions)
-        || !cfg!(target_env = "musl")
-    {
-        return Err(Error::Refused);
-    }
-    Ok(())
+fn released_build() -> Result<&'static str, Error> {
+    // Retained identity must not activate unqualified native roles.
+    super::super::require_live_adapter().map_err(refused)?;
+    crate::build_identity::compiled_commit().ok_or(Error::Refused)
 }
+
 impl NativePrivateRuntime {
     fn run(&self, role: Role) -> Result<(), Error> {
         if matches!(
@@ -31,7 +23,7 @@ impl NativePrivateRuntime {
         ) {
             return Err(Error::Refused);
         }
-        released_build()?;
+        let commit = released_build()?;
         let context = StartContext::new(
             Cancellation::new(),
             Instant::now() + runtime_handoff::START_TIMEOUT,
@@ -42,7 +34,7 @@ impl NativePrivateRuntime {
             .read_installed()
             .map_err(refused)?
             .ok_or(Error::Refused)?;
-        if option_env!("SBXR_BUILD_COMMIT") != Some(installed.release_identity().commit()) {
+        if commit != installed.release_identity().commit() {
             return Err(Error::Refused);
         }
         match role {

@@ -53,7 +53,7 @@ impl<I: OwnerIo> AuxiliaryRuntime for OwnerRuntime<'_, I> {
         if self.record()? != *record {
             return Err(HostError::Foreign);
         }
-        let c = Self::context();
+        let c = self.context();
         let active = self.property(U::Subscription, P::ActiveState, &c)? == "active";
         if self.fs.metadata(crate::host::subscription::UNIT)?.is_some() {
             self.serving_routes_for_removal(&c)?;
@@ -108,7 +108,7 @@ impl<I: OwnerIo> AuxiliaryRuntime for OwnerRuntime<'_, I> {
             },
             record,
             owner,
-            &Self::context(),
+            &self.context(),
         )
     }
 }

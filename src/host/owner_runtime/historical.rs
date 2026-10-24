@@ -70,7 +70,7 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         if self.record()? != *record {
             return Err(HostError::Foreign);
         }
-        let c = Self::context();
+        let c = self.context();
         let mut values = Vec::new();
         let mut text = |q| -> Result<String, HostError> {
             let out = self.io.historical(q, &c)?;

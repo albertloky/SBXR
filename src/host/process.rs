@@ -10,26 +10,31 @@ use std::{
     io::{ErrorKind, Read},
     os::unix::process::CommandExt,
     process::{Child, Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 
 pub const OUTPUT_LIMIT: usize = 1 << 20;
 #[derive(Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(crate::subscription_serving::Cancellation);
 impl Cancellation {
     pub fn new() -> Self {
         Self::default()
     }
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release)
+        self.0.cancel()
+    }
+    pub fn shared(&self) -> crate::subscription_serving::Cancellation {
+        self.0.clone()
     }
     pub fn cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.is_cancelled()
+    }
+}
+impl From<crate::subscription_serving::Cancellation> for Cancellation {
+    fn from(stop: crate::subscription_serving::Cancellation) -> Self {
+        Self(stop)
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

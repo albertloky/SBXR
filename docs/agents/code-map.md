@@ -15,7 +15,10 @@ setup/recovery is `src/proxyinstallation/fixture.rs` (`StandardInstallation<H>`)
 injected-root effects are in `src/host/linux.rs` and its small submodules; bounded
 process transport is `src/host/process.rs`. Retained locks, direct TLS/bind
 admission and fixed native command effects are `src/host/{locks,network,system}.rs`;
-the public frontend uses closed native admission, with no simulator fallback. Identity generation, structural
+the public frontend uses closed native admission, with no simulator fallback. `build.rs` retains the canonical structural `.sbxr.rust` statement through a
+linker script for explicitly selected pinned Linux musl release builds;
+`src/build_identity.rs` checks the loaded statement independently of authentication.
+Identity generation, structural
 release inspection and offline Sigstore authentication have separate modules and
 adjacent/integration tests. `tooling/rust-package/` is the separate offline CLI.
 Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decoding
@@ -28,7 +31,9 @@ Unix transport. The one-use consume effect is `src/host/filesystem/runtime.rs`.
 Concrete serving/sandbox observations and fixed service control are
 `src/host/runtime/{serving,serving_environment,control}.rs`. Private native
 composition is `src/host/runtime/native_dispatch.rs`, with joined signals in
-`shutdown.rs`; `src/private_roles.rs` owns exact argument dispatch. Development
+`shutdown.rs`; the public Owner shares that stop across acquisition, transaction,
+probe and bounded child contexts, and `src/host/input.rs` provides cancellable
+terminal I/O without changing terminal or descriptor settings. `src/private_roles.rs` owns exact argument dispatch. Development
 builds fail closed before native effects. Tests use explicit injected roots,
 process/command observations and real local sockets; new native execution is
 unvalidated. Pinned key/DEB acquisition is `src/package_acquisition.rs`, consumed

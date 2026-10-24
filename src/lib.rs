@@ -1,4 +1,6 @@
 pub mod artifact_trust;
+pub mod build_identity;
+mod build_metadata;
 pub mod client_identity;
 pub mod configuration;
 pub mod domain;

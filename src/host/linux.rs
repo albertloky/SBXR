@@ -248,6 +248,10 @@ impl<R: CommandRunner> LinuxHost<R> {
     pub fn runner_mut(&mut self) -> &mut R {
         &mut self.runner
     }
+    pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
+        self.stop = stop;
+        self
+    }
     pub fn cancellation(&self) -> Cancellation {
         self.stop.clone()
     }

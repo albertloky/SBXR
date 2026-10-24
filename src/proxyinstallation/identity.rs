@@ -36,6 +36,11 @@ impl<H: ci::Host> ClientIdentityInstallation<H> {
     pub fn into_host(self) -> H {
         self.host.into_inner()
     }
+    pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
+        self.stop = stop;
+        *self.owner.get_mut() = Rc::new(());
+        self
+    }
     pub fn cancellation(&self) -> Cancellation {
         self.stop.clone()
     }

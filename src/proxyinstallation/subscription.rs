@@ -87,6 +87,12 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
             ExecutionMode::InjectedHost
         }
     }
+    pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
+        self.stop = stop;
+        *self.owner.get_mut() = Rc::new(());
+        self.last_link = None;
+        self
+    }
     pub fn cancellation(&self) -> Cancellation {
         self.stop.clone()
     }
@@ -141,7 +147,7 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
         }
     }
     fn context(&self) -> StartContext {
-        StartContext::new(Cancellation::new(), Instant::now() + START_TIMEOUT)
+        StartContext::new(self.stop.clone(), Instant::now() + START_TIMEOUT)
     }
     fn publish(
         &mut self,
@@ -168,6 +174,7 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
         record: &OwnershipRecord,
         credential: Option<&crate::subscription_artifact::SubscriptionCredential>,
     ) -> HostResult<(), HostError> {
+        self.context().check().map_err(|_| HostError::Cancelled)?;
         self.host
             .effect(effect, record, credential, &self.context())
     }
@@ -408,6 +415,13 @@ impl<'a>
         >,
     >
 {
+    pub fn with_native_cancellation(mut self, stop: Cancellation) -> Self {
+        self.host = self.host.with_native_cancellation(stop.clone());
+        self.stop = stop;
+        *self.owner.get_mut() = Rc::new(());
+        self.last_link = None;
+        self
+    }
     pub fn native_unreleased(
         proof: &'a crate::release_acquisition::AuthenticatedInstalled,
     ) -> HostResult<Self, HostError> {

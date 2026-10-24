@@ -2,7 +2,7 @@
 //! Registration occurs only after native/released-build admission. No handler
 //! or thread is installed by ordinary Mac tests or unavailable-role dispatch.
 use super::*;
-pub(super) struct Signals {
+pub(in crate::host) struct Signals {
     stop: Cancellation,
     worker: Option<std::thread::JoinHandle<()>>,
 }

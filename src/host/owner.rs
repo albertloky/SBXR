@@ -21,6 +21,7 @@ type NativeRemovalHost<'a> = super::linux::StandardRemovalHost<
 >;
 pub struct NativeOwnerSources<'a> {
     proof: &'a AuthenticatedInstalled,
+    stop: crate::subscription_serving::Cancellation,
     package: std::cell::RefCell<Option<CachedPackage>>,
     probe: std::cell::RefCell<Option<crate::package_acquisition::ProbeImage>>,
 }
@@ -30,9 +31,23 @@ impl<'a> NativeOwnerSources<'a> {
         super::owner_runtime::OwnerRuntime::native_unreleased(proof)?;
         Ok(Self {
             proof,
+            stop: crate::subscription_serving::Cancellation::new(),
             package: std::cell::RefCell::new(None),
             probe: std::cell::RefCell::new(None),
         })
+    }
+    pub fn with_cancellation(mut self, stop: crate::subscription_serving::Cancellation) -> Self {
+        self.stop = stop;
+        self
+    }
+    fn runtime(
+        &self,
+    ) -> Result<super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>, HostError>
+    {
+        Ok(
+            super::owner_runtime::OwnerRuntime::native_unreleased(self.proof)?
+                .with_cancellation(self.stop.clone()),
+        )
     }
     fn ensure_package(&self) -> Result<(), HostError> {
         use crate::{
@@ -42,7 +57,7 @@ impl<'a> NativeOwnerSources<'a> {
         if self.package.borrow().is_none() {
             let package = package_acquisition::acquire(
                 &mut PackageHttps::new().map_err(|_| HostError::Foreign)?,
-                &SelectionBudget::new(),
+                &SelectionBudget::new().with_cancellation(self.stop.clone()),
             )
             .map_err(|_| HostError::Foreign)?;
             *self.package.borrow_mut() = Some(std::sync::Arc::new(package.into_parts()));
@@ -54,7 +69,8 @@ impl<'a> NativeOwnerSources<'a> {
         if self.probe.borrow().is_none() {
             let cache = self.package.borrow();
             let (key, deb) = cache.as_ref().ok_or(HostError::Foreign)?.as_ref();
-            let budget = crate::artifact_trust::SelectionBudget::new();
+            let budget =
+                crate::artifact_trust::SelectionBudget::new().with_cancellation(self.stop.clone());
             let package = crate::package_acquisition::VerifiedPackage::verify(
                 key.clone(),
                 deb.clone(),
@@ -105,20 +121,21 @@ impl<'a> NativeOwnerSources<'a> {
                     &material.configuration_sha256(),
                 )?;
                 let network = super::network::NetworkAdmission::native(
-                    &super::process::Cancellation::new(),
+                    &super::process::Cancellation::from(self.stop.clone()),
                     false,
                 )?;
                 (
                     LinuxHost::native_authenticated_unreleased(
                         runner, material, network, self.proof,
-                    )?,
+                    )?
+                    .with_cancellation(self.stop.clone().into()),
                     Some(probe),
                 )
             }
         } else {
             (self.standard_host()?, Some(self.probe_image()?))
         };
-        let runtime = super::owner_runtime::OwnerRuntime::native_unreleased(self.proof)?;
+        let runtime = self.runtime()?;
         let bridge = TunnelStandard::new(host, runtime, probe)?;
         let tunnel =
             super::tunnel_native::ProtectedTunnelHost::native_unreleased(self.proof, bridge)?;
@@ -126,7 +143,8 @@ impl<'a> NativeOwnerSources<'a> {
             crate::proxyinstallation::TunnelOwnerInstallation::new(
                 tunnel,
                 ExecutionMode::native_unreleased(),
-            ),
+            )
+            .with_cancellation(self.stop.clone().into()),
         ))
     }
     fn standard_host(
@@ -157,7 +175,7 @@ impl<'a> NativeOwnerSources<'a> {
             )
         });
         let network = super::network::NetworkAdmission::native(
-            &super::process::Cancellation::new(),
+            &super::process::Cancellation::from(self.stop.clone()),
             require_bind,
         )?;
         self.ensure_package()?;
@@ -189,6 +207,7 @@ impl<'a> NativeOwnerSources<'a> {
         super::linux::LinuxHost::native_authenticated_unreleased(
             runner, material, network, self.proof,
         )
+        .map(|host| host.with_cancellation(self.stop.clone().into()))
     }
     fn offline_host(
         &self,
@@ -208,6 +227,7 @@ impl<'a> NativeOwnerSources<'a> {
             public_ipv4,
             self.proof,
         )
+        .map(|host| host.with_cancellation(self.stop.clone().into()))
     }
     fn removal_host(&self) -> Result<NativeRemovalHost<'a>, HostError> {
         let fs = ProtectedFs::native()?;
@@ -231,7 +251,7 @@ impl<'a> NativeOwnerSources<'a> {
             self.offline_host(material, record.map(|r| r.public_ipv4()).unwrap_or(""))?,
         )?
         .with_auxiliary(super::linux::TunnelRemovalRuntime::new(
-            super::owner_runtime::OwnerRuntime::native_unreleased(self.proof)?,
+            self.runtime()?,
             super::tunnel_native::Connector::native_unreleased()?,
         )))
     }
@@ -242,6 +262,9 @@ impl<'a> NativeOwnerSources<'a> {
 impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
     fn journeys(&self) -> Result<Vec<Journey>, HostError> {
         super::linux::require_native_environment()?;
+        if self.stop.is_cancelled() {
+            return Err(HostError::Cancelled);
+        }
         let fs = ProtectedFs::native()?;
         let lifecycle = super::lifecycle::LifecycleHost::native_unreleased()?.inspect()?;
         if lifecycle.busy
@@ -319,10 +342,17 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
         }
         match journey {
             Journey::Tunnel => self.tunnel_module(),
-            Journey::Http => Ok(Box::new(HttpInstallation::native_unreleased(self.proof)?)),
-            Journey::Identity => Ok(Box::new(ClientIdentityInstallation::new(
-                super::identity::ProtectedIdentityHost::native_unreleased(self.proof)?,
-            ))),
+            Journey::Http => Ok(Box::new(
+                HttpInstallation::native_unreleased(self.proof)?
+                    .with_native_cancellation(self.stop.clone()),
+            )),
+            Journey::Identity => Ok(Box::new(
+                ClientIdentityInstallation::new(
+                    super::identity::ProtectedIdentityHost::native_unreleased(self.proof)?
+                        .with_native_cancellation(self.stop.clone()),
+                )
+                .with_cancellation(self.stop.clone()),
+            )),
             Journey::Standard => Ok(Box::new(
                 crate::proxyinstallation::StandardInstallation::new(
                     self.standard_host()?,
@@ -334,7 +364,8 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             )),
             Journey::Disclosure => Ok(Box::new(
                 crate::proxyinstallation::DisclosureInstallation::new(
-                    super::disclosure::ProtectedDisclosureHost::native_unreleased(self.proof)?,
+                    super::disclosure::ProtectedDisclosureHost::native_unreleased(self.proof)?
+                        .with_cancellation(self.stop.clone()),
                     ExecutionMode::native_unreleased(),
                 ),
             )),
@@ -349,22 +380,39 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
 /// runs before transport construction, file inspection, entropy or host effects.
 /// No unsupported/development host is silently redirected to the simulator.
 pub fn run_public_unreleased(
-    input: &mut impl std::io::BufRead,
+    input: &mut impl std::os::fd::AsFd,
     output: &mut impl std::io::Write,
 ) -> Result<(), PublicEntryError> {
     super::require_live_adapter()?;
+    let commit = crate::build_identity::compiled_commit().ok_or(HostError::LiveUnavailable)?;
+    let stop = crate::subscription_serving::Cancellation::new();
+    let _signals = super::runtime::shutdown::Signals::native(stop.clone())
+        .map_err(|_| HostError::Cancelled)?;
+    let mut input = super::input::InterruptibleInput::new(input, stop.clone())?;
+    let mut output = super::input::InterruptibleOutput::new(output, stop.clone());
     let observer = super::linux::NativeObserver::open()?;
-    let budget = crate::artifact_trust::SelectionBudget::new();
+    let budget = crate::artifact_trust::SelectionBudget::new().with_cancellation(stop.clone());
     let mut authentication =
         crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
     let proof = observer.authenticate_current(&mut authentication, &budget)?;
-    let mut owner = NativeOwnerSources::authenticated_unreleased(&proof)?.frontend();
+    if proof.record().release_identity().commit() != commit {
+        return Err(HostError::Foreign.into());
+    }
+    let mut owner = NativeOwnerSources::authenticated_unreleased(&proof)?
+        .with_cancellation(stop.clone())
+        .frontend();
     let transport = crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
     let mut lifecycle = crate::software_lifecycle::Installed::new(
         super::lifecycle::LifecycleHost::native_unreleased()?,
         transport,
-    );
-    crate::terminal::run_with_lifecycle(input, output, &mut owner, &mut lifecycle)?;
+    )
+    .with_cancellation(stop.clone());
+    let terminal =
+        crate::terminal::run_with_lifecycle(&mut input, &mut output, &mut owner, &mut lifecycle);
+    if stop.is_cancelled() {
+        return Err(HostError::Cancelled.into());
+    }
+    terminal?;
     drop(owner);
     use crate::software_lifecycle::Interface as _;
     if let Some(finisher) = lifecycle.take_finisher() {

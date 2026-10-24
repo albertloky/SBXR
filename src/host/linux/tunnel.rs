@@ -111,7 +111,10 @@ impl<R: CommandRunner, B: TunnelRuntime> TunnelStandard<R, B> {
             return Err(HostError::Foreign);
         }
         image
-            .verify_bytes(&bytes, &crate::artifact_trust::SelectionBudget::new())
+            .verify_bytes(
+                &bytes,
+                &crate::artifact_trust::SelectionBudget::new().with_cancellation(stop.shared()),
+            )
             .map_err(|_| HostError::Foreign)?;
         if stop.cancelled() {
             return Err(HostError::Cancelled);

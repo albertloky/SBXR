@@ -952,3 +952,30 @@ fn read_errors_are_secret_free_and_invalid_bundles_never_authenticate() {
     );
     assert_eq!(compressed.seen.len(), 2);
 }
+
+#[test]
+fn cancelled_owner_session_refuses_genuine_proofs_without_late_acceptance() {
+    let stop = sbxr::subscription_serving::Cancellation::new();
+    let budget = SelectionBudget::new().with_cancellation(stop.clone());
+    budget.check().unwrap();
+    stop.cancel();
+    let policy = VerificationPolicy::native_release(NATIVE_COMMIT).unwrap();
+    assert_eq!(
+        verify_bundle(NATIVE_BUNDLE, &policy, &budget).unwrap_err(),
+        TrustError::Interrupted
+    );
+    assert!(SelectionBudget::new().check().is_ok());
+}
+
+#[test]
+fn cancelling_one_selection_does_not_cancel_the_enclosing_owner_session() {
+    let session = sbxr::subscription_serving::Cancellation::new();
+    let first = SelectionBudget::new().with_cancellation(session.clone());
+    first.cancel();
+    assert_eq!(first.check(), Err(TrustError::Interrupted));
+    assert!(!session.is_cancelled());
+    SelectionBudget::new()
+        .with_cancellation(session)
+        .check()
+        .unwrap();
+}

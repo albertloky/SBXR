@@ -70,6 +70,7 @@ pub struct ProtectedIdentityHost<'a, B> {
     fs: ProtectedFs,
     proof: &'a AuthenticatedInstalled,
     backend: B,
+    stop: Cancellation,
     #[cfg(test)]
     fault: Option<IdentityFault>,
 }
@@ -99,12 +100,18 @@ impl<'a>
         super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>,
     >
 {
+    pub fn with_native_cancellation(mut self, stop: Cancellation) -> Self {
+        self.backend = self.backend.with_cancellation(stop.clone());
+        self.stop = stop;
+        self
+    }
     pub fn native_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
         let host = Self {
             fs: ProtectedFs::native()?,
             proof,
             backend: super::owner_runtime::OwnerRuntime::native_unreleased(proof)?,
+            stop: Cancellation::new(),
             #[cfg(test)]
             fault: None,
         };
@@ -127,6 +134,7 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
             fs: ProtectedFs::open(root)?,
             proof,
             backend,
+            stop: Cancellation::new(),
             #[cfg(test)]
             fault: None,
         };
@@ -136,6 +144,10 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
     #[cfg(test)]
     pub fn inject_fault(&mut self, fault: Option<IdentityFault>) {
         self.fault = fault;
+    }
+    pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
+        self.stop = stop;
+        self
     }
     pub fn backend(&self) -> &B {
         &self.backend
@@ -147,6 +159,9 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
         self.backend
     }
     fn installed(&self) -> Result<(), ci::Error> {
+        if self.stop.is_cancelled() {
+            return Err(ci::Error::Interrupted);
+        }
         if !super::lifecycle::transactions_absent(&self.fs).map_err(refused)? {
             return Err(ci::Error::Authority);
         }
@@ -165,9 +180,9 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
         }
         Ok(())
     }
-    fn context() -> StartContext {
+    fn context(&self) -> StartContext {
         StartContext::new(
-            Cancellation::new(),
+            self.stop.clone(),
             std::time::Instant::now() + runtime_handoff::START_TIMEOUT,
         )
     }
@@ -206,7 +221,7 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
         )
         .map_err(refused)?;
         proxy
-            .prepare_cutover(&guard.owner, &Self::context())
+            .prepare_cutover(&guard.owner, &self.context())
             .map_err(refused)
     }
     fn subscription_material(&self, record: &OwnershipRecord) -> Result<(), ci::Error> {
@@ -506,7 +521,7 @@ impl<B: IdentityRuntime> ci::Host for ProtectedIdentityHost<'_, B> {
             self.fs.path().join("identity-observation.sock"),
         )
         .map_err(refused)?;
-        let route = proxy.verify_startup(record, &Self::context()).is_ok();
+        let route = proxy.verify_startup(record, &self.context()).is_ok();
         let subscription = record.serving_authority().is_none()
             || self.backend.subscription_route(record).map_err(refused)?;
         Ok(ci::StartupRoutes {

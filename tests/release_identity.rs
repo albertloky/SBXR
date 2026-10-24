@@ -835,3 +835,26 @@ fn original_go_verifier_and_rust_refuse_orphan_module_replacements() {
         assert!(inspect_linux_artifact(executable, architecture).is_err());
     }
 }
+
+#[test]
+fn retained_rust_statement_requires_exact_canonical_bytes_not_just_equal_json() {
+    for transform in [0, 1] {
+        let mut sections = rust_sections(Architecture::Amd64);
+        let bytes = &mut sections[0].1;
+        if transform == 0 {
+            bytes.insert(0, b' ');
+        } else {
+            let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+            *bytes = serde_json::to_vec_pretty(&value).unwrap();
+        }
+        let executable = stamp_executable(
+            &elf(Architecture::Amd64, &sections),
+            TAG,
+            COMMIT,
+            193,
+            Architecture::Amd64,
+        )
+        .unwrap();
+        assert!(inspect_linux_artifact(&executable, Architecture::Amd64).is_err());
+    }
+}

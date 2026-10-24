@@ -484,3 +484,36 @@ fn composed_recovery_returns_to_exact_finisher_without_reporting_removal_complet
     drop(m.take_finisher().unwrap());
     assert!(m.take_finisher().is_none());
 }
+
+#[test]
+fn owner_cancellation_prevents_latest_acquisition_and_exact_finisher_restoration() {
+    let root = Root::new();
+    let archive = crate::release_acquisition::fixture_archive();
+    root.pair(&archive);
+    let session = crate::subscription_serving::Cancellation::new();
+    let mut module = root.module().with_cancellation(session.clone());
+    session.cancel();
+    assert_eq!(module.check().code, Code::CheckReleaseRefused);
+    assert_eq!(module.transport.calls, 0);
+    let journal = root.journal(&archive, false);
+    fs::remove_file(root.0.join("usr/local/bin/sbxr")).unwrap();
+    assert!(module.review_recover().recovery_direction.is_some());
+    assert_eq!(
+        module.recover(Confirmation::Approved).code,
+        Code::RecoverFailed
+    );
+    assert_eq!(module.transport.calls, 0);
+    assert!(module.take_finisher().is_none());
+    module.review_recover();
+    let mut module = module.with_cancellation(crate::subscription_serving::Cancellation::new());
+    assert_eq!(
+        module.recover(Confirmation::Approved).code,
+        Code::RecoverRefused
+    );
+    assert_eq!(module.transport.calls, 0);
+    assert!(!root.0.join("usr/local/bin/sbxr").exists());
+    assert_eq!(
+        fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        journal
+    );
+}

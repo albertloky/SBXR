@@ -7,6 +7,7 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
         record: &OwnershipRecord,
         material: Option<&ci::Material>,
     ) -> Result<(), ci::Error> {
+        self.context().check().map_err(|_| ci::Error::Interrupted)?;
         self.inspect_record(record)?;
         let rotation = ci::rotation(record)?;
         match effect {
@@ -66,12 +67,12 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
             }
             ci::Effect::Reload => self
                 .backend
-                .reload_identity(&g.owner, &Self::context())
+                .reload_identity(&g.owner, &self.context())
                 .map_err(refused)?,
             ci::Effect::StopSource => {
                 let gate = self.gate(g)?;
                 self.backend
-                    .stop_identity_source(record, &g.owner, &Self::context())
+                    .stop_identity_source(record, &g.owner, &self.context())
                     .map_err(refused)?;
                 gate.finish().map_err(refused)?;
             }
@@ -108,7 +109,7 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
             ci::Effect::StartTarget => {
                 let gate = self.gate(g)?;
                 self.backend
-                    .start_identity_proxy(record, &g.owner, Some(&gate), &Self::context())
+                    .start_identity_proxy(record, &g.owner, Some(&gate), &self.context())
                     .map_err(refused)?;
                 gate.finish().map_err(refused)?;
             }
@@ -117,12 +118,12 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
                     if matches!(runtime_handoff::cutover_configuration(record), Ok(Some(_))) {
                         let gate = self.gate(g)?;
                         self.backend
-                            .start_identity_proxy(record, &g.owner, Some(&gate), &Self::context())
+                            .start_identity_proxy(record, &g.owner, Some(&gate), &self.context())
                             .map_err(refused)?;
                         gate.finish().map_err(refused)?;
                     } else {
                         self.backend
-                            .start_identity_proxy(record, &g.owner, None, &Self::context())
+                            .start_identity_proxy(record, &g.owner, None, &self.context())
                             .map_err(refused)?;
                     }
                 }
@@ -160,7 +161,7 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
                         )
                         .map_err(refused)?;
                     self.backend
-                        .finish_identity_subscription(record, &g.owner, &Self::context())
+                        .finish_identity_subscription(record, &g.owner, &self.context())
                         .map_err(refused)?;
                 }
             }
@@ -239,7 +240,7 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
                         .map_err(refused)?;
                 }
                 self.backend
-                    .reload_identity(&g.owner, &Self::context())
+                    .reload_identity(&g.owner, &self.context())
                     .map_err(refused)?;
             }
         }

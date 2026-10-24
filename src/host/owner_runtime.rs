@@ -43,6 +43,7 @@ pub struct OwnerRuntime<'a, I> {
     proof: &'a AuthenticatedInstalled,
     io: I,
     probe: Option<std::net::SocketAddr>,
+    stop: Cancellation,
 }
 impl<'a> OwnerRuntime<'a, NativeIo> {
     pub fn native_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
@@ -52,6 +53,7 @@ impl<'a> OwnerRuntime<'a, NativeIo> {
             proof,
             io: NativeIo,
             probe: None,
+            stop: Cancellation::new(),
         };
         runtime.installed()?;
         Ok(runtime)
@@ -72,20 +74,28 @@ impl<'a, I: OwnerIo> OwnerRuntime<'a, I> {
             proof,
             io,
             probe: Some(probe),
+            stop: Cancellation::new(),
         };
         runtime.installed()?;
         Ok(runtime)
     }
+    pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
+        self.stop = stop;
+        self
+    }
     pub fn io(&self) -> &I {
         &self.io
     }
-    fn context() -> StartContext {
+    fn context(&self) -> StartContext {
         StartContext::new(
-            Cancellation::new(),
+            self.stop.clone(),
             Instant::now() + runtime_handoff::START_TIMEOUT,
         )
     }
     pub(in crate::host) fn installed(&self) -> Result<(), HostError> {
+        if self.stop.is_cancelled() {
+            return Err(HostError::Cancelled);
+        }
         if !super::lifecycle::transactions_absent(&self.fs)? {
             return Err(HostError::Foreign);
         }
@@ -129,7 +139,7 @@ impl<I: OwnerIo> PeerObservations for OwnerRuntime<'_, I> {
 }
 impl<I: OwnerIo> CommandRunner for OwnerRuntime<'_, I> {
     fn query(&self, q: Query, stop: &CommandCancellation) -> Result<CommandOutput, HostError> {
-        if stop.cancelled() {
+        if self.stop.is_cancelled() || stop.cancelled() {
             return Err(HostError::Cancelled);
         }
         if q != Query::ProxyStartCondition {
@@ -137,7 +147,7 @@ impl<I: OwnerIo> CommandRunner for OwnerRuntime<'_, I> {
         }
         self.io.query(
             Observation::Property(Unit::Proxy, Property::ExecCondition),
-            &Self::context(),
+            &self.context(),
         )
     }
 }

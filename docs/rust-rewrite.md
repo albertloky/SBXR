@@ -1,10 +1,12 @@
 # Rust rewrite: local implementation increments
 
-This isolated workspace contains the start of the Owner-requested full Rust
-rewrite. It is an implementation increment, not a release or a deployable
-replacement. The zero-argument Rust executable runs an explicitly labeled,
-in-memory simulation. It cannot install software, write installation state,
-change services/firewall, use credentials, or access the network.
+This isolated workspace contains the Owner-requested Rust implementation and its
+local verification increments. It is not a qualified release. The zero-argument
+executable composes the native Owner/lifecycle path behind closed production
+admission; it never falls back to simulation. The simulator remains an explicit
+library fixture. The current contract and remaining qualification are in
+[the acceptance matrix](rust-acceptance.md); early increments below describe
+their own revisions.
 
 ## Provenance and preserved reference
 
@@ -154,13 +156,13 @@ without enabling in-place Go-to-Rust migration.
 
 | Path | Implemented now | Concrete remaining completion |
 |---|---|---|
-| Native public entry and Standard setup/recovery | Shared Review/Execute, composed Owner/lifecycle routing and zero-argument native admission; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Complete native cancellation/build identity and qualify the composed public session. Digest-only early cleanup and exact authenticated package-default replacement/cleanup are implemented in fixtures. Native effects and new Linux branches remain unvalidated; public entry refuses unsupported/unqualified environments with no simulation fallback. |
-| Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Validate the composed controller in each current Owner journey. Development binaries refuse before native effects. |
+| Native public entry and Standard setup/recovery | Shared Review/Execute, composed Owner/lifecycle routing and zero-argument native admission; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Shared native session cancellation and retained build identity are implemented with offline boundary regressions; qualify the composed public session. Digest-only early cleanup and exact authenticated package-default replacement/cleanup are implemented in fixtures. Native effects and new Linux branches remain unvalidated; public entry refuses unsupported/unqualified environments with no simulation fallback. |
+| Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retained/loaded Rust build metadata and the shared signal stop are implemented; validate actual Linux builds and real systemd sandbox/shutdown. Validate the composed controller in each current Owner journey. Development binaries refuse before native effects. |
 | HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Validate the composed public entry and actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
 | Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and the composed public entry/details path. Exact staged Client Identity publication retry and trusted historical certificate selection/state CAS are implemented. Historical TLS/activation/renewal creation is intentionally excluded from this clean-install HTTP release; original exact-release recovery remains authoritative. |
 | Optional VMess/tunnel | Rendering, client artifacts, identity generation, setup/recovery/check orchestration, guarded native connector/probe adapters, authenticated probe bytes and shared Owner frontend | Validate actual Linux connector/process/cgroup paths, local/public WS and VMess-only egress; qualify the optional profile. Fixture composition is not real tunnel qualification. |
 | Removal and Software Lifecycle | Standard/current HTTP/Client Identity artifact and dedicated tunnel removal with interrupted retries; exact finalization, signed acquisition, protected missing-member restoration and fixed descriptor execution preparation | Active/retired HTTPS lineage and renewal cleanup now have concrete protected effects and interrupted-reopen tests. Unfinished transport migration remains unavailable. Owner lifecycle Status/Check/Recover and native public composition are implemented in the latest increment. Actual native restored-finisher exec, current-source acquisition and Linux qualification remain. Historical Go transactions are diagnosed and refused for their original exact release. Old journal decoding alone grants no migration. |
-| Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
+| Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay, controlled retained Rust build section/loaded commit and offline packaging CLI | Native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
 | Deployment qualification | Local tests and parent Linux evidence for its named earlier snapshot | All five current live journeys for the exact packaged Rust candidate, followed by any separately authorized signing/publication. No local test result is deployment qualification. |
 
 Pinned key/DEB acquisition is integrated through opaque `VerifiedPackage` into
@@ -1709,3 +1711,85 @@ wizard assertions and result-code fixtures remain unchanged in the explicit
 library terminal. Temporary fixtures were cleaned. Evidence is retained under
 `.scratch/acceptance/rust-entry/`; these results are not native Linux or live
 release qualification.
+
+## Native cancellation and retained Rust build identity (base 795006b)
+
+The native public Owner now registers the existing joined SIGINT/SIGTERM watcher
+and passes one session stop through current-executable authentication, release
+and pinned-package acquisition, network admission, Standard setup/removal, HTTP,
+Client Identity, disclosure, tunnel and fixed service/probe contexts. Bounded
+child-process cancellation and probe cleanup retain their existing independent
+cleanup budgets. Cancelling one acquisition budget does not cancel its parent
+session. Replacing a session expires prepared actions and pending disclosures;
+lifecycle cannot lend a restored finisher after cancellation. No lock implementation
+was changed: intentionally lent HostLock authority still survives its duplicate,
+and the private OwnershipStore lifetime keeps its Linux explicit-unlock fix.
+
+`src/host/input.rs` polls a private CLOEXEC input descriptor and cancellation,
+including before returning buffered approval, without changing descriptor flags
+or terminal settings. Cancelled output refuses further disclosure. Persistent
+cancellation returns a non-retryable I/O error, so standard buffered I/O cannot
+spin by retrying EINTR. The public session reports cancellation and drops its
+writers before any further takeover. Interrupted fixtures prove cleanup before
+Activation committed and forward-only completion afterward; cancelled HTTP
+creation recovers through owned cleanup without revealing a link.
+
+`build.rs` now generates a retained `.sbxr.rust` PROGBITS statement through a GNU
+ld/lld linker script, plus identical loaded metadata for sandboxed private roles.
+Only explicit `SBXR_BUILD_COMMIT=<lowercase-full-commit>` with the release profile,
+exact pinned Rust compiler/version/commit and one of the two Linux musl targets
+emits released identity. An inherited internal retained-commit key is overridden.
+The pure standard-library formatter is shared with the offline package verifier.
+The verifier now requires exact canonical section bytes as well as strict JSON,
+static ELF/architecture/entry, compiler comment and trailer bindings. Native
+startup compares loaded identity to the protected installed commit. A retained
+statement remains structural, never cryptographic trust: genuine Sigstore,
+Acceptance Record, complete artifact and source/provenance checks are unchanged.
+Public **and private** production dispatch remain explicitly closed; successful
+identity embedding does not open them. Global unsafe-code prohibition and
+historical Go proof checks are unchanged. No dependencies were added.
+
+The installed-tool smoke check compiled the actual build script and exercised
+its development output, malformed source/profile/target/compiler refusals and
+both target statements. It linked a real tiny AMD64 no-stdlib Rust object and an
+ARM64 assembly fixture with `--gc-sections`; both passed the existing offline
+structural packager, and changed commit bytes failed with no archive created.
+These carry synthetic musl statements for linker-mechanics coverage. They are
+**not full SBXR musl builds**, authenticated release artifacts or executed Linux
+programs. All disposable compiler/linker fixtures were cleaned.
+
+Validation: **543 product unit/integration tests**, **one compile-fail doctest**,
+**8 offline packaging tests**, format, strict all-target Clippy and Mac builds
+passed. **17 compiler/linker/package checks** passed. Seven mutations were caught:
+ignored parent budget, detached HTTP context, ignored buffered-input cancellation,
+ignored child stop, noncanonical retained statement, omitted profile refusal and
+incorrect compiler predicate. Every source file was restored byte-for-byte.
+Final scoped cancellation/authority/dispatch/canonical/trust tests, strict Clippy
+and the Mac build passed after restoration and final admission/session-expiry
+changes. The complete unchanged-suite results were reused rather than repeated.
+Evidence: `.scratch/acceptance/rust-cancel-build/` (`validation.json`,
+`postchecks.json`, `mutations.json`, `linker/outcome.json`, `linux-tools.json`).
+
+Current-source Linux GNU cross-check was attempted offline and failed in
+`ring v0.17.14`: cc-rs cannot find `x86_64-linux-gnu-gcc`. Thus the current Linux-only
+branches are not newly type-checked or runtime-qualified here. Rust 1.90.0,
+macOS ARM64/GNU AMD64 standard libraries, Apple clang and bundled lld exist;
+both musl targets, Linux C cross-compilers/sysroot and container runtimes are
+absent. A QEMU system binary exists, but no guest was started or assumed ready.
+No tools were installed. On equipped Linux builders the source and exact build
+commands in `tooling/rust-package/README.md` are ready for validation, not declared
+qualified by these Mac checks.
+
+Remaining finite release work:
+
+1. Validate this exact source on equipped Linux, including signals, proc/cgroup,
+   systemd, retained locks, crash durability and exact finisher exec.
+2. Build native static musl AMD64/ARM64 product artifacts and integrate reviewed
+   Rust-aware bootstrap/workflow verification with historical Go compatibility.
+3. Qualify all five HTTP journeys for the exact packaged candidate; optional
+   VMess requires separately bound two-node evidence. Opening production gates
+   and stable publication remain separately coordinated actions.
+
+New HTTPS/ACME/renewal creation, automatic migration and incoming software Update
+remain intentional exclusions. No host/VPS, credential/security, upload, signing,
+push or publication action occurred in this increment.

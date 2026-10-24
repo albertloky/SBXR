@@ -111,3 +111,29 @@ fn repeated_interrupted_reads_still_observe_cancellation() {
     ));
     assert_eq!(input.reads, 2);
 }
+
+#[test]
+fn owner_session_stop_cancels_a_real_owned_child_without_cancelling_a_fresh_session() {
+    let session = crate::subscription_serving::Cancellation::new();
+    let stop = Cancellation::from(session.clone());
+    let start = Instant::now();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(35));
+            session.cancel();
+        });
+        assert!(matches!(
+            run(
+                "/bin/sh",
+                &["-c", "exec sleep 10"],
+                Duration::from_secs(2),
+                4096,
+                &stop
+            ),
+            Err(HostError::Cancelled)
+        ));
+    });
+    assert!(start.elapsed() < Duration::from_secs(1));
+    assert!(stop.cancelled());
+    assert!(!Cancellation::new().cancelled());
+}

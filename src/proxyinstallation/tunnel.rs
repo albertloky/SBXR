@@ -30,6 +30,11 @@ impl<H: t::Host> TunnelOwnerInstallation<H> {
             mode,
         }
     }
+    pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
+        self.stop = stop;
+        *self.owner.get_mut() = Rc::new(());
+        self
+    }
     pub fn host_mut(&mut self) -> &mut H {
         *self.owner.get_mut() = Rc::new(());
         self.module.get_mut().host_mut()

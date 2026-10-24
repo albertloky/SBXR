@@ -40,6 +40,10 @@ impl<'a> ProtectedDisclosureHost<'a, NativeIo> {
     }
 }
 impl<'a, I: OwnerIo> ProtectedDisclosureHost<'a, I> {
+    pub fn with_cancellation(mut self, stop: crate::subscription_serving::Cancellation) -> Self {
+        self.runtime = self.runtime.with_cancellation(stop);
+        self
+    }
     pub fn injected(
         root: &Path,
         proof: &'a AuthenticatedInstalled,

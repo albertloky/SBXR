@@ -15,7 +15,7 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         if r.release_identity() != self.proof.record().release_identity() {
             return Err(HostError::Foreign);
         }
-        let ctx = Self::context();
+        let ctx = self.context();
         let group = self.text(Observation::Group, &ctx)?;
         let fields = group.split(':').collect::<Vec<_>>();
         if fields.len() != 4 || fields[0] != "sing-box" || !fields[3].is_empty() {

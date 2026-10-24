@@ -11,7 +11,7 @@ impl<I: OwnerIo> TunnelRuntime for OwnerRuntime<'_, I> {
         if owner.root() != self.fs.path() {
             return Err(HostError::Foreign);
         }
-        self.io.public_ipv4(&Self::context()).map(|p| p.to_string())
+        self.io.public_ipv4(&self.context()).map(|p| p.to_string())
     }
     fn observe(
         &self,
@@ -23,7 +23,7 @@ impl<I: OwnerIo> TunnelRuntime for OwnerRuntime<'_, I> {
             return Err(HostError::Cancelled);
         }
         self.installed()?;
-        let context = Self::context();
+        let context = self.context();
         let listener = self.text(Observation::Listener10000, &context)?;
         let active = self.property(U::Proxy, P::ActiveState, &context)?;
         let pid = self.property(U::Proxy, P::MainPid, &context)?;

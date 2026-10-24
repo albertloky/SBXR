@@ -116,6 +116,7 @@ struct Fake {
     active: bool,
     fail: Option<Operation>,
     fail_after: bool,
+    cancel_after: Option<Operation>,
     queries_fail: bool,
     configuration_owner: bool,
     install_default: bool,
@@ -133,6 +134,7 @@ impl Fake {
             active: false,
             fail: None,
             fail_after: false,
+            cancel_after: None,
             queries_fail: false,
             configuration_owner: true,
             install_default: false,
@@ -258,7 +260,7 @@ impl CommandRunner for Fake {
     fn injected_effects(&self) -> bool {
         true
     }
-    fn effect(&mut self, op: Operation, _: &Cancellation) -> Result<(), HostError> {
+    fn effect(&mut self, op: Operation, stop: &Cancellation) -> Result<(), HostError> {
         self.effects.push(op);
         if self.fail == Some(op) && !self.fail_after {
             return Err(HostError::Injected);
@@ -305,6 +307,17 @@ impl CommandRunner for Fake {
             Operation::RemovePackageIdentity => self.identity = false,
             _ => (),
         };
+        if self.cancel_after == Some(op) {
+            stop.cancel();
+            let uid = fs::metadata(&self.root).unwrap().uid();
+            assert!(
+                matches!(
+                    crate::host::locks::HostLock::existing(&self.root, uid),
+                    Err(HostError::Busy)
+                ),
+                "cancellation must not release retained Owner exclusion inside an effect"
+            );
+        }
         if self.fail == Some(op) && self.fail_after {
             return Err(HostError::Injected);
         }
@@ -2129,4 +2142,62 @@ fn lifecycle_transaction_arriving_after_setup_review_refuses_without_effects() {
         fs::read(root.0.join(path)).unwrap(),
         b"retained exact software transaction"
     );
+}
+
+#[test]
+fn owner_cancellation_preserves_durable_setup_direction_and_releases_locks() {
+    for at in [Operation::HoldPackage, Operation::StartService] {
+        let root = Root::new();
+        let session = crate::subscription_serving::Cancellation::new();
+        let mut host = root.host().with_cancellation(session.clone().into());
+        host.runner.cancel_after = Some(at);
+        let mut installation = StandardInstallation::new(host, release()).unwrap();
+        let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+        let result = installation.execute(prepared, Confirmation::Approved);
+        assert!(session.is_cancelled());
+        assert_ne!(result.outcome, Outcome::SetupComplete);
+        assert_eq!(installation.host().runner.effects.last(), Some(&at));
+        let bytes = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+        let record = OwnershipRecord::decode(&bytes).unwrap();
+        let direction = if at == Operation::HoldPackage {
+            crate::records::RecoveryDirection::Cleanup
+        } else {
+            crate::records::RecoveryDirection::FinishSetup
+        };
+        assert_eq!(record.recovery_direction(), direction);
+        // Existing host authority is never explicitly unlocked while lent.
+        // End-change releases this owned handle; reopening only its private
+        // store also releases exclusion, as established by the Linux regression.
+        let mut runner = installation.into_host().runner;
+        runner.cancel_after = None;
+        let host = LinuxHost::injected(&root.0, runner, root.host().material, admission()).unwrap();
+        let mut resumed = StandardInstallation::new(host, release()).unwrap();
+        let action = if direction == crate::records::RecoveryDirection::Cleanup {
+            Action::FinishCleanup
+        } else {
+            Action::FinishSetup
+        };
+        let result = execute(&mut resumed, action);
+        assert_eq!(
+            result.outcome,
+            if action == Action::FinishCleanup {
+                Outcome::CleanedUp
+            } else {
+                Outcome::SetupComplete
+            }
+        );
+        assert!(
+            resumed.host().runner.effects[resumed
+                .host()
+                .runner
+                .effects
+                .iter()
+                .position(|e| *e == at)
+                .unwrap()
+                + 1..]
+                .iter()
+                .all(|e| direction == crate::records::RecoveryDirection::Cleanup
+                    || !matches!(e, Operation::RemovePackage | Operation::RemoveAptSource))
+        );
+    }
 }

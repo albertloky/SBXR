@@ -24,10 +24,7 @@ impl<'a> ServingRuntimeHost<'a, NativeServingEnvironment> {
         super::super::linux::require_native_environment()?;
         // Loaded Rust build identity is independent of argv/environment at
         // runtime. An ordinary development binary has no released identity.
-        if option_env!("SBXR_BUILD_COMMIT") != Some(record.release_identity().commit())
-            || cfg!(debug_assertions)
-            || !cfg!(target_env = "musl")
-        {
+        if crate::build_identity::compiled_commit() != Some(record.release_identity().commit()) {
             return Err(HostError::LiveUnavailable);
         }
         let files = RuntimeFiles::native_record(record)?;
