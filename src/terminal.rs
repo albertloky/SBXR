@@ -99,9 +99,7 @@ pub fn run(
                     output,
                     "Standard uses VLESS REALITY Vision. No domain is needed."
                 )?;
-                for line in installation.review(Action::ViewDetails).details {
-                    writeln!(output, "{line}")?;
-                }
+                installation.write_details(output)?;
             }
             Action::StartSetup => setup(input, output, installation)?,
             Action::FinishCleanup | Action::FinishSetup => {
@@ -154,7 +152,9 @@ pub fn run(
             | Action::RepairSubscription
             | Action::FinishSubscriptionChange
             | Action::RotateClientIdentity
-            | Action::FinishClientIdentityRotation => {
+            | Action::FinishClientIdentityRotation
+            | Action::ShowClientConfiguration
+            | Action::MarkSubscriptionCompromised => {
                 let review = installation.review(action);
                 for line in review.plan {
                     writeln!(output, "{line}")?;
@@ -171,8 +171,9 @@ pub fn run(
                 } else {
                     confirmation(input, output, &format!("{action}? [y/N]"))?
                 };
-                let result = installation.execute(prepared, approval);
+                let result = installation.execute_output(prepared, approval, output)?;
                 write_result(output, &result)?;
+                if result.outcome==Outcome::ClientConfigurationDisclosed && prompt(input,output,"Press Enter to preserve this configuration in terminal scrollback and return to the menu.")?.is_none(){return Ok(())}
                 if let Some(link) = installation.take_subscription_link() {
                     writeln!(output, "Subscription Link (sensitive): {}", link.as_str())?;
                 }

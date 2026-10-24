@@ -24,8 +24,9 @@ These are local synthetic regression fixtures, not deployment or live evidence.
 ## Owner composition
 
 The module is exported normally and the integration tests use that public
-export. Core is integrating the protected Host and shared Owner/output routing;
-this worker's pure tests do not establish native filesystem or deployment proof.
+export. The protected Host and shared Owner/output routing are now implemented, with
+additional real-filesystem/output tests in `src/proxyinstallation/subscription_tests.rs`.
+This worker's pure tests do not themselves establish native deployment proof.
 
 `Session<H: Host>` owns the injected host and Review generation:
 
@@ -62,3 +63,10 @@ Go has no separately named compromise-marking menu action. The new confirmed
 operation exposes the existing Rust authority transition; it neither stops
 serving nor replaces a credential. Failed replacement cleanup keeps compromise
 visible, while only completed link rotation clears it.
+
+The Host's default namespace owner remains UID/GID 0. Explicit filesystem
+fixtures override the independently pinned namespace owner to match their real
+OS owner; native construction still requires root:root. Configuration GID stays
+independently resolved rather than copied from the file. This permits actual
+protected-file tests on macOS without creating a privileged user or changing
+real host security settings.

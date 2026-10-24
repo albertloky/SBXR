@@ -152,7 +152,7 @@ without enabling in-place Go-to-Rust migration.
 | Native public entry and Standard setup/recovery | Shared Review/Execute and composed Owner routing; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Connect the qualified public entry and remaining owners. Early native setup cleanup with no saved canonical configuration still refuses instead of regenerating it. Native effects and new Linux branches remain unvalidated; public entry stays simulated. |
 | Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
 | HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Connect the qualified public entry and validate actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
-| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | Qualify native runtime and wire the disclosure protected Host/output/terminal path. Explicit staged-record retry and historical HTTPS certificate selection remain absent. |
+| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and complete public entry/details composition. Explicit staged-record retry and historical HTTPS certificate selection remain absent. |
 | Optional VMess/tunnel | Rendering, client artifacts, identity generation, strict authority plus setup/recovery/check orchestration and probe session contracts | Connect guarded native connector and real local/public WS plus authenticated VMess-only egress probes to the Owner frontend; qualify the optional profile. No general protocol plug-in architecture. |
 | Removal and Software Lifecycle | Standard removal/finalizer model and injected effects; signed exact-release acquisition and missing-member restoration in injected roots | Auxiliary removal and native restored-finisher launch/authentication; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
 | Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
@@ -1220,3 +1220,63 @@ The property-query behavior is checked against the
 [systemd v255 show implementation](https://raw.githubusercontent.com/systemd/systemd/v255/src/systemctl/systemctl-show.c):
 property mode is distinct from status/help handling for an inactive missing unit.
 This source check does not substitute for executing the native adapter on Linux.
+
+
+## Concrete protected disclosure and output increment
+
+`ProtectedDisclosureHost` now implements the disclosure module's retained
+whole-host/package/writer guard, authenticated exact snapshot/inspection, bounded
+no-follow material reads and exact durable compromise CAS. Native construction
+requires supported root:root plus authenticated installed/executing bytes. An
+explicit fixture root uses its actual independently pinned namespace owner; the
+model's default remains root:root. File ownership is never inferred from the
+supplied file itself. The sing-box configuration GID is independently resolved
+and compared with the actual descriptor's proof.
+
+The runtime independently inspects Ubuntu/architecture, public address,
+transaction absence, pinned APT key/source, package/hold, account/state ownership,
+protected configuration/hash/shape, package unit/loaded process/listener,
+provisioning unit/link and enabled/active service. Unknown health remains false,
+not a successful placeholder. Configuration validation requires retained Owner
+authority and an already bounded, hash-bound supported configuration before the
+fixed sing-box check command can run. On this Mac tests supply a parser/command
+fixture; no package executable or native command is run.
+
+Status uses a metadata-only regular-file reader for subscription token/state.
+It preserves no-follow, protected ancestry, type/owner/mode/link/size and inode
+checks without reading credential bytes. Missing bounded owned subscription
+material can leave the independently confirmed client fallback available;
+foreign type/permissions/ancestry refuse. View details reads only the canonical
+credential and exact saved serving state and refuses disagreement. It neither
+reads candidates nor completes an operation. Historical HTTPS redisclosure keeps
+its scheme and grants no certificate mutation or in-place migration.
+
+`DisclosureInstallation` and the composed Owner forward an explicit streaming
+output sink. Show client configuration remains default-No; it writes a framed
+client artifact only after confirmation and fresh revalidation. Output/flush
+failure propagates as a terminal I/O error, matching Go, instead of reporting a
+successful display or inventing a new result code. After success the terminal
+retains the scrollback pause. View details has a separate validated link writer
+with credential/transport warnings, keeping bearer URLs out of generic Review
+strings. Confirmed compromise marking writes only the existing authority flag;
+credentials/configuration remain unchanged, and uncertainty is reported without
+retry. A later Review/status/details read expires old disclosure authority.
+
+Concrete tests use actual protected files, inode/mode checks, independently
+resolved fixture service identity, retained guards and durable publication.
+They cover default-No, streaming confirmation, failed output, stale authority,
+compromise persistence, canonical redisclosure, malformed-token fallback and
+wrong GID. A real file-access-time check proves status reads metadata without
+reading the token. Injecting a credential read into that helper makes the new
+regression fail; restoring the exact source passes. Existing worker tests retain
+root:root defaults and all assertions. This supplies no native Linux, packaged
+or outside-client qualification.
+
+Validation passed the 434-test integrated offline suite under umask 077, followed
+by all four affected disclosure tests after the final status projection change.
+Strict Clippy/format passed during integration; final build/package evidence is
+under `.scratch/acceptance/rust-owner/`. Public zero-argument native dispatch is
+still closed; the next incomplete functional path is the guarded tunnel
+connector/probe/frontend adapter, followed by native recovery/removal and release
+build/qualification work. No live effects, credential deployment, upload,
+signing, push or publication occurred.

@@ -243,7 +243,7 @@ pub(super) fn read_configuration(
     Ok(ProtectedConfiguration(zeroize::Zeroizing::new(bytes)))
 }
 
-pub(super) fn ubuntu(fs: &ProtectedFs) -> Result<bool, HostError> {
+pub(in crate::host) fn ubuntu(fs: &ProtectedFs) -> Result<bool, HostError> {
     // Ubuntu's standard os-release symlink is resolved only to its fixed protected
     // usr/lib target; arbitrary symlinks and escapes are refused.
     let path = if fs

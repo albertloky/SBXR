@@ -2,6 +2,8 @@
 //! Explicit simulation and filesystem-fixture adapters share Review/Execute.
 //! Public native setup remains unavailable. Native library adapters and private
 //! dispatch require their explicit installed/release prerequisites.
+mod disclosure;
+pub use disclosure::DisclosureInstallation;
 mod owner;
 pub use owner::{Journey, OwnerInstallation, OwnerSources};
 mod fixture;
@@ -45,6 +47,7 @@ enum PreparedBasis {
     Subscription(subscription::HttpPrepared),
     ClientIdentity(identity::ClientPrepared),
     Owner(Box<owner::OwnerPrepared>),
+    Disclosure(Box<crate::disclosure::Prepared>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +62,20 @@ pub enum ExecutionMode {
 pub trait Interface {
     fn review(&self, action: Action) -> Review;
     fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result;
+    fn execute_output(
+        &mut self,
+        prepared: PreparedAction,
+        confirmation: Confirmation,
+        _output: &mut dyn std::io::Write,
+    ) -> std::io::Result<Result> {
+        Ok(self.execute(prepared, confirmation))
+    }
+    fn write_details(&mut self, output: &mut dyn std::io::Write) -> std::io::Result<()> {
+        for line in self.review(Action::ViewDetails).details {
+            writeln!(output, "{line}")?;
+        }
+        Ok(())
+    }
     fn subscription_status(&self) -> &'static str {
         "Not enabled"
     }

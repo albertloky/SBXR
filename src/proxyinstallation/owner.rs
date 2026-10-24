@@ -8,6 +8,7 @@ pub enum Journey {
     Http,
     Identity,
     Removal,
+    Disclosure,
 }
 impl Journey {
     fn accepts(self, action: Action) -> bool {
@@ -28,6 +29,10 @@ impl Journey {
                 Action::RotateClientIdentity | Action::FinishClientIdentityRotation
             ),
             Self::Removal => matches!(action, Action::CompleteRemoval | Action::FinishRemoval),
+            Self::Disclosure => matches!(
+                action,
+                Action::ShowClientConfiguration | Action::MarkSubscriptionCompromised
+            ),
         }
     }
 }
@@ -59,6 +64,34 @@ impl<'a, S: OwnerSources<'a>> OwnerInstallation<'a, S> {
     }
     pub fn sources(&self) -> &S {
         &self.sources
+    }
+    fn apply(
+        &mut self,
+        prepared: PreparedAction,
+        confirmation: Confirmation,
+        output: Option<&mut dyn std::io::Write>,
+    ) -> std::io::Result<crate::domain::Result> {
+        self.link = None;
+        if !Rc::ptr_eq(self.owner.get_mut(), &prepared.owner) {
+            return Ok(Self::refused_result());
+        }
+        *self.owner.get_mut() = Rc::new(());
+        let PreparedBasis::Owner(p) = prepared.basis else {
+            return Ok(Self::refused_result());
+        };
+        let Some((journey, mut module)) = self.active.get_mut().take() else {
+            return Ok(Self::refused_result());
+        };
+        if journey != p.journey || !journey.accepts(prepared.action) {
+            return Ok(Self::refused_result());
+        }
+        let result = if let Some(output) = output {
+            module.execute_output(p.inner, confirmation, output)?
+        } else {
+            module.execute(p.inner, confirmation)
+        };
+        self.link = module.take_subscription_link();
+        Ok(result)
     }
     fn refusal(&self) -> Review {
         Review {
@@ -152,28 +185,35 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
         }
         selected
     }
-    fn execute(
+    fn execute(&mut self, p: PreparedAction, c: Confirmation) -> crate::domain::Result {
+        self.apply(p, c, None)
+            .unwrap_or_else(|_| Self::refused_result())
+    }
+    fn execute_output(
         &mut self,
-        prepared: PreparedAction,
-        confirmation: Confirmation,
-    ) -> crate::domain::Result {
-        self.link = None;
-        if !Rc::ptr_eq(self.owner.get_mut(), &prepared.owner) {
-            return Self::refused_result();
+        p: PreparedAction,
+        c: Confirmation,
+        output: &mut dyn std::io::Write,
+    ) -> std::io::Result<crate::domain::Result> {
+        self.apply(p, c, Some(output))
+    }
+    fn write_details(&mut self, output: &mut dyn std::io::Write) -> std::io::Result<()> {
+        let reviewed = self.review(Action::ViewDetails);
+        for line in reviewed.details {
+            writeln!(output, "{line}")?;
         }
-        *self.owner.get_mut() = Rc::new(());
-        let PreparedBasis::Owner(p) = prepared.basis else {
-            return Self::refused_result();
-        };
-        let Some((journey, mut module)) = self.active.get_mut().take() else {
-            return Self::refused_result();
-        };
-        if journey != p.journey || !journey.accepts(prepared.action) {
-            return Self::refused_result();
+        if self
+            .sources
+            .journeys()
+            .is_ok_and(|j| j.contains(&Journey::Disclosure))
+        {
+            let mut module = self
+                .sources
+                .open(Journey::Disclosure)
+                .map_err(|_| std::io::Error::other("Protected details adapter is unavailable."))?;
+            module.write_details(output)?;
         }
-        let result = module.execute(p.inner, confirmation);
-        self.link = module.take_subscription_link();
-        result
+        Ok(())
     }
     fn subscription_status(&self) -> &'static str {
         if let Some((_, m)) = self.active.borrow().as_ref() {

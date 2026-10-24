@@ -66,6 +66,8 @@ pub enum Observation {
     UnitOwner,
     User,
     Group,
+    Architecture,
+    Enabled,
 }
 impl Observation {
     pub fn command(self) -> (&'static str, Vec<String>) {
@@ -94,6 +96,8 @@ impl Observation {
                 ],
             ),
             Self::Hold => ("/usr/bin/apt-mark", vec!["showhold"]),
+            Self::Architecture => ("/usr/bin/dpkg", vec!["--print-architecture"]),
+            Self::Enabled => ("/usr/bin/systemctl", vec!["is-enabled", "sing-box.service"]),
             Self::User => ("/usr/bin/getent", vec!["passwd", "sing-box"]),
             Self::Group => ("/usr/bin/getent", vec!["group", "sing-box"]),
             Self::UnitOwner => (
@@ -122,6 +126,12 @@ pub trait OwnerIo: PeerObservations + Sync {
     fn port_available(&self, port: u16, context: &StartContext) -> Result<bool, HostError>;
     fn process(&self, pid: u32) -> Result<runtime_handoff::ProcessIdentity, HostError>;
     fn public_ipv4(&self, context: &StartContext) -> Result<std::net::Ipv4Addr, HostError>;
+    fn validate_configuration(
+        &self,
+        owner: &Arc<HostLock>,
+        expected: &str,
+        context: &StartContext,
+    ) -> Result<bool, HostError>;
 }
 pub struct NativeIo;
 impl PeerObservations for NativeIo {
@@ -166,6 +176,52 @@ impl OwnerIo for NativeIo {
             return Err(HostError::Foreign);
         }
         Ok(())
+    }
+    fn validate_configuration(
+        &self,
+        owner: &Arc<HostLock>,
+        expected: &str,
+        ctx: &StartContext,
+    ) -> Result<bool, HostError> {
+        crate::host::linux::require_native_environment()?;
+        if owner.root() != Path::new("/") {
+            return Err(HostError::Unsafe);
+        }
+        owner.verify()?;
+        let fs = ProtectedFs::native()?;
+        let (bytes, _) = fs
+            .raw(
+                "etc/sing-box/config.json",
+                Mode::from_raw_mode(0o640),
+                1 << 20,
+            )?
+            .ok_or(HostError::Foreign)?;
+        if sha256_hex(&bytes) != expected
+            || crate::server_configuration::ServerConfiguration::decode_supported(&bytes).is_err()
+        {
+            return Err(HostError::Foreign);
+        }
+        let package = self.query(Observation::Package, ctx)?;
+        if package.code() != 0 || package.text()? != "1.14.3 amd64 ii" {
+            return Err(HostError::Foreign);
+        }
+        let result = native_command(
+            "/usr/bin/sing-box",
+            &["-D", "/var/lib/sing-box", "-C", "/etc/sing-box", "check"].map(str::to_owned),
+            ctx,
+        )?;
+        owner.verify()?;
+        let (after, _) = fs
+            .raw(
+                "etc/sing-box/config.json",
+                Mode::from_raw_mode(0o640),
+                1 << 20,
+            )?
+            .ok_or(HostError::Foreign)?;
+        if after != bytes {
+            return Err(HostError::Foreign);
+        }
+        Ok(result.code() == 0)
     }
     fn port_available(&self, port: u16, ctx: &StartContext) -> Result<bool, HostError> {
         crate::host::linux::require_native_environment()?;
@@ -311,6 +367,14 @@ impl<I: OwnerIo + Send> OwnerIo for Arc<I> {
         c: &StartContext,
     ) -> Result<(), HostError> {
         (**self).service(a, l, s, c)
+    }
+    fn validate_configuration(
+        &self,
+        o: &Arc<HostLock>,
+        e: &str,
+        c: &StartContext,
+    ) -> Result<bool, HostError> {
+        (**self).validate_configuration(o, e, c)
     }
     fn public_ipv4(&self, c: &StartContext) -> Result<std::net::Ipv4Addr, HostError> {
         (**self).public_ipv4(c)

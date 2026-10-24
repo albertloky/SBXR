@@ -2,6 +2,7 @@
 //! Injected roots never call native commands; native construction is unavailable
 //! on unsupported hosts. Public dispatch additionally requires released build proof.
 mod command;
+mod disclosure;
 mod effects;
 mod observation;
 mod probe;
@@ -81,7 +82,7 @@ impl<'a, I: OwnerIo> OwnerRuntime<'a, I> {
             Instant::now() + runtime_handoff::START_TIMEOUT,
         )
     }
-    fn installed(&self) -> Result<(), HostError> {
+    pub(in crate::host) fn installed(&self) -> Result<(), HostError> {
         if super::linux::observation::read_installed(&self.fs)?.as_ref()
             != Some(self.proof.record())
         {

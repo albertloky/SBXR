@@ -425,7 +425,9 @@ impl<H: SetupHost> StandardInstallation<H> {
                 | Outcome::ClientIdentityRotationFinished
                 | Outcome::ClientIdentityRotationCleanedUp
                 | Outcome::ClientIdentityRotationIncomplete
-                | Outcome::ClientIdentityRotationFailed => message,
+                | Outcome::ClientIdentityRotationFailed
+                | Outcome::ClientConfigurationDisclosed
+                | Outcome::SubscriptionCompromised => message,
                 Outcome::Cancelled => "Injected host action cancelled; no changes made.",
                 Outcome::Refused => {
                     "Injected host authority refused. Preserve unknown state; native deployment is unavailable."

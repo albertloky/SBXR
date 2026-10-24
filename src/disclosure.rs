@@ -145,9 +145,9 @@ pub struct FileProof {
     pub protected_ancestry: bool,
 }
 impl FileProof {
-    fn accepted(self, mode: u32, gid: u32) -> bool {
+    fn accepted(self, mode: u32, uid: u32, gid: u32) -> bool {
         self.regular
-            && self.uid == 0
+            && self.uid == uid
             && self.gid == gid
             && self.mode == mode
             && self.links == 1
@@ -167,8 +167,8 @@ impl ProtectedFile {
             proof,
         }
     }
-    fn checked(&self, mode: u32, gid: u32) -> Result<&[u8], Error> {
-        if self.proof.accepted(mode, gid) {
+    fn checked(&self, mode: u32, uid: u32, gid: u32) -> Result<&[u8], Error> {
+        if self.proof.accepted(mode, uid, gid) {
             Ok(&self.bytes)
         } else {
             Err(Error::Authority)
@@ -193,6 +193,14 @@ pub enum Material {
 /// parents. Inspect authenticates installed bytes and ownership compatibility;
 /// unhealthy runtime facts are observations, not successful proof or repair.
 pub trait Host {
+    /// Independently pinned namespace owner, never inferred from a supplied file.
+    /// Native constructors require root:root; fixture roots use their real owner.
+    fn owner_uid(&self) -> u32 {
+        0
+    }
+    fn owner_gid(&self) -> u32 {
+        0
+    }
     type Guard;
     fn acquire(&mut self) -> Result<Self::Guard, Error>;
     fn verify_guard(&mut self, guard: &Self::Guard) -> Result<(), Error>;
@@ -366,7 +374,7 @@ impl<H: Host> Session<H> {
             return Ok(details);
         };
         let token = self.host.read(&guard, Material::SubscriptionToken)?;
-        let token = token.checked(0o600, 0)?;
+        let token = token.checked(0o600, self.host.owner_uid(), self.host.owner_gid())?;
         if token.len() != 44
             || token[43] != b'\n'
             || sha256_hex(&token[..43]) != serving.credential_sha256()
@@ -377,7 +385,9 @@ impl<H: Host> Session<H> {
             SubscriptionCredential::parse(std::str::from_utf8(&token[..43]).map_err(authority)?)
                 .map_err(authority)?;
         let state = self.host.read(&guard, Material::ServingState)?;
-        if state.checked(0o600, 0)? != serving.state_bytes().map_err(authority)? {
+        if state.checked(0o600, self.host.owner_uid(), self.host.owner_gid())?
+            != serving.state_bytes().map_err(authority)?
+        {
             return Err(Error::Authority);
         }
         let scheme = if serving.is_http() { "http" } else { "https" };
@@ -419,7 +429,8 @@ impl<H: Host> Session<H> {
                     return Err(Error::Refused);
                 }
                 let file = self.host.read(&guard, Material::Configuration)?;
-                let bytes = file.checked(0o640, inspection.configuration_gid)?;
+                let bytes =
+                    file.checked(0o640, self.host.owner_uid(), inspection.configuration_gid)?;
                 if sha256_hex(bytes) != record.configuration_sha256() {
                     return Err(Error::Authority);
                 }

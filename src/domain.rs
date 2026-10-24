@@ -55,6 +55,8 @@ pub enum Action {
     FinishSubscriptionChange,
     RotateClientIdentity,
     FinishClientIdentityRotation,
+    ShowClientConfiguration,
+    MarkSubscriptionCompromised,
 }
 
 impl fmt::Display for Action {
@@ -73,6 +75,8 @@ impl fmt::Display for Action {
             Self::FinishSubscriptionChange => "Finish subscription change",
             Self::RotateClientIdentity => "Rotate Client Identity",
             Self::FinishClientIdentityRotation => "Finish Client Identity rotation",
+            Self::ShowClientConfiguration => "Show client configuration",
+            Self::MarkSubscriptionCompromised => "Mark subscription link compromised",
         })
     }
 }
@@ -116,6 +120,8 @@ pub enum Outcome {
     ClientIdentityRotationCleanedUp,
     ClientIdentityRotationIncomplete,
     ClientIdentityRotationFailed,
+    ClientConfigurationDisclosed,
+    SubscriptionCompromised,
 }
 
 impl Outcome {
@@ -158,6 +164,10 @@ impl Outcome {
             Self::ClientIdentityRotationFailed => {
                 "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-FAILED"
             }
+            Self::ClientConfigurationDisclosed => {
+                "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
+            }
+            Self::SubscriptionCompromised => "PROXY-INSTALLATION-SUBSCRIPTION-COMPROMISED",
         }
     }
 }

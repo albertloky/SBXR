@@ -259,6 +259,58 @@ impl ProtectedFs {
         };
         Ok(Some((bytes, evidence)))
     }
+    /// Metadata-only bounded regular-file proof; never reads a bearer credential.
+    pub(in crate::host) fn regular_metadata(
+        &self,
+        path: &str,
+        mode: Mode,
+        limit: usize,
+    ) -> Result<Option<Metadata>, HostError> {
+        let Some((parent, name)) = self.parent(path, false)? else {
+            return Ok(None);
+        };
+        let fd = match fs::openat(
+            &parent,
+            name.as_str(),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(failure(e)),
+        };
+        let s = fs::fstat(&fd).map_err(failure)?;
+        if FileType::from_raw_mode(s.st_mode) != FileType::RegularFile
+            || s.st_uid != self.uid
+            || s.st_nlink != 1
+            || s.st_mode & 0o7777 != mode.as_raw_mode()
+            || s.st_size < 0
+            || s.st_size as usize > limit
+        {
+            return Err(HostError::Foreign);
+        }
+        let after =
+            fs::statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW).map_err(failure)?;
+        if (
+            s.st_dev, s.st_ino, s.st_uid, s.st_gid, s.st_mode, s.st_nlink, s.st_size,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_uid,
+            after.st_gid,
+            after.st_mode,
+            after.st_nlink,
+            after.st_size,
+        ) {
+            return Err(HostError::Unsafe);
+        }
+        self.check_root()?;
+        Ok(Some(Metadata {
+            kind: FileType::RegularFile,
+            uid: s.st_uid,
+            gid: s.st_gid,
+        }))
+    }
     pub fn observe(&self, resource: Resource) -> Result<Option<Evidence>, HostError> {
         if let Kind::File(body, mode) = resource.kind {
             return self

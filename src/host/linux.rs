@@ -24,7 +24,7 @@ use rustix::fs::{FileType, Mode};
 #[cfg(test)]
 use std::path::PathBuf;
 use std::{fmt, path::Path, sync::Arc};
-const APT_SOURCE:&[u8]=b"Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nSigned-By: /etc/apt/keyrings/sagernet.asc\n";
+pub(in crate::host) const APT_SOURCE:&[u8]=b"Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nSigned-By: /etc/apt/keyrings/sagernet.asc\n";
 const KEY: &str = "etc/apt/keyrings/sagernet.asc";
 const SOURCE: &str = "etc/apt/sources.list.d/sagernet.sources";
 const CONFIG: &str = "etc/sing-box/config.json";

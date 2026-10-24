@@ -48,8 +48,12 @@ sources are `src/host/owner.rs`. Only one selected journey retains its writer an
 prepared authority. Native public Owner dispatch remains closed. Fixed cgroup
 virtual reads use `src/host/filesystem/runtime.rs` without changing ordinary
 record/file validation. `src/disclosure.rs` and `src/tunnel_setup.rs` hold the
-completed orchestration modules; their native host/frontend integration remains
-separate work.
+completed orchestration modules. Disclosure now uses the protected Host in
+`src/host/disclosure.rs`, independent runtime proofs in
+`src/host/owner_runtime/disclosure.rs`, and streaming Interface bridge in
+`src/proxyinstallation/disclosure.rs`. The terminal uses an explicit output sink;
+client secrets never enter Review details. Tunnel native host/frontend integration
+remains separate work.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

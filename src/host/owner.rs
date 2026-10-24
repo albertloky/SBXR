@@ -110,7 +110,8 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             return Ok(vec![Journey::Standard, Journey::Removal]);
         }
         if r.serving_authority().is_some_and(|s| !s.is_http()) {
-            return Err(HostError::LiveUnavailable);
+            // Read-only historical disclosure grants no HTTPS mutation/migration.
+            return Ok(vec![Journey::Disclosure]);
         }
         if crate::client_identity::rotation(&r).is_ok() {
             return Ok(vec![Journey::Identity, Journey::Removal]);
@@ -119,9 +120,14 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             .map_err(|_| HostError::LiveUnavailable)?
             .is_some()
         {
-            return Ok(vec![Journey::Http, Journey::Removal]);
+            return Ok(vec![Journey::Http, Journey::Disclosure, Journey::Removal]);
         }
-        Ok(vec![Journey::Http, Journey::Identity, Journey::Removal])
+        Ok(vec![
+            Journey::Http,
+            Journey::Identity,
+            Journey::Disclosure,
+            Journey::Removal,
+        ])
     }
     fn open(&self, journey: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
         match journey {
@@ -138,6 +144,12 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             // Offline removal must not acquire a package or probe external
             // destinations. Its native input builder remains a separate owner.
             Journey::Removal => Err(HostError::LiveUnavailable),
+            Journey::Disclosure => Ok(Box::new(
+                crate::proxyinstallation::DisclosureInstallation::new(
+                    super::disclosure::ProtectedDisclosureHost::native_unreleased(self.proof)?,
+                    ExecutionMode::NativeUnavailable,
+                ),
+            )),
         }
     }
     fn mode(&self) -> ExecutionMode {

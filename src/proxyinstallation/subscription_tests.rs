@@ -1457,6 +1457,7 @@ fn concrete_identity_uncommitted_configuration_candidate_has_no_replacement_auth
 // Native runtime logic is exercised through fixed command/process observations.
 // Commands are never executed; real files, lending, gates and TCP responses are.
 struct OwnerIoFixture {
+    service_uid: u32,
     backend: Mutex<Backend>,
     role: AtomicUsize,
     address: SocketAddr,
@@ -1488,6 +1489,7 @@ impl OwnerIoFixture {
         let address = socket.local_addr().unwrap();
         drop(socket);
         let io = Arc::new(Self {
+            service_uid: if root.uid() == 0 { 2000 } else { root.uid() },
             backend: Mutex::new(Backend::new(root, a, proof)),
             role: AtomicUsize::new(0),
             address,
@@ -1643,14 +1645,24 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
         let b = self.backend.lock().unwrap();
         let mut code = 0;
         let value = match o {
+            O::Architecture => "amd64".into(),
+            O::Enabled => "enabled".into(),
             O::Package => "1.14.3 amd64 ii".into(),
             O::Hold => "sing-box".into(),
             O::UnitOwner => "sing-box: /usr/lib/systemd/system/sing-box.service".into(),
             O::User => format!(
-                "sing-box:x:2000:{}::/var/lib/sing-box:/usr/sbin/nologin",
+                "sing-box:x:{}:{}::/var/lib/sing-box:/usr/sbin/nologin",
+                self.service_uid,
                 fs::metadata(&b.root).unwrap().gid()
             ),
-            O::Group => format!("sing-box:x:{}:", fs::metadata(&b.root).unwrap().gid()),
+            O::Group => format!(
+                "sing-box:x:{}:",
+                if self.bad.load(Ordering::SeqCst) == 8 {
+                    9999
+                } else {
+                    fs::metadata(&b.root).unwrap().gid()
+                }
+            ),
             O::Firewall => b.rules.clone(),
             O::ProxyProcesses => {
                 if b.proxy {
@@ -1807,6 +1819,19 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
         }
         owner.verify()
     }
+    fn validate_configuration(
+        &self,
+        owner: &Arc<HostLock>,
+        expected: &str,
+        c: &StartContext,
+    ) -> Result<bool, HostError> {
+        owner.verify()?;
+        c.check().map_err(|_| HostError::Cancelled)?;
+        let b = self.backend.lock().unwrap();
+        let config = fs::read(b.root.join("etc/sing-box/config.json")).unwrap();
+        Ok(sha256_hex(&config) == expected
+            && crate::server_configuration::ServerConfiguration::decode_supported(&config).is_ok())
+    }
     fn public_ipv4(&self, c: &StartContext) -> Result<Ipv4Addr, HostError> {
         c.check().map_err(|_| HostError::Cancelled)?;
         self.backend
@@ -1838,7 +1863,7 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
             if bad == 2 {
                 0
             } else if p == 200 {
-                2000
+                self.service_uid
             } else {
                 fs::metadata(&b.root).unwrap().uid()
             },
@@ -2100,4 +2125,297 @@ fn native_identity_stop_refuses_foreign_kill_mode_without_revoking_source() {
         original.configuration_sha256()
     );
     assert!(io.backend.lock().unwrap().proxy);
+}
+
+fn disclosure_surface(root: &Root, io: &OwnerIoFixture) {
+    root.write(
+        "etc/os-release",
+        b"ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+        0o644,
+    );
+    root.write(
+        "etc/apt/keyrings/sagernet.asc",
+        include_bytes!("../../tests/testdata/package_acquisition/sagernet.asc"),
+        0o644,
+    );
+    root.write("etc/apt/sources.list.d/sagernet.sources",b"Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nSigned-By: /etc/apt/keyrings/sagernet.asc\n",0o644);
+    root.write(
+        "etc/systemd/system/sbxr-mutation-lock.service",
+        include_bytes!("../records/lock-provision.service"),
+        0o644,
+    );
+    let link = root
+        .0
+        .join("etc/systemd/system/multi-user.target.wants/sbxr-mutation-lock.service");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("../sbxr-mutation-lock.service", link).unwrap();
+    let state = root.0.join("var/lib/sing-box");
+    fs::create_dir(&state).unwrap();
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).unwrap();
+    if root.uid() != io.service_uid {
+        rustix::fs::chown(
+            &state,
+            Some(rustix::process::Uid::from_raw(io.service_uid)),
+            Some(rustix::process::Gid::from_raw(
+                fs::metadata(&root.0).unwrap().gid(),
+            )),
+        )
+        .unwrap();
+    }
+}
+struct DisclosureSources<'a>(ComposedSources<'a>);
+impl<'a> OwnerSources<'a> for DisclosureSources<'a> {
+    fn journeys(&self) -> Result<Vec<Journey>, HostError> {
+        let mut j = self.0.journeys()?;
+        j.push(Journey::Disclosure);
+        Ok(j)
+    }
+    fn open(&self, j: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
+        if j != Journey::Disclosure {
+            return self.0.open(j);
+        }
+        let host = crate::host::disclosure::ProtectedDisclosureHost::injected(
+            &self.0.root.0,
+            self.0.proof,
+            self.0.io.clone(),
+            self.0.io.address,
+        )?;
+        Ok(Box::new(DisclosureInstallation::new(
+            host,
+            ExecutionMode::InjectedHost,
+        )))
+    }
+    fn mode(&self) -> ExecutionMode {
+        ExecutionMode::InjectedHost
+    }
+}
+struct FailingOutput;
+impl Write for FailingOutput {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::BrokenPipe.into())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+#[test]
+fn protected_disclosure_streams_only_after_confirmation_and_preserves_output_failure() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    let original = root.setup(&archive).encode().unwrap();
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    disclosure_surface(&root, &io);
+    let mut owner = OwnerInstallation::new(DisclosureSources(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io,
+    }));
+    let r = owner.review(Action::ShowClientConfiguration);
+    assert!(r.prepared.is_some(), "{:?}", r.refusal);
+    let mut output = Vec::new();
+    assert_eq!(
+        owner
+            .execute_output(r.prepared.unwrap(), Confirmation::Declined, &mut output)
+            .unwrap()
+            .outcome,
+        Outcome::Cancelled
+    );
+    assert!(output.is_empty());
+    let r = owner.review(Action::ShowClientConfiguration);
+    let result = owner
+        .execute_output(r.prepared.unwrap(), Confirmation::Approved, &mut output)
+        .unwrap();
+    assert_eq!(result.outcome, Outcome::ClientConfigurationDisclosed);
+    assert!(output.starts_with(b"----- BEGIN SBXR CLIENT CONFIGURATION -----\n"));
+    assert!(
+        output
+            .windows(b"12345678-1234-4234-8234-123456789abc".len())
+            .any(|s| s == b"12345678-1234-4234-8234-123456789abc")
+    );
+    assert!(
+        !output
+            .windows(b"private_key".len())
+            .any(|s| s == b"private_key")
+    );
+    let r = owner.review(Action::ShowClientConfiguration);
+    assert!(
+        owner
+            .execute_output(
+                r.prepared.unwrap(),
+                Confirmation::Approved,
+                &mut FailingOutput
+            )
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        original
+    );
+}
+#[test]
+fn protected_disclosure_marks_compromise_and_rediscloses_only_canonical_agreed_link() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    disclosure_surface(&root, &io);
+    let mut owner = OwnerInstallation::new(DisclosureSources(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    }));
+    let r = owner.review(Action::EnableSubscription);
+    assert_eq!(
+        owner
+            .execute(r.prepared.unwrap(), Confirmation::Approved)
+            .outcome,
+        Outcome::SubscriptionEnabled
+    );
+    let link = owner.take_subscription_link().unwrap();
+    let token = fs::read(root.0.join(TOKEN)).unwrap();
+    let mut details = Vec::new();
+    owner.write_details(&mut details).unwrap();
+    assert!(
+        details
+            .windows(link.as_str().len())
+            .any(|s| s == link.as_str().as_bytes())
+    );
+    let stale = owner
+        .review(Action::MarkSubscriptionCompromised)
+        .prepared
+        .unwrap();
+    owner.review(Action::Status);
+    assert_eq!(
+        owner.execute(stale, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    let r = owner.review(Action::MarkSubscriptionCompromised);
+    assert_eq!(
+        owner
+            .execute(r.prepared.unwrap(), Confirmation::Approved)
+            .outcome,
+        Outcome::SubscriptionCompromised
+    );
+    assert_eq!(fs::read(root.0.join(TOKEN)).unwrap(), token);
+    let record = OwnershipRecord::decode(
+        &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(record.subscription_compromised());
+    root.write(TOKEN, b"foreign", 0o600);
+    assert!(owner.write_details(&mut Vec::new()).is_err());
+    // A token fault does not revoke the independent confirmed client fallback.
+    assert!(
+        owner
+            .review(Action::ShowClientConfiguration)
+            .prepared
+            .is_some()
+    );
+}
+#[test]
+fn protected_disclosure_checks_independent_gid_and_terminal_default_no() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    disclosure_surface(&root, &io);
+    let host = crate::host::disclosure::ProtectedDisclosureHost::injected(
+        &root.0,
+        &proof,
+        io.clone(),
+        io.address,
+    )
+    .unwrap();
+    let mut module = DisclosureInstallation::new(host, ExecutionMode::InjectedHost);
+    let mut output = Vec::new();
+    crate::terminal::run(&mut &b"2\n\n0\n"[..], &mut output, &mut module).unwrap();
+    assert!(
+        !output
+            .windows(b"BEGIN SBXR".len())
+            .any(|s| s == b"BEGIN SBXR")
+    );
+    root.write("etc/group", b"sing-box:x:9999:\n", 0o644);
+    // Runtime resolves the group independently; do not accept a file's own GID.
+    io.bad.store(8, Ordering::SeqCst);
+    assert!(
+        module
+            .review(Action::ShowClientConfiguration)
+            .prepared
+            .is_none()
+    );
+}
+
+#[test]
+fn disclosure_status_uses_metadata_without_reading_subscription_credential() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    disclosure_surface(&root, &io);
+    let mut http = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let r = http.review(Action::EnableSubscription);
+    assert_eq!(
+        http.execute(r.prepared.unwrap(), Confirmation::Approved)
+            .outcome,
+        Outcome::SubscriptionEnabled
+    );
+    drop(http);
+    let path = root.0.join(TOKEN);
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_times(
+        fs::FileTimes::new().set_accessed(std::time::UNIX_EPOCH + Duration::from_secs(1000)),
+    )
+    .unwrap();
+    drop(file);
+    let before = fs::metadata(&path).unwrap().accessed().unwrap();
+    let host = crate::host::disclosure::ProtectedDisclosureHost::injected(
+        &root.0,
+        &proof,
+        io.clone(),
+        io.address,
+    )
+    .unwrap();
+    let mut session = crate::disclosure::Session::new(host);
+    assert!(session.status().unwrap().client_configuration_available);
+    assert_eq!(fs::metadata(path).unwrap().accessed().unwrap(), before);
 }
