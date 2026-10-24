@@ -6,6 +6,7 @@
 |---|---|---|
 | Use SBXR | [Product README](../README.md) | Supported host, installation and menu journey |
 | Set up optional VMess Tunnel | [VMess setup guide](setup-vmess-tunnel.md) | Your own domain/tunnel, protected token, dedicated connector and honest connection checks |
+| Continue isolated Rust rewrite | [Rust increment and handoff](rust-rewrite.md) | Local simulated slice, module ownership, checks and remaining parity |
 | Change implementation | [Agent code map](agents/code-map.md) | Entry points, owning modules and focused checks |
 | Understand domain language | [CONTEXT.md](../CONTEXT.md) | One shared glossary, not a second specification |
 | Find an architectural or policy decision | [ADR index](adr/README.md) | Decisions grouped by scope and product era |
