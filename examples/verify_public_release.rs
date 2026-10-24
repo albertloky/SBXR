@@ -143,6 +143,8 @@ fn restore_fixture(archive: &AuthenticatedArchive) -> Result<(), TrustError> {
             .map_err(|_| TrustError::Refused)?;
         for path in ["run/lock", "var/lib", "usr/local/bin"] {
             fs::create_dir_all(root.join(path)).map_err(|_| TrustError::Refused)?;
+            fs::set_permissions(root.join(path), fs::Permissions::from_mode(0o755))
+                .map_err(|_| TrustError::Refused)?;
         }
         let mut record = sbxr::removal::commit_removal(None, &archive.record().release_identity())
             .map_err(|_| TrustError::Refused)?;

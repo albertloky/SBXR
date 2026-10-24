@@ -588,3 +588,28 @@ fn pending_stages_do_not_admit_operations_or_report_completion_early() {
         assert_eq!(store.load().unwrap().recovery(), Recovery::Running);
     }
 }
+
+#[test]
+fn dropping_store_releases_exclusion_with_a_retained_descriptor() {
+    let fixture = Fixture::new();
+    let store = fixture.open();
+    let inherited = rustix::io::fcntl_dupfd_cloexec(&store.directory, 3).unwrap();
+    assert!(matches!(
+        OwnershipStore::open(&fixture.path, fixture.uid),
+        Err(StoreError {
+            kind: StoreErrorKind::Busy,
+            ..
+        })
+    ));
+    drop(store);
+    let next = fixture.open();
+    drop(inherited);
+    assert!(matches!(
+        OwnershipStore::open(&fixture.path, fixture.uid),
+        Err(StoreError {
+            kind: StoreErrorKind::Busy,
+            ..
+        })
+    ));
+    drop(next);
+}

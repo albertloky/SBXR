@@ -54,6 +54,9 @@ impl Root {
             fs::Permissions::from_mode(0o700),
         )
         .unwrap();
+        for path in ["var/lib", "usr/local/bin"] {
+            fs::set_permissions(root.0.join(path), fs::Permissions::from_mode(0o755)).unwrap();
+        }
         root
     }
     fn write(&self, path: &str, body: &[u8], mode: u32) {
@@ -245,9 +248,15 @@ impl CommandRunner for Fake {
                 self.package = true;
                 self.identity = true;
                 fs::create_dir_all(self.root.join("etc/sing-box")).unwrap();
+                fs::set_permissions(
+                    self.root.join("etc/sing-box"),
+                    fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
                 let unit = self.root.join("usr/lib/systemd/system/sing-box.service");
                 fs::create_dir_all(unit.parent().unwrap()).unwrap();
-                fs::write(unit, b"synthetic package-owned unit\n").unwrap();
+                fs::write(&unit, b"synthetic package-owned unit\n").unwrap();
+                fs::set_permissions(unit, fs::Permissions::from_mode(0o644)).unwrap();
             }
             Operation::HoldPackage => self.held = true,
             Operation::UnmaskService => self.masked = false,
@@ -1539,4 +1548,22 @@ fn restored_exact_finisher_reopens_and_completes_actual_product_only_removal() {
     assert!(!root.0.join("usr/local/bin/sbxr").exists());
     assert!(!root.0.join("var/lib/.sbxr-removal.json").exists());
     assert!(!commands.borrow().iter().any(|c| c.mutation()));
+}
+
+#[test]
+fn fake_package_material_has_explicit_contract_modes() {
+    let root = Root::new();
+    let mut runner = Fake::new(&root.0);
+    runner
+        .effect(Operation::InstallPackage, &Cancellation::new())
+        .unwrap();
+    for (path, mode) in [
+        ("etc/sing-box", 0o755),
+        ("usr/lib/systemd/system/sing-box.service", 0o644),
+    ] {
+        assert_eq!(
+            fs::metadata(root.0.join(path)).unwrap().mode() & 0o7777,
+            mode
+        );
+    }
 }

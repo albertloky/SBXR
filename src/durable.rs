@@ -177,6 +177,14 @@ pub struct OwnershipStore {
     #[cfg(test)]
     fault: Option<FaultPoint>,
 }
+impl Drop for OwnershipStore {
+    fn drop(&mut self) {
+        // This private directory description is never intentionally lent. Store
+        // authority ends here even if a concurrent fork retains a CLOEXEC copy.
+        // Borrowed runtime Host lock descriptions have different semantics.
+        let _ = fs::flock(&self.directory, FlockOperation::Unlock);
+    }
+}
 impl OwnershipStore {
     /// Open an existing 0700 directory. All paths must be absolute and every
     /// component must be a nonsymlink, trusted-owner, non-writable directory.

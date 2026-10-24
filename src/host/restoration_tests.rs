@@ -22,6 +22,7 @@ impl Root {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         for p in ["run/lock", "var/lib", "usr/local/bin"] {
             fs::create_dir_all(root.join(p)).unwrap();
+            fs::set_permissions(root.join(p), fs::Permissions::from_mode(0o755)).unwrap();
         }
         Self(root)
     }

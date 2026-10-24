@@ -153,3 +153,30 @@ fn runtime_duplicate_retains_owner_exclusion_and_rechecks_inode() {
     stdfs::set_permissions(&path, stdfs::Permissions::from_mode(0o600)).unwrap();
     assert!(owner.runtime_start_lock().is_err());
 }
+
+#[test]
+fn store_drop_does_not_unlock_the_distinct_intentionally_lent_host_lock() {
+    let root = Root::new();
+    let state = root.0.join("var/lib/sbxr");
+    stdfs::create_dir_all(&state).unwrap();
+    stdfs::set_permissions(&state, stdfs::Permissions::from_mode(0o700)).unwrap();
+    let owner = HostLock::acquire(&root.0, root.uid()).unwrap();
+    let duplicate = owner.runtime_start_lock().unwrap();
+    let store = crate::durable::OwnershipStore::open(&state, root.uid()).unwrap();
+    drop(store);
+    let next = crate::durable::OwnershipStore::open(&state, root.uid()).unwrap();
+    duplicate.start_lock().verify().unwrap();
+    assert!(matches!(
+        HostLock::existing(&root.0, root.uid()),
+        Err(HostError::Busy)
+    ));
+    drop(duplicate);
+    owner.verify().unwrap();
+    drop(next);
+    assert!(matches!(
+        HostLock::existing(&root.0, root.uid()),
+        Err(HostError::Busy)
+    ));
+    drop(owner);
+    HostLock::existing(&root.0, root.uid()).unwrap();
+}
