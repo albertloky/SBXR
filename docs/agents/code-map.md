@@ -33,6 +33,15 @@ builds fail closed before native effects. Tests use explicit injected roots,
 process/command observations and real local sockets; new native execution is
 unvalidated. Pinned key/DEB acquisition is `src/package_acquisition.rs`, consumed
 by `src/host/linux/material.rs`.
+HTTP Owner enable/rotate/repair/recovery is `src/proxyinstallation/subscription.rs`
+with exact protected effects in `src/host/subscription{,/material,/effects}.rs`.
+Client Identity orchestration is `src/client_identity.rs`, shared Owner bridge
+`src/proxyinstallation/identity.rs`, and protected injected host
+`src/host/identity{,/effects}.rs`. Publication recovery is
+`src/host/filesystem/subscription.rs`; ordinary protected reads still reject all
+hardlinks. The Owner tests in `src/proxyinstallation/subscription_tests.rs` compose
+real local HTTP, locks and cutover consumption with injected system effects.
+These hosts reject `/`; native public Owner dispatch remains closed.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

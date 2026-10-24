@@ -1,5 +1,6 @@
 mod restoration;
 mod runtime;
+mod subscription;
 use super::HostError;
 use crate::records::sha256_hex;
 pub(super) use runtime::PROXY_GATE;
@@ -190,6 +191,18 @@ impl ProtectedFs {
         mode: Mode,
         limit: usize,
     ) -> Result<Option<(Vec<u8>, Evidence)>, HostError> {
+        self.raw_with_links(path, mode, limit, 1)
+    }
+    fn raw_with_links(
+        &self,
+        path: &str,
+        mode: Mode,
+        limit: usize,
+        links: u64,
+    ) -> Result<Option<(Vec<u8>, Evidence)>, HostError> {
+        if !matches!(links, 1 | 2) {
+            return Err(HostError::Unsafe);
+        }
         let Some((dir, name)) = self.parent(path, false)? else {
             return Ok(None);
         };
@@ -200,7 +213,7 @@ impl ProtectedFs {
         };
         if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
             || stat.st_uid != self.uid
-            || stat.st_nlink != 1
+            || u128::from(stat.st_nlink) != u128::from(links)
             || Mode::from_raw_mode(stat.st_mode) & Mode::from_raw_mode(0o7777) != mode
             || stat.st_size < 0
             || stat.st_size as usize > limit
@@ -231,7 +244,7 @@ impl ProtectedFs {
             || after.st_uid != stat.st_uid
             || after.st_mode != stat.st_mode
             || after.st_gid != stat.st_gid
-            || after.st_nlink != 1
+            || u128::from(after.st_nlink) != u128::from(links)
             || after.st_size as usize != bytes.len()
         {
             return Err(HostError::Unsafe);

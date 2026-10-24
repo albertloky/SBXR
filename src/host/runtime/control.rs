@@ -6,6 +6,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceAction {
     StartSubscription,
+    EnableSubscription,
     RestartSubscription,
     StopSubscription,
     StartProxy,
@@ -16,6 +17,7 @@ impl ServiceAction {
     pub fn arguments(self) -> &'static [&'static str] {
         match self {
             Self::StartSubscription => &["start", "sbxr-subscription.service"],
+            Self::EnableSubscription => &["enable", "--now", "sbxr-subscription.service"],
             Self::RestartSubscription => &["restart", "sbxr-subscription.service"],
             Self::StopSubscription => &["stop", "sbxr-subscription.service"],
             Self::StartProxy => &["start", "sing-box.service"],
@@ -25,7 +27,9 @@ impl ServiceAction {
     }
     fn role(self) -> Result<Role, Error> {
         match self {
-            Self::StartSubscription | Self::RestartSubscription => Ok(Role::SubscriptionServing),
+            Self::StartSubscription | Self::EnableSubscription | Self::RestartSubscription => {
+                Ok(Role::SubscriptionServing)
+            }
             Self::StartProxy | Self::RestartProxy => Ok(Role::ProxyStartAuthorize),
             _ => Err(Error::Refused),
         }
@@ -126,6 +130,11 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
         controller.verify().map_err(|_| HostError::Foreign)?;
         Ok(controller)
     }
+    #[cfg(test)]
+    pub(crate) fn into_fixture_commands(self) -> C {
+        assert!(self.socket.is_some() && self.files.fs.path() != Path::new("/"));
+        self.commands
+    }
     fn verify(&self) -> Result<(), Error> {
         self.owner.verify().map_err(refused)?;
         if self.owner.root() != self.files.fs.path() {
@@ -183,6 +192,9 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
         }
         self.verify()?;
         context.check()
+    }
+    pub fn enable_subscription(&self, context: &StartContext) -> Result<(), Error> {
+        self.start(ServiceAction::EnableSubscription, context)
     }
     pub fn start_subscription(&self, restart: bool, context: &StartContext) -> Result<(), Error> {
         self.start(

@@ -47,7 +47,11 @@ pub fn run(
             ExecutionMode::NativeUnavailable => "native unavailable",
         };
         writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
-        writeln!(output, "Subscription status: Not enabled ({qualifier})")?;
+        writeln!(
+            output,
+            "Subscription status: {} ({qualifier})",
+            installation.subscription_status()
+        )?;
         match current.mode {
             ExecutionMode::NativeUnavailable => writeln!(
                 output,
@@ -143,6 +147,34 @@ pub fn run(
                 write_result(output, &result)?;
                 if result.outcome == crate::domain::Outcome::RemovalComplete {
                     return Ok(());
+                }
+            }
+            Action::EnableSubscription
+            | Action::RotateSubscriptionLink
+            | Action::RepairSubscription
+            | Action::FinishSubscriptionChange
+            | Action::RotateClientIdentity
+            | Action::FinishClientIdentityRotation => {
+                let review = installation.review(action);
+                for line in review.plan {
+                    writeln!(output, "{line}")?;
+                }
+                let Some(prepared) = review.prepared else {
+                    writeln!(output, "Action refused. Review again.")?;
+                    continue;
+                };
+                let approval = if matches!(
+                    action,
+                    Action::FinishSubscriptionChange | Action::FinishClientIdentityRotation
+                ) {
+                    Confirmation::Approved
+                } else {
+                    confirmation(input, output, &format!("{action}? [y/N]"))?
+                };
+                let result = installation.execute(prepared, approval);
+                write_result(output, &result)?;
+                if let Some(link) = installation.take_subscription_link() {
+                    writeln!(output, "Subscription Link (sensitive): {}", link.as_str())?;
                 }
             }
             Action::Status => unreachable!("Status is not a menu action"),

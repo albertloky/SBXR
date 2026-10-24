@@ -4,6 +4,10 @@
 //! dispatch require their explicit installed/release prerequisites.
 mod fixture;
 pub use fixture::{FixtureInstallation, StandardInstallation};
+mod identity;
+pub use identity::ClientIdentityInstallation;
+mod subscription;
+pub use subscription::HttpInstallation;
 mod removal;
 pub use removal::RemovalInstallation;
 mod simulation;
@@ -36,6 +40,8 @@ enum PreparedBasis {
     },
     Fixture(fixture::FixturePrepared),
     Removal(crate::removal::PreparedRemoval),
+    Subscription(subscription::HttpPrepared),
+    ClientIdentity(identity::ClientPrepared),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +56,15 @@ pub enum ExecutionMode {
 pub trait Interface {
     fn review(&self, action: Action) -> Review;
     fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result;
+    fn subscription_status(&self) -> &'static str {
+        "Not enabled"
+    }
+    /// One-use disclosure following an approved successful subscription action.
+    fn take_subscription_link(
+        &mut self,
+    ) -> Option<crate::subscription_artifact::HttpSubscriptionLink> {
+        None
+    }
 }
 
 pub struct Review {

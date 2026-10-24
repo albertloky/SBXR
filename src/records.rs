@@ -1,7 +1,9 @@
 //! Strict, secret-free historical authority codecs and current HTTP transitions.
 //! Decoding grants no host effect, migration or release-verification authority.
 mod authority;
+mod http;
 mod identity;
+pub use http::HttpOperation;
 mod operations;
 mod ownership;
 mod resources;

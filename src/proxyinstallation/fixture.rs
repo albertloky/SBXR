@@ -411,7 +411,21 @@ impl<H: SetupHost> StandardInstallation<H> {
     fn result(&self, outcome: Outcome, message: &'static str) -> ActionResult {
         let message = if self.host.is_injected_system() {
             match outcome {
-                Outcome::RemovalComplete | Outcome::RemovalNeedsCompletion => message,
+                Outcome::RemovalComplete
+                | Outcome::RemovalNeedsCompletion
+                | Outcome::SubscriptionEnabled
+                | Outcome::SubscriptionLinkRotated
+                | Outcome::SubscriptionRepaired
+                | Outcome::SubscriptionChangeFinished
+                | Outcome::SubscriptionChangeCleanedUp
+                | Outcome::SubscriptionChangeIncomplete
+                | Outcome::SubscriptionLinkDisplayIncomplete
+                | Outcome::SubscriptionProblemDetected
+                | Outcome::ClientIdentityRotated
+                | Outcome::ClientIdentityRotationFinished
+                | Outcome::ClientIdentityRotationCleanedUp
+                | Outcome::ClientIdentityRotationIncomplete
+                | Outcome::ClientIdentityRotationFailed => message,
                 Outcome::Cancelled => "Injected host action cancelled; no changes made.",
                 Outcome::Refused => {
                     "Injected host authority refused. Preserve unknown state; native deployment is unavailable."

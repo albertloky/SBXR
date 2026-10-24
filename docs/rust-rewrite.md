@@ -59,6 +59,9 @@ or Karing verification.
 | `src/configuration.rs` | Fixed Standard host contract copied from Go: paths, port, sing-box 1.14.3 identity and REALITY destination |
 | `src/proxyinstallation.rs` | Two-operation Interface, shared Review/Prepared Action types, explicit mode and simulation admission |
 | `src/proxyinstallation/fixture.rs` | Shared `StandardInstallation<H>` setup/recovery; the original `FixtureInstallation` alias retains its explicit adapter |
+| `src/proxyinstallation/{subscription,identity}.rs` | Shared Owner Review/Execute bridges for HTTP and sequential Client Identity changes |
+| `src/host/{subscription,identity}.rs` | Exact protected HTTP/identity publication and recovery, retained guards and explicitly injected runtime effects |
+| `src/client_identity.rs` | Durable sequential UUID rotation, nine independent shutdown proofs and irreversible target-only recovery |
 | `src/proxyinstallation/simulation.rs` | Explicit in-memory fixture facts, phases and interruption injection; no operating-system adapter |
 | `src/terminal.rs` | Numbered menu and wizard through Review/Execute; explicit simulation/fixture labels |
 | `src/host.rs`, `src/host/` | `SetupHost` contract, protected descriptor-relative files, original fixtures and Linux observation/injected effects |
@@ -148,8 +151,8 @@ without enabling in-place Go-to-Rust migration.
 |---|---|---|
 | Native public entry and Standard setup/recovery | Shared Review/Execute, wizard/default-No, durable setup and direction, real protected file/system adapters, identity generation and pinned acquisition; fixture end-to-end checks | Wire installed native zero-argument frontend and acquired/generated/recovered inputs to StandardInstallation, including product progress/errors and actual sing-box validation. Public entry remains explicitly simulated. |
 | Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
-| HTTP enablement, link rotation and repair | Strict schema-2 codecs/writers, bounded serving, source/target selection, proxy gate and service primitives | Product Review/Execute and recovery effects for firewall, unit/token/state/staging publication, readiness probes, revocation and finish/cleanup; preserve exact canonical/staged two-link proof. |
-| Client Identity and client disclosure | Entropy, UUID/key validation, server/client encoders, historical rotation codecs and cutover selection | Durable Client Identity writers and full sequential rotation/compromise effects; reviewed secret disclosure, complete details/statuses and display-incomplete behavior. |
+| HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Implement native HTTP runtime observations/effects (loaded units/firewall, readiness and quiescence), compose into the native Owner frontend and qualify on Linux. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
+| Client Identity and client disclosure | Sequential durable rotation/recovery, shared Interface/menu, protected target/configuration/startup files, exact one-use proxy cutover, HTTP artifact refresh with unchanged link, strict Standard+VMess runtime decoding | Supply qualified native identity runtime effects/observations and compromise flow; complete client configuration/link redisclosure, details/status and display-incomplete journeys. Explicit staged-record retry and historical HTTPS certificate selection are absent. |
 | Optional VMess/tunnel | Rendering, client artifacts, identity generation and strict tunnel authority records | Dedicated owner-installed cloudflared prerequisite/ownership inspection, setup/recovery effects, bounded connection probe and product journey. No general protocol plug-in architecture. |
 | Removal and Software Lifecycle | Standard removal/finalizer model and injected effects; signed exact-release acquisition and missing-member restoration in injected roots | Auxiliary removal and native restored-finisher launch/authentication; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
 | Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
@@ -1062,3 +1065,80 @@ process-stability recheck made its changed-identity regression fail; exact sourc
 was restored and that test passed. Temporary fixture roots were cleaned.
 Current Linux branches, native signals/systemd/sandbox effects and deployment
 qualification remain unexecuted. No new upload, push or publication occurred.
+
+
+## HTTP Owner and Client Identity integration increment
+
+`HttpInstallation<H: SubscriptionHost>` now exposes enable, rotate, runtime repair
+and Finish subscription change through the shared two-operation Interface and
+numbered terminal. New changes require default-No confirmation; selecting Finish
+uses the Go recovery confirmation behavior. Every later Review expires earlier
+prepared authority, and Execute compares durable bytes and fresh host facts under
+retained Owner exclusion. Review reuses its observed subscription facts rather
+than spending an additional HTTP probe on its details string. Proxy and
+subscription capability statuses remain separate. HTTP exposure is shown in the
+plan, and only a durably committed, locally verified link is disclosed once after
+approval. A failed readback reports the existing display-incomplete code.
+
+`ProtectedHttpHost` applies exact fixed firewall/unit/link, credential, state and
+staging effects. It preserves SSH/unrelated firewall rules, REALITY configuration,
+foreign paths and independent credentials. Ordinary protected reads still refuse
+hardlinks. The publication helper admits only the exact canonical/staged pair
+with two total links, identical inode/metadata/content and no third alias. Both
+Go-supported fixed absolute and relative service links are recognized. Rotation
+stops and drains the source before forward commitment; recovery never generates
+another credential or resurrects a revoked source. Runtime repair retains the
+same credential and server configuration.
+
+The completed `client_identity` module is exported normally and its structural
+successor relation is admitted by the durable CAS store. `ClientIdentityInstallation`
+binds the worker's opaque prepared values to the shared Review expiration and
+terminal confirmation. `ProtectedIdentityHost` retains whole-host, package and
+managed-writer guards; performs real protected target/artifact/startup publication
+and group-correct configuration replacement; and uses the existing cutover lease
+and service-controller descriptor lending. Its injected runtime contract requires
+explicit admission, loaded-route, shutdown, startup and running observations.
+There is no default successful reload. All nine shutdown facts must hold before
+revocation. Forward recovery republishes only the recorded target. The private
+proxy/serving preparers now share strict Standard+dedicated-VMess decoding and
+retain original input bytes as the configuration hash subject.
+
+Tests exercise enable -> link rotate -> runtime repair, and HTTP enable -> Client
+Identity rotate -> refreshed real loopback response. They use protected disposable
+roots, real fsync/publication/locks/Unix descriptor handoff/one-use gate consumption
+and bounded HTTP threads. Proxy, process, package, loaded-systemd and firewall
+observations/effects remain explicitly injected; no sing-box binary, systemctl,
+APT, iptables or real credential is executed/deployed. The identity effect matrix
+interrupts before and after eight effects, reopens with failing entropy and checks
+cleanup versus target-only completion. Remaining descendants, stale Review,
+default-No, unknown material, foreign staging, mismatched/duplicate VMess JSON and
+foreign links are refused. Two renderer goldens retain exact Go bytes.
+
+The first concrete identity tests caught a startup directory made 0700 by umask
+077 where its contract requires 0755. Publication now creates that directory with
+an explicit mode, and the affected success/interruption/refusal tests pass. The
+existing store-unlock regression remains separate from intentionally lent
+HostLock authority; neither lifetime was weakened.
+
+Both new Owner hosts intentionally reject root `/`; public zero-argument startup
+still constructs the labeled simulator. They do not constitute a qualified native
+Owner backend. Native process/service/firewall composition, client disclosure and
+compromise flows, optional tunnel setup/check, auxiliary removal, native exact
+restoration, explicit staged-record retry, release build/bootstrap and Linux/live
+qualification remain finite follow-ups in the checklist above. The current Mac
+still lacks a ready Linux guest/container or Linux C cross-linker; no tool was
+installed and no new snapshot was uploaded. Local evidence remains under
+`.scratch/acceptance/rust-runtime/`.
+
+The final ownership review also guards the Go forward-only configuration-candidate
+contract: a valid candidate appearing before revocation is preserved and refused.
+Its new regression fails when that guard is removed. Validation passed the full
+378-test offline product suite, then all 14 affected identity tests after this
+last guard and added regression (379 distinct product cases total), eight offline
+packaging tests, format, strict all-target Clippy and the Mac build under umask
+077. Three mutations were caught: skipped descendant proof, expired Review
+authority and a pre-revocation configuration candidate. Sources were restored
+exactly and affected tests passed. Evidence is
+`.scratch/acceptance/rust-runtime/http-owner-outcome.json`; committed Go source
+remains byte-identical to the provenance commit. No new Linux or live pass is
+claimed.

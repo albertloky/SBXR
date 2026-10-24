@@ -1,0 +1,12 @@
+[Unit]
+Description=SBXR Subscription Firewall
+Before=sbxr-subscription.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -ec '/usr/sbin/iptables -w -C INPUT -d 8.8.8.8/32 -p tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT || /usr/sbin/iptables -w -I INPUT 1 -d 8.8.8.8/32 -p tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT'
+ExecStop=/bin/sh -ec 'while /usr/sbin/iptables -w -C INPUT -d 8.8.8.8/32 -p tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT; do /usr/sbin/iptables -w -D INPUT -d 8.8.8.8/32 -p tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT; done'
+
+[Install]
+WantedBy=multi-user.target

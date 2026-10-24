@@ -3,6 +3,7 @@
 //! fixture-only integration tests. The production entry remains unavailable.
 mod filesystem;
 mod fixture;
+pub mod identity;
 pub mod linux;
 pub mod locks;
 pub mod network;
@@ -11,6 +12,7 @@ pub mod restoration;
 pub mod runtime;
 pub mod runtime_io;
 mod setup;
+pub mod subscription;
 pub mod system;
 use crate::records::SetupPhase;
 pub use fixture::{FIXTURE_CONFIGURATION, FixtureHost, HostObservation};

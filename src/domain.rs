@@ -8,6 +8,7 @@ pub enum Status {
     ProblemDetected,
     RemovalIncomplete,
     NotInstalled,
+    ChangeIncomplete,
 }
 
 impl fmt::Display for Status {
@@ -19,6 +20,7 @@ impl fmt::Display for Status {
             Self::ProblemDetected => "Problem detected",
             Self::RemovalIncomplete => "Removal incomplete",
             Self::NotInstalled => "Not installed",
+            Self::ChangeIncomplete => "Change incomplete",
         })
     }
 }
@@ -47,6 +49,12 @@ pub enum Action {
     FinishSetup,
     CompleteRemoval,
     FinishRemoval,
+    EnableSubscription,
+    RotateSubscriptionLink,
+    RepairSubscription,
+    FinishSubscriptionChange,
+    RotateClientIdentity,
+    FinishClientIdentityRotation,
 }
 
 impl fmt::Display for Action {
@@ -59,6 +67,12 @@ impl fmt::Display for Action {
             Self::FinishSetup => "Finish setup",
             Self::CompleteRemoval => "Complete removal",
             Self::FinishRemoval => "Finish removal",
+            Self::EnableSubscription => "Enable subscription",
+            Self::RotateSubscriptionLink => "Rotate subscription link",
+            Self::RepairSubscription => "Repair subscription",
+            Self::FinishSubscriptionChange => "Finish subscription change",
+            Self::RotateClientIdentity => "Rotate Client Identity",
+            Self::FinishClientIdentityRotation => "Finish Client Identity rotation",
         })
     }
 }
@@ -89,6 +103,19 @@ pub enum Outcome {
     CleanedUp,
     RemovalComplete,
     RemovalNeedsCompletion,
+    SubscriptionEnabled,
+    SubscriptionLinkRotated,
+    SubscriptionRepaired,
+    SubscriptionChangeFinished,
+    SubscriptionChangeCleanedUp,
+    SubscriptionChangeIncomplete,
+    SubscriptionLinkDisplayIncomplete,
+    SubscriptionProblemDetected,
+    ClientIdentityRotated,
+    ClientIdentityRotationFinished,
+    ClientIdentityRotationCleanedUp,
+    ClientIdentityRotationIncomplete,
+    ClientIdentityRotationFailed,
 }
 
 impl Outcome {
@@ -102,6 +129,35 @@ impl Outcome {
             Self::CleanedUp => "PROXY-INSTALLATION-SETUP-CLEANED-UP",
             Self::RemovalComplete => "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED",
             Self::RemovalNeedsCompletion => "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED",
+            Self::SubscriptionEnabled => "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED",
+            Self::SubscriptionLinkRotated => "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED",
+            Self::SubscriptionRepaired => "PROXY-INSTALLATION-SUBSCRIPTION-REPAIRED",
+            Self::SubscriptionChangeFinished => "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-FINISHED",
+            Self::SubscriptionChangeCleanedUp => {
+                "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-CLEANED-UP"
+            }
+            Self::SubscriptionChangeIncomplete => {
+                "PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE"
+            }
+            Self::SubscriptionLinkDisplayIncomplete => {
+                "PROXY-INSTALLATION-SUBSCRIPTION-LINK-DISPLAY-INCOMPLETE"
+            }
+            Self::SubscriptionProblemDetected => {
+                "PROXY-INSTALLATION-SUBSCRIPTION-STATUS-PROBLEM-DETECTED"
+            }
+            Self::ClientIdentityRotated => "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATED",
+            Self::ClientIdentityRotationFinished => {
+                "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-FINISHED"
+            }
+            Self::ClientIdentityRotationCleanedUp => {
+                "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-CLEANED-UP"
+            }
+            Self::ClientIdentityRotationIncomplete => {
+                "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-INCOMPLETE"
+            }
+            Self::ClientIdentityRotationFailed => {
+                "PROXY-INSTALLATION-CLIENT-IDENTITY-ROTATION-FAILED"
+            }
         }
     }
 }
