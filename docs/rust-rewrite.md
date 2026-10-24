@@ -60,17 +60,23 @@ or Karing verification.
 | `src/proxyinstallation.rs` | Read-only Review, opaque Prepared Action, fresh Execute admission and setup/recovery direction |
 | `src/proxyinstallation/simulation.rs` | Explicit in-memory fixture facts, phases and interruption injection; no operating-system adapter |
 | `src/terminal.rs` | Numbered menu, Standard setup wizard, bounded input and result presentation |
+| `src/records.rs`, `src/records/` | Strict validated Standard schema-1 and Installed Record codecs, canonical wire bytes and legal setup checkpoints |
+| `src/durable.rs` | Protected fixed-name record publication, directory locking, exact source/target comparison, fsync and recovery inspection |
 | `src/*_tests.rs` | Adjacent domain/orchestration and terminal boundary tests |
 | `tests/menu.rs` | Real Rust executable subprocess tests |
 
-There are no runtime or test dependencies outside Rust's standard library, no Go
-subprocess bridge, no protocol plugin mechanism and no migration framework.
+The first slice used only Rust's standard library. The durable foundation adds
+pinned Serde/serde_json for strict typed records, SHA-256 for the existing digest
+contract, and rustix for safe descriptor-relative Unix filesystem operations.
+No Go subprocess bridge, protocol plugin mechanism or migration framework is
+part of the Rust product.
 The Cargo manifest disables publication. Rust 1.90.0 is pinned for reproducible
 local development; it is not a release-toolchain qualification claim.
 
-For a separate parity-test worker, `tests/parity.rs` and `tests/testdata/parity/`
-are free scopes. Keep these independent of `tests/menu.rs` and implementation
-files while the integration owner is working. Configuration/secret encoding,
+Independent parity checks now live in `tests/parity.rs` and
+`tests/testdata/parity/`. Preserve their assertions and fixtures. They exposed
+and now guard expiration of earlier Prepared Actions after every later Review,
+including Status and View details. Configuration/secret encoding,
 Subscription Serving, Software Lifecycle and a real Ubuntu Host Adapter are
 unimplemented scopes that can be assigned separately after their contracts are
 read. The integration owner should coordinate new `src/lib.rs` exports.
@@ -85,6 +91,7 @@ installation, use `cargo` directly. For this workspace-local installation:
 ```sh
 export CARGO_HOME="$PWD/.scratch/toolchain/cargo"
 export RUSTUP_HOME="$PWD/.scratch/toolchain/rustup"
+export CARGO_TARGET_DIR="$PWD/.scratch/acceptance/rust-r1/target"
 export PATH="$CARGO_HOME/bin:$PATH"
 run="$PWD/.scratch/acceptance/rust-r1"
 mkdir -p "$run"
@@ -110,8 +117,9 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
 
 - Real root-only Ubuntu admission, whole-host/package locks, fresh observations,
   timeouts/cancellation, ownership publication/fsync and protected file handling.
-- Durable schema-compatible records, strict rejection of duplicate/unknown JSON,
-  canonical serialization where digests depend on bytes, and crash-safe recovery.
+- Full schema-2/subscription/tunnel/removal records and production integration of
+  the new Standard schema-1 filesystem foundation. Physical crash/power-loss and
+  native Linux durability qualification remain untested.
 - Real sing-box config validation, cryptographic key/Client Identity generation,
   confirmed client disclosure, identity revocation and sequential cutover.
 - HTTP Subscription Serving and independent link rotation; optional VMess with
@@ -131,3 +139,76 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
 The reference docs' dated stable-release claim was not refreshed here. The parent
 reports verified stable `v3.1.118` / `192`, with `v3.1.119` and `v3.1.120` failed
 prereleases; this increment does not independently verify or use those releases.
+
+
+## Durable foundation increment
+
+`records::OwnershipRecord` supports the exact Standard setup schema-1 subset:
+required fields, ordered permitted resources, the optional exact lock-provisioning
+authority and all fourteen setup phases. Legacy schema-1 without that optional
+authority remains readable and is not converted on read. Unknown/duplicate keys,
+escaped duplicate keys, nulls, wrong types, nested arrays where objects are
+required, trailing documents, invalid digest/identity/resource facts and
+contradictory phase/direction/checkpoints refuse. Schema 2, tunnel and removal
+records refuse; they are not silently reduced to schema 1.
+
+`OwnershipRecord::decode(&[u8])` returns a validated record. `encode()` returns
+Go's field order and trailing newline. Its full Standard output is checked
+against `src/records/testdata/standard-schema1-go.json`, generated offline by the
+preserved Go encoder using Go 1.26.6 and a temporary test overlay. Every byte of
+committed Go source remains unchanged. `InstalledRecord::decode/encode` retain
+schema-1 fields, immutable stable tag syntax, positive sequence, supported
+architecture and the 4 KiB bound. That codec **does not authenticate** an
+executable, release, signature or attestation.
+
+Public record types have private validated data and no public Serde implementation
+that could bypass validation. Ownership Record Debug and all errors omit raw
+input. Only fixed secret-free fields can be encoded; no UUID, private key,
+bearer credential or client artifact is represented.
+
+`durable::OwnershipStore::open(path, owner_uid)` opens an existing absolute
+0700 fixture directory. It walks each path component with no-follow descriptors,
+requires trusted owners and non-writable ancestors, pins the directory inode,
+and takes a nonblocking exclusive advisory lock on that directory descriptor.
+It creates no directory or lock file. This is a **record-store lock**, not the
+production Whole-Host Mutation Lock or a substitute for package/host exclusion.
+A future Ubuntu adapter must use root authority and the real whole-host lock.
+
+The store reads/writes only `proxy-ownership.json` and
+`.proxy-ownership.json.next`. Files must be regular, one-link, expected-owner,
+0600, bounded and bound to the checked inode. `load()` preserves original bytes
+and never rewrites or promotes staged data. Writes require canonical exact
+source bytes and either the identical record or one legal setup/cleanup
+checkpoint; they cannot change installation identity, configuration digest,
+resource authority or reverse a committed direction.
+
+`publish(expected_bytes, &next)` exclusively creates or verifies the exact staged
+target, writes/fsyncs it, rechecks the source and stage, renames, then fsyncs the
+directory. Initial publication uses an atomic no-replace rename. An existing
+incompatible or partial stage is preserved and refused. A failure before rename
+reports `Publication::Unchanged`; a rename or later failure reports
+`Publication::Uncertain`. Callers must reinspect; `synchronize(expected_bytes)`
+reestablishes file and directory durability before relying on an observed target.
+No error causes rollback, replacement of unknown residue or recursive cleanup.
+
+`Snapshot::recovery()` reports Absent, Cleanup, FinishSetup, Running (record phase
+only) or Refused. Staged-only initial authority and a staged activation boundary
+refuse automatic recovery. A committed authoritative record never selects
+cleanup. Known precommit staging can be replayed only by an explicit exact
+publication retry. These APIs do not authorize resource effects, confirm Owner
+intent or prove runtime health; future orchestration must supply those checks.
+
+`next_setup_checkpoint()` advances exactly one setup phase;
+`next_cleanup_checkpoint()` advances one of eight cleanup checkpoints only before
+activation. The store intentionally has no delete API: authority removal still
+needs a real host proof that cleanup completed. No setup operation or new
+credential generation is connected to this filesystem adapter yet.
+
+Offline tests reopen real fixture files after injected empty/partial writes,
+stage fsync, pre/post rename, and pre/post directory fsync interruptions. They
+also cover lock contention, stale bytes, skipped checkpoints, conflicting stage,
+changed directory inode, unsafe ownership/mode, symlinks/hardlinks and preserving
+foreign entries. Test-only fault injection is not a CLI flag or runtime switch.
+Logs and the initial three stale-review parity failures are under
+`.scratch/acceptance/rust-durable/`; local tests are separate from deployment
+qualification and do not simulate an actual power failure.
