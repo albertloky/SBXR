@@ -430,9 +430,13 @@ fn preserved_go_journal_shapes_restore_only_the_test_bound_finisher_and_keep_dir
         let body = bound.encode().unwrap();
         root.write(CURRENT, &body, 0o600);
         let mut host = RestorationHost::injected(&root.0).unwrap();
-        host.restore(&archive, &SelectionBudget::new()).unwrap();
+        let restored = host.restore(&archive, &SelectionBudget::new()).unwrap();
         root.assert_pair(&archive);
         assert_eq!(fs::read(root.0.join(CURRENT)).unwrap(), body);
+        let finisher = host
+            .prepare_finisher(restored, &SelectionBudget::new())
+            .unwrap();
+        finisher.execution_command().unwrap();
         assert_eq!(fs::read(entry.path()).unwrap(), original);
         count += 1;
     }
@@ -525,4 +529,95 @@ fn unreleased_finisher_exec_refuses_injected_root_and_preserves_restoration() {
             Err(HostError::UnsupportedHost)
         ));
     }
+}
+#[test]
+fn exact_tunnel_finisher_execution_preparation_uses_only_bound_descriptor_and_fixed_context() {
+    use std::os::fd::AsRawFd;
+    let a = crate::release_acquisition::fixture_archive_with_capabilities();
+    let root = Root::new();
+    root.state();
+    let tunnel = crate::records::TunnelAuthority::new(
+        "11111111-2222-4333-8444-555555555555",
+        &"a".repeat(64),
+        &"b".repeat(64),
+    )
+    .unwrap();
+    let mut source = OwnershipRecord::new_tunnel_setup(
+        a.record().release_identity(),
+        "8.8.8.8",
+        &"c".repeat(64),
+        tunnel,
+    )
+    .unwrap();
+    while source.phase() != crate::records::SetupPhase::Running {
+        source = source.next_setup_checkpoint().unwrap();
+    }
+    let record = commit_removal(Some(&source), &a.record().release_identity()).unwrap();
+    let authority = record.encode().unwrap();
+    root.write(CURRENT, &authority, 0o600);
+    let mut host = RestorationHost::injected(&root.0).unwrap();
+    let pair = host.restore(&a, &SelectionBudget::new()).unwrap();
+    let finisher = host
+        .prepare_finisher(pair, &SelectionBudget::new())
+        .unwrap();
+    let command = finisher.execution_command().unwrap();
+    assert_eq!(
+        command.get_program(),
+        std::ffi::OsStr::new(&format!(
+            "/proc/self/fd/{}",
+            finisher.descriptor.as_raw_fd()
+        ))
+    );
+    assert_eq!(command.get_args().count(), 0);
+    assert_eq!(command.get_current_dir(), Some(Path::new("/")));
+    let environment: std::collections::BTreeMap<_, _> = command
+        .get_envs()
+        .map(|(k, v)| (k.to_str().unwrap(), v.unwrap().to_str().unwrap()))
+        .collect();
+    assert_eq!(
+        environment,
+        std::collections::BTreeMap::from([
+            ("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
+            ("LANG", "C"),
+            ("LC_ALL", "C")
+        ])
+    );
+    // Run only the Rust harness helper, never the restored ELF or any root cleanup.
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            "host::restoration::tests::finisher_environment_helper",
+        ])
+        .env("SBXR_FINISHER_TEST_SENTINEL", "synthetic-must-be-cleared");
+    fixed_execution_context(&mut child);
+    child
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    assert!(child.status().unwrap().success());
+    assert!(matches!(
+        HostLock::existing(&root.0, root.uid()),
+        Err(HostError::Busy)
+    ));
+    assert!(OwnershipStore::open(&root.0.join(STATE), root.uid()).is_err());
+    assert_eq!(fs::read(root.0.join(CURRENT)).unwrap(), authority);
+    root.write(CURRENT, b"foreign current authority", 0o600);
+    assert!(finisher.execution_command().is_err());
+    // Preparation never executes the restored artifact or recreates proxy/Owner files.
+    assert!(!root.0.join("etc").exists());
+}
+
+// This harness entry executes assertions only in the explicitly selected child.
+#[test]
+fn finisher_environment_helper() {
+    if !std::env::args().any(|arg| arg == "host::restoration::tests::finisher_environment_helper") {
+        return;
+    }
+    assert!(std::env::var_os("SBXR_FINISHER_TEST_SENTINEL").is_none());
+    assert_eq!(
+        std::env::var("PATH").unwrap(),
+        "/usr/sbin:/usr/bin:/sbin:/bin"
+    );
+    assert_eq!(std::env::var("LANG").unwrap(), "C");
+    assert_eq!(std::env::var("LC_ALL").unwrap(), "C");
 }

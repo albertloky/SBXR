@@ -75,14 +75,14 @@ pub enum ConnectorQuery {
 pub enum ConnectorAction {
     Reload,
     Start,
-    StopDisable,
+    Stop,
 }
 impl ConnectorAction {
     pub fn arguments(self) -> &'static [&'static str] {
         match self {
             Self::Reload => &["daemon-reload"],
             Self::Start => &["start", "sbxr-tunnel.service"],
-            Self::StopDisable => &["disable", "--now", "sbxr-tunnel.service"],
+            Self::Stop => &["stop", "sbxr-tunnel.service"],
         }
     }
 }
@@ -447,6 +447,14 @@ impl<I: ConnectorIo> Connector<I> {
     ) -> Result<ConnectorInspection, t::Error> {
         self.inspect_with_digest(owned, None, stop)
     }
+    /// Removal proves the recorded running image without reading Owner credentials.
+    pub fn inspect_removal(
+        &self,
+        authority: &crate::records::TunnelAuthority,
+        stop: &Cancellation,
+    ) -> Result<ConnectorInspection, t::Error> {
+        self.inspect_with_digest(true, Some(authority.binary_sha256()), stop)
+    }
     fn inspect_with_digest(
         &self,
         owned: bool,
@@ -486,7 +494,7 @@ impl<I: ConnectorIo> Connector<I> {
                 return Err(t::Error::Authority);
             }
         } else {
-            if !unit
+            if !(unit || expected_binary.is_some() && stopped)
                 || load != "loaded"
                 || get("FragmentPath")? != "/etc/systemd/system/sbxr-tunnel.service"
                 || get("KillMode")? != "control-group"
@@ -601,10 +609,14 @@ impl<I: ConnectorIo> Connector<I> {
         }
         // No prerequisite read: missing Owner token/binary cannot prevent cleanup.
         // Running cleanup still proves process ownership in inspect above.
-        self.io
-            .command(ConnectorAction::StopDisable, g, stop)
-            .map_err(host_error)?;
-        if !self.inspect(true, stop)?.stopped {
+        if self.files(true)?.0 {
+            self.io
+                .command(ConnectorAction::Stop, g, stop)
+                .map_err(host_error)?;
+        } else if !state.stopped {
+            return Err(t::Error::Authority);
+        }
+        if !self.inspect_removal(authority, stop)?.stopped {
             return Err(t::Error::Authority);
         }
         self.fs
@@ -621,7 +633,7 @@ impl<I: ConnectorIo> Connector<I> {
         self.io
             .command(ConnectorAction::Reload, g, stop)
             .map_err(host_error)?;
-        if !self.inspect(true, stop)?.empty {
+        if !self.inspect_removal(authority, stop)?.empty {
             return Err(t::Error::Authority);
         }
         g.verify().map_err(refused)

@@ -154,7 +154,7 @@ without enabling in-place Go-to-Rust migration.
 | HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Connect the qualified public entry and validate actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
 | Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and complete public entry/details composition. Explicit staged-record retry and historical HTTPS certificate selection remain absent. |
 | Optional VMess/tunnel | Rendering, client artifacts, identity generation, strict authority plus setup/recovery/check orchestration and probe session contracts | Connect guarded native connector and real local/public WS plus authenticated VMess-only egress probes to the Owner frontend; qualify the optional profile. No general protocol plug-in architecture. |
-| Removal and Software Lifecycle | Standard removal/finalizer model and injected effects; signed exact-release acquisition and missing-member restoration in injected roots | Auxiliary removal and native restored-finisher launch/authentication; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
+| Removal and Software Lifecycle | Standard/current HTTP/Client Identity artifact and dedicated tunnel removal with interrupted retries; exact finalization, signed acquisition, protected missing-member restoration and fixed descriptor execution preparation | Historical HTTPS/renewal auxiliary cleanup, actual native restored-finisher exec and Linux qualification; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
 | Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
 | Deployment qualification | Local tests and parent Linux evidence for its named earlier snapshot | All five current live journeys for the exact packaged Rust candidate, followed by any separately authorized signing/publication. No local test result is deployment qualification. |
 
@@ -1520,3 +1520,53 @@ byte-for-byte before final integrated validation. Evidence is under
 `.scratch/acceptance/rust-package-default/`. Go reference source remains unchanged.
 These results do not establish native Linux, real package/systemd, actual VMess
 traffic, power-loss durability or exact candidate release qualification.
+
+
+## Current auxiliary removal and exact-finisher preparation
+
+`StandardRemovalHost` now handles the pending HTTP Client Identity subscription
+artifact, serving-state candidate and fixed serving startup-upgrade publication.
+Each canonical/staged or exact two-link publication must match the recorded
+artifact digest or exact state/unit bytes, root ownership, mode, group and safe
+parents. The ordinary private readers still reject hardlinks. Unknown artifacts
+without rotation authority are refused. Cleanup can reopen after each completed
+file step, never publishes a source/target configuration, and preserves committed
+removal direction when later serving shutdown fails. Historical HTTPS remains
+unavailable; no certificate/CA/account operation was added.
+
+`with_tunnel` composes the existing `Connector` with the current HTTP auxiliary
+runtime. Native Owner construction now supplies that composition. Dedicated
+removal authenticates the recorded process digest and loaded unit properties,
+retains the original Owner lock and cancellation, and needs no Owner token,
+cloudflared file or external connection. It stops only `sbxr-tunnel.service`,
+unlinks only the recorded exact unit/stage/link, and reloads. It preserves the
+Owner token/binary, unrelated connector configuration/services and other target
+links. A missing unit with a still-cached loaded route is admitted only for
+removal when stopped and all loaded properties exactly match; this supports an
+interrupted final reload. Ordinary inspection/start remains strict. Foreign
+units, stages, links, drop-ins, processes and ambiguous routes remain refused.
+
+`RestoredFinisher` now uses one tested fixed command builder for its retained
+exact executable descriptor, zero arguments, cleared minimal environment,
+interactive stdio and root working directory. It revalidates journal and inode
+before preparation. The native path retains the descriptor through exec path
+resolution and explicitly releases the private store and host exclusion before
+takeover. Tests prepare commands for all ten preserved Go recovery fixtures and
+current tunnel authority without executing their artifacts. This strengthens
+execution preparation; actual Linux exec remains unvalidated and gated.
+
+The production public/effect gates remain closed. This increment does not add
+historical HTTPS/renewal removal, arbitrary partial-file deletion, a Go-to-Rust
+migration, publication/certificate recovery writers or packaging workflows.
+Native systemd/cgroup/process behavior, physical crash durability and exact
+packaged live qualification remain separate work.
+
+Final validation passed **492 product tests**, **8 offline packaging tests**,
+format, strict all-target Clippy and the Mac debug build under umask 077. Six
+mutations were caught: missing artifact/process digest checks, widening the
+stopped cached-unit exception to ordinary inspection, omitting finisher authority
+recheck/environment clearing, and broad connector disablement. Source was
+restored byte-for-byte before final integrated checks. Evidence is under
+`.scratch/acceptance/rust-aux-remove/`; temporary fixture roots were cleaned.
+Go reference source is unchanged. These checks do not qualify native cleanup,
+Linux exec, outside traffic or a stable release.

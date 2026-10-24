@@ -6,7 +6,10 @@ mod package_default;
 mod tunnel;
 pub use tunnel::{TunnelRuntime, TunnelRuntimeFacts, TunnelStandard};
 mod removal;
-pub use removal::{AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime, StandardRemovalHost};
+pub use removal::{
+    AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime, StandardRemovalHost, TunnelRemovalFacts,
+    TunnelRemovalRuntime,
+};
 pub(super) mod observation;
 pub use material::SetupMaterial;
 use observation::{Facts, ubuntu};

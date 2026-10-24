@@ -2103,3 +2103,6 @@ mod tunnel_composition;
 
 #[path = "linux/package_default_tests.rs"]
 mod package_defaults;
+
+#[path = "linux/auxiliary_removal_tests.rs"]
+mod auxiliary_removal;

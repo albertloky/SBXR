@@ -858,7 +858,7 @@ impl ConnectorIo for SystemIo {
         state.commands.push(a);
         match a {
             ConnectorAction::Start => state.active = true,
-            ConnectorAction::StopDisable => state.active = false,
+            ConnectorAction::Stop => state.active = false,
             ConnectorAction::Reload => {}
         }
         Ok(())
@@ -910,7 +910,7 @@ fn exact_connector_install_start_and_cleanup_retain_guard_and_preserve_prerequis
         [
             ConnectorAction::Reload,
             ConnectorAction::Start,
-            ConnectorAction::StopDisable,
+            ConnectorAction::Stop,
             ConnectorAction::Reload
         ]
     );

@@ -1,7 +1,8 @@
-//! Current HTTP and Client Identity removal over the same protected paths used
-//! by their writers. No certificate/tunnel/account acquisition is part of removal.
+//! Current HTTP and Client Identity removal over their exact protected paths.
+//! Dedicated tunnel cleanup reuses the connector; no credential acquisition.
 use super::*;
 use crate::{
+    host::linux::TunnelRemovalFacts,
     host::{identity as ci, locks::HostLock, subscription as http},
     records::ServingAuthority,
 };
@@ -23,6 +24,21 @@ pub trait AuxiliaryRuntime {
         record: &OwnershipRecord,
         owner: &Arc<HostLock>,
     ) -> Result<(), HostError>;
+    fn inspect_tunnel(
+        &self,
+        _: &crate::records::TunnelAuthority,
+        _: &Cancellation,
+    ) -> Result<TunnelRemovalFacts, HostError> {
+        Err(HostError::LiveUnavailable)
+    }
+    fn remove_tunnel(
+        &mut self,
+        _: &crate::records::TunnelAuthority,
+        _: &Arc<HostLock>,
+        _: &Cancellation,
+    ) -> Result<(), HostError> {
+        Err(HostError::LiveUnavailable)
+    }
 }
 pub struct NoAuxiliaryRuntime;
 impl AuxiliaryRuntime for NoAuxiliaryRuntime {
@@ -84,7 +100,6 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
     pub(super) fn current_auxiliary(&self, record: &OwnershipRecord) -> Result<bool, HostError> {
         let v = wire(record)?;
         for key in [
-            "tunnel",
             "renewal",
             "certificate_activation",
             "https_retirement",
@@ -93,11 +108,6 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             if v.get(key).is_some() {
                 return Err(HostError::LiveUnavailable);
             }
-        }
-        if v.get("client_identity_rotation")
-            .is_some_and(|r| r.get("subscription").is_some())
-        {
-            return Err(HostError::LiveUnavailable);
         }
         for resource in [
             v.get("subscription_resources"),
@@ -129,7 +139,11 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         }
         Ok(!a.is_empty())
     }
-    fn publication_bodies(&self, path: &str, mode: Mode) -> Result<Vec<Vec<u8>>, HostError> {
+    pub(super) fn publication_bodies(
+        &self,
+        path: &str,
+        mode: Mode,
+    ) -> Result<Vec<Vec<u8>>, HostError> {
         for selected in [path.to_owned(), format!("{path}.sbxr-next")] {
             if self
                 .inner
@@ -154,7 +168,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         };
         Ok(canonical.into_iter().chain(stage).collect())
     }
-    fn clear_publication(
+    pub(super) fn clear_publication(
         &self,
         path: &str,
         mode: Mode,
@@ -181,7 +195,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         }
         Ok(())
     }
-    fn auxiliary_file(
+    pub(super) fn auxiliary_file(
         &self,
         path: &str,
         allowed: &[Vec<u8>],
@@ -402,12 +416,39 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             for p in [http::STATE, http::CANDIDATE_STATE] {
                 present |= self.auxiliary_file(p, &states, 0o600, remove)?;
             }
-            present |= self.auxiliary_file(
-                http::UNIT,
-                &[crate::runtime_handoff::SERVING_UNIT.as_bytes().to_vec()],
-                0o644,
-                remove,
-            )?;
+            if wire(record)?
+                .get("client_identity_rotation")
+                .is_some_and(|r| r.get("subscription").is_some())
+            {
+                // The upgrade candidate has its own publication slot and can be
+                // a proved two-link pair. It is validated/removed separately.
+                if let Some((bytes, proof)) =
+                    self.inner
+                        .fs
+                        .raw(http::UNIT, Mode::from_raw_mode(0o644), 1 << 20)?
+                {
+                    if bytes != crate::runtime_handoff::SERVING_UNIT.as_bytes()
+                        || proof.gid != self.inner.fs.gid
+                    {
+                        return Err(HostError::Foreign);
+                    }
+                    present = true;
+                    if remove {
+                        self.inner.fs.remove_bytes(
+                            http::UNIT,
+                            &bytes,
+                            Mode::from_raw_mode(0o644),
+                        )?;
+                    }
+                }
+            } else {
+                present |= self.auxiliary_file(
+                    http::UNIT,
+                    &[crate::runtime_handoff::SERVING_UNIT.as_bytes().to_vec()],
+                    0o644,
+                    remove,
+                )?;
+            }
             present |= self.auxiliary_link(
                 http::LINK,
                 "../sbxr-subscription.service",
@@ -433,6 +474,8 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                         "credential.sbxr-next",
                         "serving.json",
                         "serving.json.sbxr-next",
+                        "client-artifact",
+                        "client-artifact.sbxr-next",
                     ]
                     .contains(&p.as_str())
                 }) {
@@ -453,6 +496,8 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         let http = self.current_auxiliary(record)?;
         let startup = self.startup(record, false)?;
         let target = self.identity_target(record, false)?;
+        let client_subscription = self.identity_subscription(record, false)?;
+        let tunnel = self.tunnel_state(record)?;
         if !http {
             for p in [
                 http::TOKEN,
@@ -469,7 +514,9 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                     return Err(HostError::Foreign);
                 }
             }
-            return Ok(format!("startup:{startup};target:{target}"));
+            return Ok(format!(
+                "startup:{startup};target:{target};subscription:{client_subscription};tunnel:{tunnel:?}"
+            ));
         }
         let material = self.http_material(record, false, false)?;
         let firewall = self.http_material(record, false, true)?;
@@ -493,7 +540,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         }
         Ok(sha256_hex(
             format!(
-                "{startup}:{target}:{material}:{firewall}:{}:{}:{}:{}",
+                "{startup}:{target}:{client_subscription}:{tunnel:?}:{material}:{firewall}:{}:{}:{}:{}",
                 facts.fingerprint,
                 facts.serving_running,
                 facts.quiescent,
@@ -511,6 +558,10 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         Ok(match effect {
             RemovalEffect::ProxyStartup => self.startup(record, false)?,
             RemovalEffect::ClientIdentityTarget => self.identity_target(record, false)?,
+            RemovalEffect::ClientIdentitySubscription => {
+                self.identity_subscription(record, false)?
+            }
+            RemovalEffect::DedicatedTunnel => !self.tunnel_state(record)?.empty,
             RemovalEffect::ServingRuntime
             | RemovalEffect::PreparedSubscription
             | RemovalEffect::SubscriptionRotation
@@ -533,6 +584,20 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                 }
                 self.startup(record, true)?;
                 self.inner.runner.reload_units(&self.inner.stop)
+            }
+            RemovalEffect::DedicatedTunnel => {
+                let authority = record.tunnel_authority().ok_or(HostError::Foreign)?;
+                let owner = self.inner.lock.as_ref().ok_or(HostError::Unsafe)?.clone();
+                self.auxiliary
+                    .remove_tunnel(&authority, &owner, &self.inner.stop)?;
+                if !self.tunnel_state(record)?.empty {
+                    return Err(HostError::Unsafe);
+                }
+                Ok(())
+            }
+            RemovalEffect::ClientIdentitySubscription => {
+                self.identity_subscription(record, true)?;
+                Ok(())
             }
             RemovalEffect::ClientIdentityTarget => {
                 self.identity_target(record, true)?;

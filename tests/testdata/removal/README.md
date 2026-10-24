@@ -13,13 +13,22 @@ firewall commands, Cloudflare, certificate issuance, a VPS or a real installer.
 The tests demonstrate orchestration, not Linux durability, release authentication,
 exact executable restoration, packaged acceptance or live qualification.
 
-`tests/removal.rs` now imports the public library module. Core integration adds
-`StandardRemovalHost`, exact durable transitions/finalization and the shared
-Interface/terminal. The concrete adapter is Standard-only and injected; native
-effects, auxiliary resources and authenticated restoration remain unavailable.
+The original worker handoff exported `tests/removal.rs` through the public
+library module and identified `StandardRemovalHost`, durable transitions and
+shared Interface/terminal as integration work. Native effects, auxiliary cleanup
+and authenticated restoration were unavailable in that standalone increment.
 No existing Go installation is migrated.
 
-Current integration boundaries:
+Current Rust core now also composes exact current HTTP Client Identity artifact
+and dedicated tunnel removal with fixture-backed interruption/reopen tests.
+Native Owner construction uses the connector adapter; Owner token/binary and
+foreign resources remain outside removal authority. Exact restoration and fixed
+retained-descriptor command preparation are integrated, but actual Linux exec,
+systemd/cgroup behavior and release qualification remain unperformed. Historical
+HTTPS/renewal effects still refuse. No existing installation is migrated.
+
+Original worker handoff boundaries (subsequent implementation is recorded in
+`docs/rust-rewrite.md`):
 
 - Library export, shared Complete/Finish actions, distinct states/machine codes,
   every-Review token invalidation and exact `REMOVE SBXR` confirmation are integrated.

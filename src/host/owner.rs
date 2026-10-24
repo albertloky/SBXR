@@ -12,6 +12,13 @@ use crate::{
 /// The executing bytes must already be authenticated by NativeObserver. This
 /// adapter never creates an installed proof from local metadata alone.
 type CachedPackage = std::sync::Arc<(Vec<u8>, Vec<u8>)>;
+type NativeRemovalHost<'a> = super::linux::StandardRemovalHost<
+    super::system::SystemRunner<super::system::NativeTransport>,
+    super::linux::TunnelRemovalRuntime<
+        super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>,
+        super::tunnel_native::NativeConnectorIo,
+    >,
+>;
 pub struct NativeOwnerSources<'a> {
     proof: &'a AuthenticatedInstalled,
     package: std::cell::RefCell<Option<CachedPackage>>,
@@ -202,15 +209,7 @@ impl<'a> NativeOwnerSources<'a> {
             self.proof,
         )
     }
-    fn removal_host(
-        &self,
-    ) -> Result<
-        super::linux::StandardRemovalHost<
-            super::system::SystemRunner<super::system::NativeTransport>,
-            super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>,
-        >,
-        HostError,
-    > {
+    fn removal_host(&self) -> Result<NativeRemovalHost<'a>, HostError> {
         let fs = ProtectedFs::native()?;
         let current = super::linux::observation::read_ownership(&fs)?;
         let finalizer = fs
@@ -231,9 +230,10 @@ impl<'a> NativeOwnerSources<'a> {
         Ok(super::linux::StandardRemovalHost::new(
             self.offline_host(material, record.map(|r| r.public_ipv4()).unwrap_or(""))?,
         )?
-        .with_auxiliary(super::owner_runtime::OwnerRuntime::native_unreleased(
-            self.proof,
-        )?))
+        .with_auxiliary(super::linux::TunnelRemovalRuntime::new(
+            super::owner_runtime::OwnerRuntime::native_unreleased(self.proof)?,
+            super::tunnel_native::Connector::native_unreleased()?,
+        )))
     }
     pub fn frontend(self) -> OwnerInstallation<'a, Self> {
         OwnerInstallation::new(self)

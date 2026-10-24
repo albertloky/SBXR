@@ -12,6 +12,9 @@ impl<H: RemovalHost> RemovalInstallation<H> {
             owner: RefCell::new(Rc::new(())),
         }
     }
+    pub fn into_host(self) -> H {
+        self.inner.into_inner().into_host()
+    }
     pub fn host_mut(&mut self) -> &mut H {
         *self.owner.get_mut() = Rc::new(());
         self.inner.get_mut().host_mut()

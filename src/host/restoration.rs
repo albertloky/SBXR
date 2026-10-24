@@ -76,32 +76,37 @@ impl RestoredFinisher {
         self.recheck()?;
         #[cfg(target_os = "linux")]
         {
-            use std::os::{fd::AsRawFd, unix::process::CommandExt};
+            use std::os::unix::process::CommandExt;
+            let mut command = self.execution_command()?;
             let Self {
                 mut host,
                 descriptor,
                 ..
             } = self;
-            let path = format!("/proc/self/fd/{}", descriptor.as_raw_fd());
             // Explicitly unlock the private store before exec: CLOEXEC closing
             // alone is insufficient when another fork retains its description.
             host.writer = None;
             host.fs.authorize_native_writes(None)?;
             drop(host);
-            let _error = std::process::Command::new(path)
-                .arg0("/usr/local/bin/sbxr")
-                .env_clear()
-                .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-                .env("LANG", "C")
-                .env("LC_ALL", "C")
-                .current_dir("/")
-                .exec();
+            let _error = command.exec();
+            // The authenticated descriptor remains open through exec's pathname
+            // resolution. CLOEXEC closes it only after the ELF image is selected.
+            drop(descriptor);
             Err(HostError::Io)
         }
         #[cfg(not(target_os = "linux"))]
         {
             Err(HostError::UnsupportedHost)
         }
+    }
+    #[cfg(any(target_os = "linux", test))]
+    fn execution_command(&self) -> Result<std::process::Command, HostError> {
+        use std::os::fd::AsRawFd;
+        self.recheck()?;
+        let mut command =
+            std::process::Command::new(format!("/proc/self/fd/{}", self.descriptor.as_raw_fd()));
+        fixed_execution_context(&mut command);
+        Ok(command)
     }
     fn recheck(&self) -> Result<(), HostError> {
         self.host.recheck()?;
@@ -140,6 +145,22 @@ impl RestoredFinisher {
         Ok(())
     }
 }
+#[cfg(any(target_os = "linux", test))]
+fn fixed_execution_context(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    command
+        .arg0("/usr/local/bin/sbxr")
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .current_dir("/")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+}
+
 fn refused(_: impl std::fmt::Debug) -> HostError {
     HostError::Foreign
 }

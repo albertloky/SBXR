@@ -1,6 +1,8 @@
 //! Concrete offline removal with exact current HTTP/startup auxiliary ownership.
-//! Historical HTTPS/tunnel authority remains unavailable. Production entry is closed.
+//! Historical HTTPS authority remains unavailable. Production entry is closed.
 mod auxiliary;
+mod client_subscription;
+mod tunnel;
 use super::*;
 use crate::{
     durable::{OWNERSHIP_FILE, OwnershipStore, STAGED_FILE},
@@ -10,6 +12,7 @@ use crate::{
     },
 };
 pub use auxiliary::{AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime};
+pub use tunnel::{TunnelRemovalFacts, TunnelRemovalRuntime};
 const CURRENT: &str = "var/lib/sbxr/proxy-ownership.json";
 const FINAL: &str = "var/lib/.sbxr-removal.json";
 pub struct StandardRemovalHost<R, B = NoAuxiliaryRuntime> {
@@ -69,6 +72,26 @@ impl<R: CommandRunner> StandardRemovalHost<R, NoAuxiliaryRuntime> {
     }
 }
 impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
+    /// Compose dedicated connector removal with the already selected HTTP runtime.
+    pub fn with_tunnel<I: crate::host::tunnel_native::ConnectorIo>(
+        self,
+        connector: crate::host::tunnel_native::Connector<I>,
+    ) -> StandardRemovalHost<R, TunnelRemovalRuntime<B, I>> {
+        StandardRemovalHost {
+            auxiliary: TunnelRemovalRuntime::new(self.auxiliary, connector),
+            inner: self.inner,
+            store: self.store,
+            package_locks: self.package_locks,
+            installed: self.installed,
+            executable: self.executable,
+            #[cfg(test)]
+            fault: self.fault,
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn interrupt_auxiliary_removal(&mut self, point: u8) {
+        self.fault = Some(100 + point);
+    }
     #[cfg(test)]
     pub(super) fn interrupt_finalization(&mut self, point: u8) {
         self.fault = Some(point)
@@ -142,6 +165,9 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             crate::host::subscription::LINK,
             crate::host::subscription::FIREWALL,
             crate::host::subscription::FIREWALL_LINK,
+            "etc/systemd/system/sbxr-tunnel.service",
+            "etc/systemd/system/multi-user.target.wants/sbxr-tunnel.service",
+            "etc/systemd/system/sbxr-subscription.service.sbxr-next.sbxr-next",
         ] {
             if self.inner.fs.metadata(path)?.is_some()
                 || self

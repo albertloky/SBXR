@@ -221,7 +221,7 @@ impl crate::host::tunnel_native::ConnectorIo for ConnectorFixture {
         match a {
             A::Reload => {}
             A::Start => self.active.store(true, Ordering::SeqCst),
-            A::StopDisable => self.active.store(false, Ordering::SeqCst),
+            A::Stop => self.active.store(false, Ordering::SeqCst),
         };
         Ok(())
     }
