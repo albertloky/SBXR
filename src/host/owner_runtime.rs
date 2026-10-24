@@ -4,6 +4,7 @@
 mod command;
 mod disclosure;
 mod effects;
+mod historical;
 mod observation;
 mod probe;
 mod removal;
@@ -23,7 +24,7 @@ use crate::{
     subscription_artifact::SubscriptionCredential,
     subscription_serving::Cancellation,
 };
-pub use command::{NativeIo, Observation, OwnerIo, Property, Unit};
+pub use command::{HistoricalObservation, NativeIo, Observation, OwnerIo, Property, Unit};
 use rustix::fs::Mode;
 use std::{
     path::Path,

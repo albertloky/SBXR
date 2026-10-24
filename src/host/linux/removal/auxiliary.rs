@@ -24,6 +24,13 @@ pub trait AuxiliaryRuntime {
         record: &OwnershipRecord,
         owner: &Arc<HostLock>,
     ) -> Result<(), HostError>;
+    fn historical(
+        &self,
+        _: &OwnershipRecord,
+        _: &[crate::host::historical::UnfinishedRenewal],
+    ) -> Result<super::HistoricalRuntimeFacts, HostError> {
+        Err(HostError::LiveUnavailable)
+    }
     fn inspect_tunnel(
         &self,
         _: &crate::records::TunnelAuthority,
@@ -69,22 +76,25 @@ fn authorities(
                 && let (Some(id), Some(hash)) =
                     (object.get("link_id"), object.get("credential_sha256"))
             {
-                if object.get("http") != Some(&serde_json::Value::Bool(true))
-                    && !object.get("resources").is_some_and(|r| r["http"] == true)
+                let a = if object.get("http") == Some(&serde_json::Value::Bool(true))
+                    || object.get("resources").is_some_and(|r| r["http"] == true)
                 {
-                    return Err(HostError::LiveUnavailable);
-                }
-                let a = ServingAuthority::http_digest(
-                    id.as_str().ok_or(HostError::Foreign)?,
-                    hash.as_str().ok_or(HostError::Foreign)?,
-                )
-                .map_err(|_| HostError::Foreign)?;
+                    ServingAuthority::http_digest(
+                        id.as_str().ok_or(HostError::Foreign)?,
+                        hash.as_str().ok_or(HostError::Foreign)?,
+                    )
+                    .map_err(|_| HostError::Foreign)?
+                } else {
+                    crate::host::historical::authority(value)?
+                };
                 if !result.contains(&a) {
                     result.push(a);
                 }
             }
-            for v in object.values() {
-                authorities(v, result)?;
+            for (key, v) in object {
+                if key != "https_retirement" {
+                    authorities(v, result)?;
+                }
             }
         }
         serde_json::Value::Array(values) => {
@@ -99,15 +109,8 @@ fn authorities(
 impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
     pub(super) fn current_auxiliary(&self, record: &OwnershipRecord) -> Result<bool, HostError> {
         let v = wire(record)?;
-        for key in [
-            "renewal",
-            "certificate_activation",
-            "https_retirement",
-            "subscription_transport_migration",
-        ] {
-            if v.get(key).is_some() {
-                return Err(HostError::LiveUnavailable);
-            }
+        if v["subscription_transport_migration"] == true {
+            return Err(HostError::LiveUnavailable);
         }
         for resource in [
             v.get("subscription_resources"),
@@ -117,20 +120,14 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         .into_iter()
         .flatten()
         {
-            if resource["http"] != true
-                || resource["firewall_sha256"]
-                    != sha256_hex(&http::http_firewall_unit(record.public_ipv4())?)
+            if resource["firewall_sha256"]
+                != sha256_hex(&crate::host::historical::firewall_unit(record)?)
             {
                 return Err(HostError::Foreign);
             }
         }
         let mut a = Vec::new();
         authorities(&v, &mut a)?;
-        if v.get("subscription_resources")
-            .is_some_and(|r| r["http"] != true)
-        {
-            return Err(HostError::LiveUnavailable);
-        }
         if let Some(startup) = v.get("proxy_startup")
             && startup["drop_in_sha256"]
                 != sha256_hex(crate::client_identity::STARTUP_DROP_IN.as_bytes())
@@ -399,7 +396,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             }
             present |= self.auxiliary_file(
                 http::FIREWALL,
-                &[http::http_firewall_unit(record.public_ipv4())?],
+                &[crate::host::historical::firewall_unit(record)?],
                 0o644,
                 remove,
             )?;
@@ -427,7 +424,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                         .fs
                         .raw(http::UNIT, Mode::from_raw_mode(0o644), 1 << 20)?
                 {
-                    if bytes != crate::runtime_handoff::SERVING_UNIT.as_bytes()
+                    if !crate::host::historical::known_serving_units().contains(&bytes)
                         || proof.gid != self.inner.fs.gid
                     {
                         return Err(HostError::Foreign);
@@ -444,7 +441,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             } else {
                 present |= self.auxiliary_file(
                     http::UNIT,
-                    &[crate::runtime_handoff::SERVING_UNIT.as_bytes().to_vec()],
+                    &crate::host::historical::known_serving_units(),
                     0o644,
                     remove,
                 )?;
@@ -494,6 +491,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
     }
     pub(super) fn inspect_auxiliary(&self, record: &OwnershipRecord) -> Result<String, HostError> {
         let http = self.current_auxiliary(record)?;
+        let historical = self.inspect_historical(record)?;
         let startup = self.startup(record, false)?;
         let target = self.identity_target(record, false)?;
         let client_subscription = self.identity_subscription(record, false)?;
@@ -515,22 +513,16 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                 }
             }
             return Ok(format!(
-                "startup:{startup};target:{target};subscription:{client_subscription};tunnel:{tunnel:?}"
+                "startup:{startup};target:{target};subscription:{client_subscription};tunnel:{tunnel:?};historical:{historical}"
             ));
         }
         let material = self.http_material(record, false, false)?;
         let firewall = self.http_material(record, false, true)?;
         let facts = self.auxiliary.observe(record)?;
-        let absent_rules = crate::host::subscription::material::firewall(
-            &facts.firewall_rules,
-            record.public_ipv4(),
-            false,
-        );
-        let own_rules = crate::host::subscription::material::firewall(
-            &facts.firewall_rules,
-            record.public_ipv4(),
-            true,
-        );
+        let absent_rules =
+            crate::host::historical::firewall_rules(record, &facts.firewall_rules, false);
+        let own_rules =
+            crate::host::historical::firewall_rules(record, &facts.firewall_rules, true);
         if !absent_rules && !own_rules
             || facts.serving_running && self.inner.fs.metadata(http::UNIT)?.is_none()
             || !facts.serving_running && !facts.quiescent
@@ -540,7 +532,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         }
         Ok(sha256_hex(
             format!(
-                "{startup}:{target}:{client_subscription}:{tunnel:?}:{material}:{firewall}:{}:{}:{}:{}",
+                "{startup}:{target}:{client_subscription}:{tunnel:?}:{historical}:{material}:{firewall}:{}:{}:{}:{}",
                 facts.fingerprint,
                 facts.serving_running,
                 facts.quiescent,
@@ -562,6 +554,9 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                 self.identity_subscription(record, false)?
             }
             RemovalEffect::DedicatedTunnel => !self.tunnel_state(record)?.empty,
+            RemovalEffect::RenewalIntegration | RemovalEffect::RetiredHttps => {
+                self.historical_effect_present(effect, record)?
+            }
             RemovalEffect::ServingRuntime
             | RemovalEffect::PreparedSubscription
             | RemovalEffect::SubscriptionRotation
@@ -584,6 +579,9 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                 }
                 self.startup(record, true)?;
                 self.inner.runner.reload_units(&self.inner.stop)
+            }
+            RemovalEffect::RenewalIntegration | RemovalEffect::RetiredHttps => {
+                self.apply_historical(effect, record)
             }
             RemovalEffect::DedicatedTunnel => {
                 let authority = record.tunnel_authority().ok_or(HostError::Foreign)?;
@@ -619,13 +617,18 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                     return Err(HostError::Unsafe);
                 }
                 if firewall
-                    && !crate::host::subscription::material::firewall(
+                    && !crate::host::historical::firewall_rules(
+                        record,
                         &facts.firewall_rules,
-                        record.public_ipv4(),
                         false,
                     )
                 {
                     return Err(HostError::Unsafe);
+                }
+                if firewall {
+                    self.remove_historical_resources(record)?;
+                } else {
+                    self.remove_historical_serving(record)?;
                 }
                 self.http_material(record, true, firewall)?;
                 self.inner.runner.reload_units(&self.inner.stop)?;

@@ -634,12 +634,26 @@ fn publication_failure_never_continues_and_restart_observes_rename_before_direct
             drop(h);
             let mut h = DiskHost::open(&root);
             match fault {
-                PublicationFault::Staged => {
+                PublicationFault::Staged if cp == Checkpoint::Authorized => {
+                    // No canonical operation exists yet. Staging cannot grant it.
                     assert_eq!(
                         review_finish(&mut h, &Cancellation::new()).unwrap_err(),
                         Error::Publication
                     );
                     assert!(root.0.join("stage").exists());
+                }
+                PublicationFault::Staged => {
+                    let staged = OwnershipRecord::decode(&get(&root.0, "stage").unwrap()).unwrap();
+                    let direction = rotation(&staged).unwrap().checkpoint.direction();
+                    assert_eq!(
+                        finish_now(&mut h),
+                        Ok(if direction == ChangeDirection::Cleanup {
+                            Outcome::CleanedUp
+                        } else {
+                            Outcome::Finished
+                        })
+                    );
+                    assert!(!root.0.join("stage").exists());
                 }
                 PublicationFault::Before if cp == Checkpoint::Authorized => {
                     assert!(h.record().pending_change().is_none());
@@ -1115,4 +1129,95 @@ fn changed_authenticated_release_invalidates_both_prepared_rotation_and_finish()
             assert!(host.events.is_empty());
         }
     }
+}
+
+#[test]
+fn staged_revocation_retry_requires_fresh_shutdown_and_never_promotes_during_review() {
+    for bad in 0..9 {
+        let root = Root::new();
+        let mut h = DiskHost::create(&root, false, true);
+        h.fail_checkpoint = Some((Checkpoint::Revoked, PublicationFault::Staged));
+        assert_eq!(
+            execute_new(&mut h, &mut EntropyCount::default()),
+            Err(Error::Publication)
+        );
+        let before = get(&root.0, "record").unwrap();
+        let stage = get(&root.0, "stage").unwrap();
+        drop(h);
+        let mut h = DiskHost::open(&root);
+        h.unsafe_quiescence = Some(bad);
+        let review = review_finish(&mut h, &Cancellation::new()).unwrap();
+        assert_eq!(get(&root.0, "record").unwrap(), before);
+        assert_eq!(
+            finish(&mut h, review, Confirmation::Approved, &Cancellation::new()),
+            Err(Error::Refused)
+        );
+        assert_eq!(get(&root.0, "record").unwrap(), before);
+        assert_eq!(get(&root.0, "stage").unwrap(), stage);
+        assert_eq!(
+            sha256_hex(&get(&root.0, "config").unwrap()),
+            rotation(&h.record()).unwrap().source_sha256
+        );
+    }
+}
+#[test]
+fn staged_retry_refuses_foreign_successors_and_changed_prepared_authority() {
+    let root = Root::new();
+    let mut h = DiskHost::create(&root, false, false);
+    h.fail_checkpoint = Some((Checkpoint::TargetPublished, PublicationFault::Staged));
+    assert_eq!(
+        execute_new(&mut h, &mut EntropyCount::default()),
+        Err(Error::Publication)
+    );
+    drop(h);
+    let mut h = DiskHost::open(&root);
+    let canonical = get(&root.0, "record").unwrap();
+    let stage = get(&root.0, "stage").unwrap();
+    let review = review_finish(&mut h, &Cancellation::new()).unwrap();
+    put(&root.0, "stage", &canonical);
+    assert_eq!(
+        finish(&mut h, review, Confirmation::Approved, &Cancellation::new()),
+        Err(Error::StaleReview)
+    );
+    put(&root.0, "stage", &stage);
+    // Even a separately valid record cannot replace a staged exact successor.
+    let other_root = Root::new();
+    let other = DiskHost::create(&other_root, false, false);
+    put(&root.0, "stage", &other.record().encode().unwrap());
+    assert_eq!(
+        review_finish(&mut h, &Cancellation::new()).unwrap_err(),
+        Error::Publication
+    );
+    assert_eq!(get(&root.0, "record").unwrap(), canonical);
+}
+
+#[test]
+fn staged_completion_retry_requires_fresh_subscription_proof_before_clearing_rotation() {
+    let root = Root::new();
+    let mut h = DiskHost::create(&root, false, true);
+    h.stop_at = Some(Checkpoint::TargetStarted);
+    assert_eq!(
+        execute_new(&mut h, &mut EntropyCount::default()),
+        Err(Error::Interrupted)
+    );
+    let operation = get(&root.0, "record").unwrap();
+    drop(h);
+    let mut h = DiskHost::open(&root);
+    assert_eq!(finish_now(&mut h), Ok(Outcome::Finished));
+    let completed = get(&root.0, "record").unwrap();
+    // Model completion staged after all effects but before the record rename.
+    put(&root.0, "record", &operation);
+    put(&root.0, "stage", &completed);
+    drop(h);
+    let mut h = DiskHost::open(&root);
+    h.fail_effect = Some((Effect::FinishSubscription, false));
+    assert_eq!(finish_now(&mut h), Err(Error::Effect));
+    assert_eq!(get(&root.0, "record").unwrap(), operation);
+    assert_eq!(get(&root.0, "stage").unwrap(), completed);
+    drop(h);
+    let mut h = DiskHost::open(&root);
+    assert_eq!(finish_now(&mut h), Ok(Outcome::Finished));
+    assert_eq!(get(&root.0, "record").unwrap(), completed);
+    assert!(!root.0.join("stage").exists());
+    assert_preserved(&root);
 }

@@ -127,6 +127,13 @@ pub trait OwnerIo: PeerObservations + Sync {
     ) -> Result<(), HostError>;
     fn port_available(&self, port: u16, context: &StartContext) -> Result<bool, HostError>;
     fn process(&self, pid: u32) -> Result<runtime_handoff::ProcessIdentity, HostError>;
+    fn historical(
+        &self,
+        _: HistoricalObservation,
+        _: &StartContext,
+    ) -> Result<CommandOutput, HostError> {
+        Err(HostError::LiveUnavailable)
+    }
     fn public_ipv4(&self, context: &StartContext) -> Result<std::net::Ipv4Addr, HostError>;
     fn validate_configuration(
         &self,
@@ -148,6 +155,15 @@ impl PeerObservations for NativeIo {
     }
 }
 impl OwnerIo for NativeIo {
+    fn historical(
+        &self,
+        q: HistoricalObservation,
+        c: &StartContext,
+    ) -> Result<CommandOutput, HostError> {
+        let (p, a) = q.command();
+        native_command(p, &a, c)
+    }
+
     fn query(
         &self,
         observation: Observation,
@@ -386,5 +402,65 @@ impl<I: OwnerIo + Send> OwnerIo for Arc<I> {
     }
     fn port_available(&self, p: u16, c: &StartContext) -> Result<bool, HostError> {
         (**self).port_available(p, c)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoricalObservation {
+    Service(&'static str),
+    Timer(&'static str),
+    Snap,
+    Changes,
+    Boot,
+    ProcessExists(u32),
+}
+impl HistoricalObservation {
+    fn command(self) -> (&'static str, Vec<String>) {
+        let (p, a) = match self {
+            Self::Service(p) | Self::Timer(p) => {
+                if ![
+                    "ExecStart",
+                    "FragmentPath",
+                    "LoadState",
+                    "DropInPaths",
+                    "Unit",
+                    "TimersCalendar",
+                    "UnitFileState",
+                    "ActiveState",
+                ]
+                .contains(&p)
+                {
+                    return ("/usr/bin/false", vec![]);
+                };
+                (
+                    "/usr/bin/systemctl",
+                    vec![
+                        "show".into(),
+                        format!("--property={p}"),
+                        "--value".into(),
+                        if matches!(self, Self::Service(_)) {
+                            "snap.certbot.renew.service".into()
+                        } else {
+                            "snap.certbot.renew.timer".into()
+                        },
+                    ],
+                )
+            }
+            Self::Snap => (
+                "/usr/bin/snap",
+                ["list", "certbot", "--unicode=always", "--color=never"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+            Self::Changes => ("/usr/bin/snap", vec!["changes".into()]),
+            Self::Boot => (
+                "/usr/bin/cat",
+                vec!["/proc/sys/kernel/random/boot_id".into()],
+            ),
+            Self::ProcessExists(pid) => {
+                ("/usr/bin/test", vec!["-d".into(), format!("/proc/{pid}")])
+            }
+        };
+        (p, a)
     }
 }

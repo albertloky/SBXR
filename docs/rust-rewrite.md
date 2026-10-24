@@ -152,9 +152,9 @@ without enabling in-place Go-to-Rust migration.
 | Native public entry and Standard setup/recovery | Shared Review/Execute and composed Owner routing; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Connect the qualified public entry and remaining owners. Digest-only early cleanup and exact authenticated package-default replacement/cleanup are implemented in fixtures. Native effects and new Linux branches remain unvalidated; public entry stays simulated. |
 | Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
 | HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Connect the qualified public entry and validate actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
-| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and complete public entry/details composition. Explicit staged-record retry and historical HTTPS certificate selection remain absent. |
-| Optional VMess/tunnel | Rendering, client artifacts, identity generation, strict authority plus setup/recovery/check orchestration and probe session contracts | Connect guarded native connector and real local/public WS plus authenticated VMess-only egress probes to the Owner frontend; qualify the optional profile. No general protocol plug-in architecture. |
-| Removal and Software Lifecycle | Standard/current HTTP/Client Identity artifact and dedicated tunnel removal with interrupted retries; exact finalization, signed acquisition, protected missing-member restoration and fixed descriptor execution preparation | Historical HTTPS/renewal auxiliary cleanup, actual native restored-finisher exec and Linux qualification; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
+| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and complete public entry/details composition. Exact staged Client Identity publication retry and trusted historical certificate selection/state CAS are implemented. Historical TLS serving and its activation/repair/renewal Owner flows remain unavailable. |
+| Optional VMess/tunnel | Rendering, client artifacts, identity generation, setup/recovery/check orchestration, guarded native connector/probe adapters, authenticated probe bytes and shared Owner frontend | Validate actual Linux connector/process/cgroup paths, local/public WS and VMess-only egress; qualify the optional profile. Fixture composition is not real tunnel qualification. |
+| Removal and Software Lifecycle | Standard/current HTTP/Client Identity artifact and dedicated tunnel removal with interrupted retries; exact finalization, signed acquisition, protected missing-member restoration and fixed descriptor execution preparation | Active/retired HTTPS lineage and renewal cleanup now have concrete protected effects and interrupted-reopen tests. Unfinished transport migration remains unavailable. Actual native restored-finisher exec and Linux qualification remain; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
 | Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
 | Deployment qualification | Local tests and parent Linux evidence for its named earlier snapshot | All five current live journeys for the exact packaged Rust candidate, followed by any separately authorized signing/publication. No local test result is deployment qualification. |
 
@@ -1570,3 +1570,73 @@ restored byte-for-byte before final integrated checks. Evidence is under
 `.scratch/acceptance/rust-aux-remove/`; temporary fixture roots were cleaned.
 Go reference source is unchanged. These checks do not qualify native cleanup,
 Linux exec, outside traffic or a stable release.
+
+
+## Retained HTTPS cleanup and interrupted publication
+
+The new `host::historical` adapter reads the existing validated schema-2
+HTTPS/renewal/retirement authority; it writes no new enablement, migration,
+certificate issuance or renewal attempt. Standard removal now composes its exact
+asset plan with the existing retained Owner/package guards, protected effects
+and durable removal checkpoints. It removes owned active renewal entrypoints,
+reloads, proves the official Certbot renewal route, then removes matching evidence
+and coordination locks. Retirement removes only recorded quarantined bytes and
+the owned lineage after firewall cleanup. Shared CA accounts, official timer,
+Certbot/snapd, unrelated lineages, hooks, units and data remain unchanged.
+Expired retained certificate bytes remain removable by ownership/hash proof;
+expiry does not resurrect a subscription or prevent cleanup.
+
+The proof includes strict bounded receipt decoding (duplicate/unknown-key
+refusal), independent recorder identity, completed-hook order/outcome, unfinished
+attempt process/boot/start-time checks, fixed snap publisher/version/route and
+calendar observations, hook/configuration safety, exact legacy 80/8443 firewall
+commands, and fresh quiescence. Current and known historical serving-unit bytes
+are recognized only by removal; ordinary serving startup still requires the
+current unit. Changed bytes, unsafe metadata/parents, extra archive generations,
+unknown staging and foreign resource names refuse without erasure. Cleanup can
+reopen after individual file/directory steps and never reverses removal direction.
+
+Historical exclusion retains the three Certbot POSIX locks and, where recorded,
+renewal admission/writer flocks. It checks both the current pathname/parent and
+the held descriptor. Error release removes only its own newly created empty,
+unchanged lock in the original proved namespace; pre-existing locks and changed
+or renamed resources survive. Intentionally lent `HostLock` authority is unchanged.
+
+`HistoricalHttps::select_published` selects all four matching canonical live
+links, enforces generation direction and recorded hashes, verifies fullchain
+composition, key correspondence, IP identity, trust and time, and returns a
+redacted sealed proof. Native selection uses bundled public trust/current time;
+fixture roots/time cannot authorize native publication. Existing inert PEM
+fixtures are reused, with no certificate generated or issued. The certificate
+state publisher requires an already recorded activation/repair source and target,
+unchanged canonical ownership and exact staging. It retries before/after rename
+with both directories synchronized, preserves independent credentials, and
+leaves the operation checkpoint pending. It does not start TLS or clear an
+unverified activation. Filesystem publication tests explicitly separate this CAS
+boundary from cryptographic selection; a genuine native public-IP positive TLS
+publication fixture remains absent.
+
+Client Identity Finish now accepts only a canonical staged exact successor of
+an already canonical operation. Review/read never promotes it. Crossing staged
+revocation requires fresh startup routes and every shutdown proof; clearing a
+staged completion requires fresh selected-subscription and running-configuration
+proofs. Foreign/changed stages, a staged first authorization with no canonical
+operation, stale reviews and source restoration after revocation remain refused.
+The protected Host and shared Owner bridge use the same reviewed retry path.
+
+Historical TLS preparation/serving/restart and the activation, repair, credential
+rotation and renewal recorder/hook Owner flows are still absent. Unfinished
+transport migration also refuses explicitly; current clean-install policy adds
+no automatic migration. Those are feature gaps, not native validation passes.
+The new certificate state publisher alone does not complete such a journey.
+Production public/effect gates remain closed.
+
+Validation evidence for this increment is retained under
+`.scratch/acceptance/rust-historical/`. Final validation passed **515 product unit/integration tests**, **one compile-fail
+doctest**, **8 offline packaging tests**, format, strict all-target Clippy and both
+Mac debug builds. Nine targeted mutations were caught and exact source restored.
+The created-lock mode, renamed-parent and empty-directory group regressions each
+failed before their corrections and passed afterward. Temporary fixture roots
+were cleaned. Mac fixture/process/loopback results do not establish
+Linux systemd/proc/cgroup/exec, physical crash durability, a packaged installation,
+outside traffic, Karing or release qualification.

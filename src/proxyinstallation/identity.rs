@@ -52,9 +52,7 @@ impl<H: ci::Host> ClientIdentityInstallation<H> {
         host.verify_guard(&guard)?;
         host.installed_release(&guard)?;
         let snapshot = host.snapshot(&guard)?;
-        if snapshot.staged.is_some() {
-            return Err(ci::Error::Publication);
-        }
+        snapshot.publication_target()?;
         let record =
             OwnershipRecord::decode(&snapshot.current).map_err(|_| ci::Error::Authority)?;
         if ci::rotation(&record).is_ok() {

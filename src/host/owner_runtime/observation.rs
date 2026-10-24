@@ -17,6 +17,9 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         Ok(())
     }
     pub(super) fn known_unit(&self, u: U, c: &StartContext) -> Result<(), HostError> {
+        self.known_unit_context(u, c, false)
+    }
+    fn known_unit_context(&self, u: U, c: &StartContext, removal: bool) -> Result<(), HostError> {
         if u == U::Proxy {
             let (bytes, proof) = self
                 .fs
@@ -39,14 +42,20 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
             } else {
                 (
                     crate::host::subscription::FIREWALL,
-                    crate::host::subscription::http_firewall_unit(self.record()?.public_ipv4())?,
+                    crate::host::historical::firewall_unit(&self.record()?)?,
                 )
             };
             let (bytes, proof) = self
                 .fs
                 .raw(path, Mode::from_raw_mode(0o644), 8192)?
                 .ok_or(HostError::Foreign)?;
-            if bytes != expected || proof.gid != self.fs.gid {
+            if (bytes != expected
+                && !(removal
+                    && u == U::Subscription
+                    && crate::host::historical::has_authority(&self.record()?)
+                    && crate::host::historical::known_serving_units().contains(&bytes)))
+                || proof.gid != self.fs.gid
+            {
                 return Err(HostError::Foreign);
             }
         }
@@ -197,6 +206,13 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
     }
     pub(super) fn serving_routes(&self, c: &StartContext) -> Result<(), HostError> {
         self.known_unit(U::Subscription, c)?;
+        self.serving_exec(c)
+    }
+    pub(super) fn serving_routes_for_removal(&self, c: &StartContext) -> Result<(), HostError> {
+        self.known_unit_context(U::Subscription, c, true)?;
+        self.serving_exec(c)
+    }
+    fn serving_exec(&self, c: &StartContext) -> Result<(), HostError> {
         if !exact_exec(
             &self.property(U::Subscription, P::ExecStart, c)?,
             "/usr/local/bin/sbxr",
@@ -220,14 +236,15 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         {
             return Err(HostError::Foreign);
         }
-        let unit = super::super::subscription::http_firewall_unit(r.public_ipv4())?;
+        let unit = crate::host::historical::firewall_unit(r)?;
         for (p, key) in [(P::ExecStart, "ExecStart="), (P::ExecStop, "ExecStop=")] {
-            let expected = std::str::from_utf8(&unit)
+            let expected: Vec<_> = std::str::from_utf8(&unit)
                 .map_err(refused)?
                 .lines()
-                .find_map(|l| l.strip_prefix(key))
-                .ok_or(HostError::Foreign)?;
-            if !firewall_exec(&self.property(U::Firewall, p, c)?, expected) {
+                .filter_map(|l| l.strip_prefix(key))
+                .collect();
+            let loaded = self.property(U::Firewall, p, c)?;
+            if !historical::firewall_commands(&loaded, &expected) {
                 return Err(HostError::Foreign);
             }
         }
@@ -256,13 +273,6 @@ pub(super) fn population_empty(bytes: &[u8]) -> bool {
             .collect::<Vec<_>>()
             == ["populated 0"]
     })
-}
-fn firewall_exec(body: &str, expected: &str) -> bool {
-    let expected = expected
-        .strip_prefix("/bin/sh -ec '")
-        .and_then(|s| s.strip_suffix('\''))
-        .map(|s| format!("/bin/sh -ec {s}"));
-    expected.is_some_and(|expected| exact_exec(body, "/bin/sh", &expected))
 }
 pub(in crate::host) fn exact_exec(body: &str, path: &str, argv: &str) -> bool {
     let body = body.trim();

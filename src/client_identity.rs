@@ -457,6 +457,25 @@ impl fmt::Debug for Snapshot {
     }
 }
 impl Snapshot {
+    /// Exact staged successors may be retried only by reviewed Finish. Reading
+    /// never promotes a staged revocation or clears an operation.
+    pub fn publication_target(&self) -> Result<Option<OwnershipRecord>, Error> {
+        let source = OwnershipRecord::decode(&self.current).map_err(authority)?;
+        if source.encode().map_err(authority)? != self.current {
+            return Err(Error::Publication);
+        }
+        let Some(bytes) = &self.staged else {
+            return Ok(None);
+        };
+        let target = OwnershipRecord::decode(bytes).map_err(authority)?;
+        if target.encode().map_err(authority)? != *bytes
+            || rotation(&source).is_err()
+            || !(source == target || permits_successor(&source, &target))
+        {
+            return Err(Error::Publication);
+        }
+        Ok(Some(target))
+    }
     fn record(&self) -> Result<OwnershipRecord, Error> {
         let record = OwnershipRecord::decode(&self.current).map_err(authority)?;
         if self.staged.as_ref().is_some_and(|s| s != &self.current) {
@@ -607,6 +626,22 @@ fn cancelled(stop: &Cancellation) -> Result<(), Error> {
         Ok(())
     }
 }
+fn checked_retry_snapshot<H: Host>(
+    host: &mut H,
+    guard: &H::Guard,
+    expected: &Snapshot,
+) -> Result<OwnershipRecord, Error> {
+    host.verify_guard(guard)?;
+    let fresh = host.snapshot(guard)?;
+    if fresh != *expected {
+        return Err(Error::StaleReview);
+    }
+    fresh.publication_target()?;
+    let record = OwnershipRecord::decode(&fresh.current).map_err(authority)?;
+    host.synchronize(guard, &fresh.current)?;
+    host.verify_guard(guard)?;
+    Ok(record)
+}
 fn checked_snapshot<H: Host>(
     host: &mut H,
     guard: &H::Guard,
@@ -678,7 +713,7 @@ pub fn review_finish<H: Host>(host: &mut H, stop: &Cancellation) -> Result<Prepa
     cancelled(stop)?;
     let guard = host.acquire()?;
     let snapshot = host.snapshot(&guard)?;
-    let record = checked_snapshot(host, &guard, &snapshot)?;
+    let record = checked_retry_snapshot(host, &guard, &snapshot)?;
     rotation(&record)?;
     host.inspect(&guard, &record)?;
     let executing_release = host.installed_release(&guard)?;
@@ -776,11 +811,59 @@ pub fn finish<H: Host>(
     cancelled(stop)?;
     let guard = host.acquire()?;
     let mut current = prepared.snapshot;
-    let record = checked_snapshot(host, &guard, &current)?;
+    let mut record = checked_retry_snapshot(host, &guard, &current)?;
     if host.installed_release(&guard)? != prepared.executing_release {
         return Err(Error::StaleReview);
     }
     host.inspect(&guard, &record)?;
+    let original_direction = rotation(&record)?.checkpoint.direction();
+    if let Some(target) = current.publication_target()? {
+        if rotation(&target).is_ok_and(|r| r.checkpoint.direction() == ChangeDirection::Forward)
+            && original_direction == ChangeDirection::Cleanup
+        {
+            routes(host, &guard, &record)?;
+            if !host
+                .quiescence(&guard, &record)?
+                .accepted(record.serving_authority().is_some())
+            {
+                return Err(Error::Refused);
+            }
+        }
+        if rotation(&target).is_err() {
+            // A previously staged completion is not a current runtime proof.
+            // Revalidate the independently selected subscription before removing
+            // the final operation authority, including preserved fault gates.
+            cancelled(stop)?;
+            host.effect(&guard, Effect::FinishSubscription, &record, None)?;
+            checked_retry_snapshot(host, &guard, &current)?;
+            host.verify_running(&guard, &record)?;
+            let r = rotation(&record)?;
+            let expected = if original_direction == ChangeDirection::Forward {
+                r.target_sha256
+            } else {
+                r.source_sha256
+            };
+            if sha256_hex(&host.configuration(&guard)?) != expected {
+                return Err(Error::Authority);
+            }
+        }
+        host.publish(&guard, &current.current, &target)?;
+        let fresh = host.snapshot(&guard)?;
+        if fresh.current != target.encode().map_err(authority)? || fresh.staged.is_some() {
+            return Err(Error::Publication);
+        }
+        host.synchronize(&guard, &fresh.current)?;
+        current = fresh;
+        record = target;
+        if rotation(&record).is_err() {
+            return Ok(if original_direction == ChangeDirection::Forward {
+                Outcome::Finished
+            } else {
+                Outcome::CleanedUp
+            });
+        }
+        host.inspect(&guard, &record)?;
+    }
     let r = rotation(&record)?;
     if r.checkpoint.direction() == ChangeDirection::Forward {
         forward(host, &guard, current, record, stop)?;

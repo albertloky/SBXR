@@ -1,10 +1,17 @@
-//! Local-only current HTTP removal observations. No Internet or token acquisition.
+//! Local-only current and retained HTTPS removal observations. No Internet or token acquisition.
 use super::*;
 use crate::host::{
     linux::{AuxiliaryFacts, AuxiliaryRuntime},
     subscription::{HttpRuntime, SystemEffect},
 };
 impl<I: OwnerIo> AuxiliaryRuntime for OwnerRuntime<'_, I> {
+    fn historical(
+        &self,
+        record: &OwnershipRecord,
+        attempts: &[crate::host::historical::UnfinishedRenewal],
+    ) -> Result<crate::host::linux::HistoricalRuntimeFacts, HostError> {
+        self.historical_facts(record, attempts)
+    }
     fn observe(&self, record: &OwnershipRecord) -> Result<AuxiliaryFacts, HostError> {
         use command::{Property as P, Unit as U};
         let current = self.io.current().map_err(refused)?;
@@ -49,7 +56,7 @@ impl<I: OwnerIo> AuxiliaryRuntime for OwnerRuntime<'_, I> {
         let c = Self::context();
         let active = self.property(U::Subscription, P::ActiveState, &c)? == "active";
         if self.fs.metadata(crate::host::subscription::UNIT)?.is_some() {
-            self.serving_routes(&c)?;
+            self.serving_routes_for_removal(&c)?;
         } else if active {
             return Err(HostError::Foreign);
         }

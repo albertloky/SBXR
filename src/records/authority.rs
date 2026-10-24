@@ -90,6 +90,43 @@ impl ServingAuthority {
         }
         Ok(Self(wire))
     }
+    /// Construct strict historical HTTPS metadata. This alone proves neither
+    /// certificate trust nor permission to publish or start a runtime.
+    pub fn https_digest(
+        link_id: &str,
+        digest: &str,
+        generation: u32,
+        hashes: [String; 4],
+    ) -> Result<Self, RecordError> {
+        let wire = WireServing {
+            http: false,
+            link_id: link_id.into(),
+            credential_sha256: digest.into(),
+            certificate_generation: generation,
+            certificate_sha256: hashes,
+        };
+        if !wire.valid() {
+            return Err(RecordError);
+        }
+        Ok(Self(wire))
+    }
+    pub fn certificate_sha256(&self) -> &[String; 4] {
+        &self.0.certificate_sha256
+    }
+    pub fn decode_state(bytes: &[u8]) -> Result<Self, RecordError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct State {
+            schema: u32,
+            serving: WireServing,
+        }
+        let state: State = super::decode(bytes)?;
+        let authority = Self(state.serving);
+        if state.schema != 1 || !authority.0.valid() || authority.state_bytes()? != bytes {
+            return Err(RecordError);
+        }
+        Ok(authority)
+    }
     pub fn is_http(&self) -> bool {
         self.0.http
     }

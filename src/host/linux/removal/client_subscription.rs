@@ -1,9 +1,6 @@
-//! Hash-bound temporary artifacts from interrupted HTTP Client Identity rotation.
+//! Hash-bound temporary artifacts from interrupted Client Identity rotation.
 use super::*;
-use crate::{
-    host::{identity as ci, subscription as http},
-    records::ServingAuthority,
-};
+use crate::host::{identity as ci, subscription as http};
 impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
     pub(super) fn identity_subscription(
         &self,
@@ -29,9 +26,6 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             }
             return Ok(false);
         };
-        if subscription["source"]["http"] != true || subscription["target"]["http"] != true {
-            return Err(HostError::LiveUnavailable);
-        }
         let hash = subscription["target_artifact_sha256"]
             .as_str()
             .ok_or(HostError::Foreign)?;
@@ -42,15 +36,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         {
             return Err(HostError::Foreign);
         }
-        let target = ServingAuthority::http_digest(
-            subscription["target"]["link_id"]
-                .as_str()
-                .ok_or(HostError::Foreign)?,
-            subscription["target"]["credential_sha256"]
-                .as_str()
-                .ok_or(HostError::Foreign)?,
-        )
-        .map_err(|_| HostError::Foreign)?;
+        let target = crate::host::historical::authority(&subscription["target"])?;
         let states = [target.state_bytes().map_err(|_| HostError::Foreign)?];
         let state = self.auxiliary_file(http::CANDIDATE_STATE, &states, 0o600, false)?;
         let unit = [crate::runtime_handoff::SERVING_UNIT.as_bytes().to_vec()];

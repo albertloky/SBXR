@@ -74,7 +74,13 @@ removal composes the same runtime in `src/host/linux/removal/tunnel.rs`, with
 local native runtime
 observations in `src/host/owner_runtime/removal.rs`. Digest-only cleanup/removal
 material is in `src/host/linux/material.rs`; it never downloads or regenerates
-secrets. Historical HTTPS/renewal removal remains unavailable. Exact
+secrets. Retained HTTPS/renewal cleanup and certificate selection/state publication are
+in `src/host/historical/`; descriptor-relative lineage/lock handling is
+`src/host/filesystem/historical.rs`, composed into removal by
+`src/host/linux/removal/historical.rs`. Native retained renewal route observations
+are `src/host/owner_runtime/historical.rs`. Legacy unit recognition is removal-only;
+ordinary startup stays strict. Historical TLS serving/activation/renewal Owner
+flows and unfinished transport migration remain explicitly unavailable. Exact
 restored-finisher
 command preparation reuses the retained authenticated descriptor; actual native
 exec remains unqualified. Read that handoff before selecting Rust checks; Go live qualification never follows from local

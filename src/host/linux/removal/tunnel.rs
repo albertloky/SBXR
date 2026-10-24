@@ -28,6 +28,13 @@ impl<B: AuxiliaryRuntime, I: ConnectorIo> AuxiliaryRuntime for TunnelRemovalRunt
     ) -> Result<(), HostError> {
         self.http.disable(firewall, record, owner)
     }
+    fn historical(
+        &self,
+        r: &OwnershipRecord,
+        a: &[crate::host::historical::UnfinishedRenewal],
+    ) -> Result<super::HistoricalRuntimeFacts, HostError> {
+        self.http.historical(r, a)
+    }
     fn inspect_tunnel(
         &self,
         authority: &TunnelAuthority,

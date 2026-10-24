@@ -4,6 +4,7 @@
 pub mod disclosure;
 mod filesystem;
 mod fixture;
+pub mod historical;
 pub mod identity;
 pub mod linux;
 pub mod locks;

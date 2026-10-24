@@ -1,7 +1,8 @@
-//! Concrete offline removal with exact current HTTP/startup auxiliary ownership.
-//! Historical HTTPS authority remains unavailable. Production entry is closed.
+//! Concrete removal with exact current and retained HTTPS/renewal ownership.
+//! All native execution remains behind the closed production entry.
 mod auxiliary;
 mod client_subscription;
+mod historical;
 mod tunnel;
 use super::*;
 use crate::{
@@ -12,6 +13,7 @@ use crate::{
     },
 };
 pub use auxiliary::{AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime};
+pub use historical::HistoricalRuntimeFacts;
 pub use tunnel::{TunnelRemovalFacts, TunnelRemovalRuntime};
 const CURRENT: &str = "var/lib/sbxr/proxy-ownership.json";
 const FINAL: &str = "var/lib/.sbxr-removal.json";
@@ -19,6 +21,7 @@ pub struct StandardRemovalHost<R, B = NoAuxiliaryRuntime> {
     auxiliary: B,
     pub(super) inner: LinuxHost<R>,
     store: Option<OwnershipStore>,
+    historical: Option<crate::host::historical::HistoricalExclusion>,
     package_locks: Option<super::super::locks::PackageLocks<'static>>,
     installed: InstalledRecord,
     executable: Vec<u8>,
@@ -51,6 +54,7 @@ impl<R: CommandRunner> StandardRemovalHost<R, NoAuxiliaryRuntime> {
             auxiliary: NoAuxiliaryRuntime,
             inner,
             store,
+            historical: None,
             package_locks: None,
             installed,
             executable,
@@ -63,6 +67,7 @@ impl<R: CommandRunner> StandardRemovalHost<R, NoAuxiliaryRuntime> {
             auxiliary,
             inner: self.inner,
             store: self.store,
+            historical: self.historical,
             package_locks: self.package_locks,
             installed: self.installed,
             executable: self.executable,
@@ -81,6 +86,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
             auxiliary: TunnelRemovalRuntime::new(self.auxiliary, connector),
             inner: self.inner,
             store: self.store,
+            historical: self.historical,
             package_locks: self.package_locks,
             installed: self.installed,
             executable: self.executable,
@@ -176,6 +182,23 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
                     .metadata(&format!("{path}.sbxr-next"))?
                     .is_some()
             {
+                return Ok(false);
+            }
+        }
+        for path in [
+            crate::host::historical::ARCHIVE,
+            crate::host::historical::LIVE,
+            crate::host::historical::RENEWAL_CONFIG,
+            crate::host::historical::RETIRED,
+            "var/lib/sbxr/renewal-attempts.json",
+            "var/lib/sbxr/.renewal-attempts.json.next",
+            "var/lib/sbxr/renewal-admission.lock",
+            "var/lib/sbxr/renewal-writer.lock",
+            "etc/systemd/system/snap.certbot.renew.service.d/50-sbxr-recorder.conf",
+            "etc/letsencrypt/renewal-hooks/deploy/sbxr-subscription",
+            "etc/letsencrypt/renewal-hooks/post/sbxr-subscription",
+        ] {
+            if self.inner.fs.metadata(path)?.is_some() {
                 return Ok(false);
             }
         }
@@ -290,7 +313,15 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
         Ok(())
     }
     fn guard(&self) -> Result<(), HostError> {
-        self.inner.lock.as_ref().ok_or(HostError::Unsafe)?.verify()
+        self.inner
+            .lock
+            .as_ref()
+            .ok_or(HostError::Unsafe)?
+            .verify()?;
+        if let Some(h) = &self.historical {
+            h.verify()?;
+        }
+        Ok(())
     }
 }
 impl<R: CommandRunner, B: AuxiliaryRuntime> RemovalHost for StandardRemovalHost<R, B> {
@@ -352,6 +383,10 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> RemovalHost for StandardRemovalHost<
                 "subscription-staging",
                 "client-identity-target.json",
                 "client-identity-target.json.sbxr-next",
+                "renewal-attempts.json",
+                "renewal-admission.lock",
+                "renewal-writer.lock",
+                "subscription-https-retired",
             ]
             .contains(&n.as_str())
         }) {
@@ -437,6 +472,21 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> RemovalHost for StandardRemovalHost<
         {
             Ok(packages) => {
                 self.package_locks = Some(packages);
+                if let Some(record) = record
+                    && crate::host::historical::has_authority(record)
+                {
+                    let result = self.historical_host().and_then(|mut host| {
+                        host.exclusion(self.inner.lock.as_ref().ok_or(HostError::Unsafe)?, record)
+                    });
+                    match result {
+                        Ok(guard) => self.historical = Some(guard),
+                        Err(e) => {
+                            self.package_locks = None;
+                            SetupHost::end_change(&mut self.inner);
+                            return Err(e);
+                        }
+                    }
+                }
                 Ok(())
             }
             Err(e) => {
@@ -449,6 +499,7 @@ impl<R: CommandRunner, B: AuxiliaryRuntime> RemovalHost for StandardRemovalHost<
         self.package_locks = None;
     } // Fixed effects probe/drop package guards before APT itself locks.
     fn end_change(&mut self) {
+        self.historical = None;
         self.package_locks = None;
         SetupHost::end_change(&mut self.inner)
     }

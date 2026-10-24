@@ -118,3 +118,17 @@ mod tests;
 #[cfg(test)]
 #[path = "authority_tests.rs"]
 mod authority_tests;
+
+#[cfg(test)]
+pub(crate) fn historical_fixture(value: serde_json::Value) -> OwnershipRecord {
+    let mut wire: ownership::WireOwnershipRecord =
+        serde_json::from_value(value).expect("typed historical fixture");
+    wire.permitted_resources = resources::resources(&wire);
+    if wire.schema == 2 {
+        wire.resource_creating_releases = Some(vec![
+            wire.release_identity.clone();
+            wire.permitted_resources.len()
+        ]);
+    }
+    OwnershipRecord::validated(wire).expect("valid historical fixture")
+}

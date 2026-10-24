@@ -2106,3 +2106,6 @@ mod package_defaults;
 
 #[path = "linux/auxiliary_removal_tests.rs"]
 mod auxiliary_removal;
+
+#[path = "linux/historical_tests.rs"]
+mod historical_removal;

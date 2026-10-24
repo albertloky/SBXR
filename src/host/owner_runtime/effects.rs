@@ -148,7 +148,11 @@ impl<I: OwnerIo> HttpRuntime for OwnerRuntime<'_, I> {
                     }
                     return Ok(());
                 }
-                self.serving_routes(c)?;
+                if r.recovery_direction() == crate::records::RecoveryDirection::Removal {
+                    self.serving_routes_for_removal(c)?;
+                } else {
+                    self.serving_routes(c)?;
+                }
                 self.service(
                     if e == SystemEffect::StopServing {
                         ServiceAction::StopSubscription

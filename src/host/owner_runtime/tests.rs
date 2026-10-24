@@ -198,3 +198,315 @@ fn http_probe_cancellation_closes_stalled_peer_within_absolute_deadline() {
     server.join().unwrap();
     assert!(started.elapsed() < Duration::from_millis(600));
 }
+
+struct RenewalIo {
+    process: runtime_handoff::ProcessIdentity,
+    bad: Option<(HistoricalObservation, &'static str)>,
+    official: bool,
+    exists: bool,
+    reused: bool,
+    routes: bool,
+}
+impl PeerObservations for RenewalIo {
+    fn current(&self) -> Result<runtime_handoff::ProcessIdentity, runtime_handoff::Error> {
+        Ok(self.process.clone())
+    }
+    fn peer(
+        &self,
+        _: &std::os::unix::net::UnixStream,
+    ) -> Result<runtime_handoff::ProcessIdentity, runtime_handoff::Error> {
+        Err(runtime_handoff::Error::Refused)
+    }
+}
+impl OwnerIo for RenewalIo {
+    fn query(&self, q: Observation, _: &StartContext) -> Result<CommandOutput, HostError> {
+        assert!(self.routes, "unexpected ordinary observation");
+        let body = match q {
+            Observation::Property(Unit::Subscription, Property::LoadState) => "loaded",
+            Observation::Property(Unit::Subscription, Property::FragmentPath) => {
+                "/etc/systemd/system/sbxr-subscription.service"
+            }
+            Observation::Property(Unit::Subscription, Property::DropInPaths) => "",
+            Observation::Property(Unit::Subscription, Property::ExecStart) => {
+                "/usr/local/bin/sbxr --subscription-serving"
+            }
+            Observation::Property(Unit::Subscription, Property::KillMode) => "control-group",
+            _ => panic!("unexpected route query"),
+        };
+        CommandOutput::completed(0, body.as_bytes().to_vec())
+    }
+    fn service(
+        &self,
+        _: ServiceAction,
+        _: &Arc<HostLock>,
+        _: Option<&Path>,
+        _: &StartContext,
+    ) -> Result<(), HostError> {
+        panic!("historical inspection must not execute services")
+    }
+    fn port_available(&self, _: u16, _: &StartContext) -> Result<bool, HostError> {
+        panic!("no bind required")
+    }
+    fn process(&self, _: u32) -> Result<runtime_handoff::ProcessIdentity, HostError> {
+        let mut p = self.process.clone();
+        if self.reused {
+            p.start_ticks += 1;
+        }
+        Ok(p)
+    }
+    fn historical(
+        &self,
+        q: HistoricalObservation,
+        c: &StartContext,
+    ) -> Result<CommandOutput, HostError> {
+        c.check().map_err(refused)?;
+        use HistoricalObservation as Q;
+        let body = if let Some((bad, body)) = self.bad.filter(|(bad, _)| *bad == q) {
+            let _ = bad;
+            body
+        } else {
+            match q {
+                Q::Service("ExecStart") if self.official => {
+                    "/usr/bin/snap run --timer=00:00~24:00/2 certbot.renew"
+                }
+                Q::Service("ExecStart") => "/usr/local/bin/sbxr --certbot-recorder",
+                Q::Service("FragmentPath") => "/etc/systemd/system/snap.certbot.renew.service",
+                Q::Timer("FragmentPath") => "/etc/systemd/system/snap.certbot.renew.timer",
+                Q::Timer("LoadState") => "loaded",
+                Q::Timer("DropInPaths") => "",
+                Q::Timer("Unit") => "snap.certbot.renew.service",
+                Q::Timer("UnitFileState") => "enabled",
+                Q::Timer("ActiveState") => "active",
+                Q::Timer("TimersCalendar") => {
+                    "{ OnCalendar=*-*-* 05:11:22 ; next_elapse=... } { OnCalendar=*-*-* 17:00:33 ; next_elapse=... }"
+                }
+                Q::Snap => {
+                    "Name Version Rev Tracking Publisher Notes\ncertbot 5.4.0 123 latest/stable certbot-eff✓ classic"
+                }
+                Q::Changes => "ID Status Spawn Ready Summary\n1 Done then now completed change",
+                Q::Boot => "fixture-boot",
+                Q::ProcessExists(_) => "",
+                _ => panic!("unexpected fixed query"),
+            }
+        };
+        CommandOutput::completed(
+            if matches!(q, Q::ProcessExists(_)) && !self.exists {
+                1
+            } else {
+                0
+            },
+            body.as_bytes().to_vec(),
+        )
+    }
+    fn public_ipv4(&self, _: &StartContext) -> Result<std::net::Ipv4Addr, HostError> {
+        panic!("no external connection")
+    }
+    fn validate_configuration(
+        &self,
+        _: &Arc<HostLock>,
+        _: &str,
+        _: &StartContext,
+    ) -> Result<bool, HostError> {
+        panic!("no config execution")
+    }
+}
+#[test]
+fn historical_native_observation_refuses_foreign_routes_and_identifies_live_attempts() {
+    let root = Root::new();
+    root.write(
+        "var/lib/sbxr/proxy-ownership.json",
+        include_bytes!("../../records/testdata/authority/https-activation-b.json"),
+        0o600,
+    );
+    std::fs::set_permissions(
+        root.0.join("var/lib/sbxr"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let a = crate::release_acquisition::fixture_archive();
+    let proof = a
+        .bind_current(
+            a.executable(),
+            a.executable(),
+            &crate::artifact_trust::SelectionBudget::new(),
+        )
+        .unwrap();
+    let fs = ProtectedFs::open(&root.0).unwrap();
+    let process = runtime_handoff::ProcessIdentity::new(
+        51,
+        50,
+        41,
+        fs.uid,
+        proof.record().executable_sha256(),
+        "/fixture",
+    )
+    .unwrap();
+    let mut runtime = OwnerRuntime {
+        fs,
+        proof: &proof,
+        io: RenewalIo {
+            process,
+            bad: None,
+            official: true,
+            exists: true,
+            reused: false,
+            routes: false,
+        },
+        probe: None,
+    };
+    let record = runtime.record().unwrap();
+    let attempt = crate::host::historical::UnfinishedRenewal {
+        boot_id: "fixture-boot".into(),
+        pid: 51,
+        tick: 41,
+    };
+    let facts = runtime
+        .historical_facts(&record, std::slice::from_ref(&attempt))
+        .unwrap();
+    assert!(facts.official_route && !facts.renewal_quiet);
+    runtime.io.reused = true;
+    assert!(
+        runtime
+            .historical_facts(&record, std::slice::from_ref(&attempt))
+            .unwrap()
+            .renewal_quiet
+    );
+    runtime.io.reused = false;
+    runtime.io.exists = false;
+    assert!(
+        runtime
+            .historical_facts(&record, std::slice::from_ref(&attempt))
+            .unwrap()
+            .renewal_quiet
+    );
+    runtime.io.official = false;
+    assert!(
+        !runtime
+            .historical_facts(&record, &[])
+            .unwrap()
+            .official_route
+    );
+    use HistoricalObservation as Q;
+    for (q, body) in [
+        (Q::Service("ExecStart"), "/usr/bin/snap run certbot renew"),
+        (Q::Service("FragmentPath"), "/tmp/foreign.service"),
+        (Q::Timer("DropInPaths"), "/etc/systemd/system/foreign.conf"),
+        (
+            Q::Timer("TimersCalendar"),
+            "{ OnCalendar=*-*-* 05:11:22 } { OnCalendar=*-*-* 06:11:22 }",
+        ),
+        (Q::Timer("ActiveState"), "inactive"),
+        (
+            Q::Snap,
+            "Name Version Rev Tracking Publisher Notes\ncertbot 5.4.0 123 latest/stable other classic",
+        ),
+        (
+            Q::Snap,
+            "Name Version Rev Tracking Publisher Notes\ncertbot 5.3.9 123 latest/stable certbot-eff✓ classic",
+        ),
+        (
+            Q::Changes,
+            "ID Status Spawn Ready Summary\n1 Doing then - unfinished change",
+        ),
+    ] {
+        runtime.io.bad = Some((q, body));
+        assert!(runtime.historical_facts(&record, &[]).is_err(), "{q:?}");
+    }
+    runtime.io.bad = None;
+    runtime.io.process.executable_sha256 = "f".repeat(64);
+    assert!(runtime.historical_facts(&record, &[]).is_err());
+}
+
+#[test]
+fn historical_firewall_loaded_commands_preserve_order_count_and_exact_shell_arguments() {
+    let record = OwnershipRecord::decode(include_bytes!(
+        "../../records/testdata/authority/https-activation-b.json"
+    ))
+    .unwrap();
+    let unit = crate::host::historical::firewall_unit(&record).unwrap();
+    let unit = std::str::from_utf8(&unit).unwrap();
+    for key in ["ExecStart=", "ExecStop="] {
+        let expected: Vec<_> = unit.lines().filter_map(|l| l.strip_prefix(key)).collect();
+        assert_eq!(expected.len(), 2);
+        let loaded:Vec<_>=expected.iter().map(|e|format!("{{ path=/bin/sh ; argv[]={} ; ignore_errors=no ; pid=0 ; code=(null) ; status=0 }}",e.strip_prefix("/bin/sh -ec '").unwrap().strip_suffix('\'').map(|e|format!("/bin/sh -ec {e}")).unwrap())).collect();
+        let good = loaded.join(" ");
+        assert!(historical::firewall_commands(&good, &expected));
+        for bad in [
+            loaded[0].clone(),
+            format!("{} {}", loaded[1], loaded[0]),
+            format!("{good} {}", loaded[0]),
+            good.replace("8.8.8.8", "9.9.9.9"),
+            good.replace("ignore_errors=no", "ignore_errors=yes"),
+            good.replace("8443", "443"),
+        ] {
+            assert!(!historical::firewall_commands(&bad, &expected));
+        }
+    }
+}
+
+#[test]
+fn historical_serving_unit_recognition_is_removal_only() {
+    let root = Root::new();
+    root.write(
+        "var/lib/sbxr/proxy-ownership.json",
+        include_bytes!("../../records/testdata/authority/https-activation-b.json"),
+        0o600,
+    );
+    fs::set_permissions(
+        root.0.join("var/lib/sbxr"),
+        fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let archive = crate::release_acquisition::fixture_archive();
+    let proof = archive
+        .bind_current(
+            archive.executable(),
+            archive.executable(),
+            &crate::artifact_trust::SelectionBudget::new(),
+        )
+        .unwrap();
+    let protected = ProtectedFs::open(&root.0).unwrap();
+    let process = runtime_handoff::ProcessIdentity::new(
+        51,
+        50,
+        41,
+        protected.uid,
+        proof.record().executable_sha256(),
+        "/fixture",
+    )
+    .unwrap();
+    let runtime = OwnerRuntime {
+        fs: protected,
+        proof: &proof,
+        io: RenewalIo {
+            process,
+            bad: None,
+            official: true,
+            exists: false,
+            reused: false,
+            routes: true,
+        },
+        probe: None,
+    };
+    for (index, unit) in crate::host::historical::known_serving_units()
+        .iter()
+        .enumerate()
+    {
+        root.write(crate::host::subscription::UNIT, unit, 0o644);
+        assert_eq!(
+            runtime
+                .serving_routes(&OwnerRuntime::<RenewalIo>::context())
+                .is_ok(),
+            index == 0
+        );
+        runtime
+            .serving_routes_for_removal(&OwnerRuntime::<RenewalIo>::context())
+            .unwrap();
+    }
+    root.write(crate::host::subscription::UNIT, b"foreign service", 0o644);
+    assert!(
+        runtime
+            .serving_routes_for_removal(&OwnerRuntime::<RenewalIo>::context())
+            .is_err()
+    );
+}
