@@ -634,7 +634,7 @@ impl AcquisitionRequest {
     pub fn max_bytes(&self) -> usize {
         self.limit
     }
-    /// Future transports must independently enforce HTTPS, reject userinfo and
+    /// Transports must independently enforce HTTPS, reject userinfo and
     /// nondefault ports, and cap redirects at four. No request carries credentials.
     pub fn permits_redirect(&self, url: &str, hops: usize) -> bool {
         if hops > 4 {
@@ -679,8 +679,8 @@ impl AcquisitionResponse {
     }
 }
 /// Trusted code boundary for HTTP only; it must enforce request redirect policy,
-/// the supplied deadline and cancellation throughout blocking I/O. No native
-/// network implementation or signature-verification callback is provided.
+/// the supplied deadline and cancellation throughout I/O. The native transport
+/// is release_https::HttpsTransport. There is no signature-verification callback.
 pub trait AcquisitionTransport {
     fn get(
         &mut self,
@@ -818,6 +818,19 @@ fn resolve_bundle(
     json_object(&body, MAX_BUNDLE_BYTES)?;
     budget.check()?;
     Ok(body)
+}
+/// Exact metadata JSON must be a complete response. Binary asset readers do
+/// not interpret Link, and native proof pages also validate it when decoding.
+pub(crate) fn read_complete_json_response(
+    response: AcquisitionResponse,
+    limit: usize,
+    budget: &SelectionBudget,
+) -> Result<Vec<u8>> {
+    budget.check()?;
+    if response.link_header_present {
+        return Err(TrustError::Refused);
+    }
+    read_response(response, limit, budget)
 }
 pub(crate) fn read_response(
     mut response: AcquisitionResponse,

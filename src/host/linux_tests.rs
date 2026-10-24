@@ -1080,6 +1080,25 @@ fn authenticated_standard_factory_and_private_roles_recheck_protected_installed_
         0o600,
     );
     assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 0);
+    for path in [
+        "var/lib/.sbxr-removal.json".to_owned(),
+        format!("var/lib/sbxr/{}", crate::durable::STAGED_FILE),
+    ] {
+        root.write(&path, b"foreign pending authority", 0o600);
+        assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 1);
+        assert_eq!(
+            fs::read(root.0.join(&path)).unwrap(),
+            b"foreign pending authority"
+        );
+        fs::remove_file(root.0.join(path)).unwrap();
+    }
+    let owner =
+        crate::host::locks::HostLock::existing(&root.0, fs::metadata(&root.0).unwrap().uid())
+            .unwrap();
+    assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 1);
+    owner.verify().unwrap();
+    drop(owner);
+    assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 0);
     root.write(
         "etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf",
         b"foreign",

@@ -1,0 +1,28 @@
+{
+  "repository": "albertloky/SBXR",
+  "tag": "v3.1.118",
+  "commit": "abb3975c4f1c3fb376ed4a61020d935f8669863b",
+  "api_version": "2026-03-10",
+  "attestations_link_header_present": false,
+  "proof_count": 3,
+  "bundles": [
+    {
+      "file": "bundle-1.json.sn",
+      "sha256": "b0adf1726bcd9e3330545ebef5bd418d62554b664c2b112a31c637549128bff6",
+      "source_path": "/attestations/1322397110/2026/10/21/58338271.json.sn"
+    },
+    {
+      "file": "bundle-2.json.sn",
+      "sha256": "7ff2ca266de346800c2475423d25f2d98979ca517978f2bd0dbbe67fa44957ac",
+      "source_path": "/attestations/1322397110/2026/10/21/58213665.json.sn"
+    },
+    {
+      "file": "bundle-3.json.sn",
+      "sha256": "b9af555c2a349831bcb5821173b38213f2d182f526c8169e6a6b3518520d6113",
+      "source_path": "/attestations/1322397110/2026/10/21/58170133.json.sn"
+    }
+  ],
+  "page": "Original entry order and blob paths; temporary query credentials replaced by an inert fixture query",
+  "metadata": "Selected public fields; body and asset bindings unchanged",
+  "real_archive": "Ignored scratch evidence only; never executed"
+}

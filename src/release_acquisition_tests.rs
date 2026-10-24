@@ -242,3 +242,42 @@ fn acceptance_record_refuses_missing_duplicate_or_incompatible_required_lines() 
         std::fs::write(path, serde_json::to_vec(&cases).unwrap()).unwrap();
     }
 }
+
+#[test]
+fn paginated_exact_metadata_is_refused_before_proof_or_asset_requests() {
+    struct Linked {
+        body: Vec<u8>,
+        calls: usize,
+    }
+    impl AcquisitionTransport for Linked {
+        fn get(
+            &mut self,
+            r: &AcquisitionRequest,
+            _: &SelectionBudget,
+        ) -> Result<AcquisitionResponse> {
+            self.calls += 1;
+            assert!(r.url().contains("/releases/tags/"));
+            Ok(AcquisitionResponse::new(
+                200,
+                Cursor::new(self.body.clone()),
+                true,
+            ))
+        }
+    }
+    let f = Fixture::new();
+    let mut transport = Linked {
+        body: f.metadata,
+        calls: 0,
+    };
+    assert!(matches!(
+        AuthenticatedInstalled::acquire(
+            &mut transport,
+            f.record,
+            &f.executable,
+            &f.executable,
+            &SelectionBudget::new()
+        ),
+        Err(TrustError::Refused)
+    ));
+    assert_eq!(transport.calls, 1);
+}

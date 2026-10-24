@@ -131,3 +131,25 @@ fn private_existing_locks_do_not_create_and_owned_package_guards_retain_exclusio
     drop(retained);
     assert!(!child_busy(&root.0.join(PACKAGE_LOCKS[0])));
 }
+
+#[test]
+fn runtime_duplicate_retains_owner_exclusion_and_rechecks_inode() {
+    let root = Root::new();
+    let owner = HostLock::acquire(&root.0, root.uid()).unwrap();
+    let duplicate = owner.runtime_start_lock().unwrap();
+    duplicate.start_lock().verify().unwrap();
+    assert!(matches!(
+        HostLock::existing(&root.0, root.uid()),
+        Err(HostError::Busy)
+    ));
+    drop(duplicate);
+    assert!(matches!(
+        HostLock::existing(&root.0, root.uid()),
+        Err(HostError::Busy)
+    ));
+    let path = root.0.join(MUTATION_LOCK);
+    stdfs::rename(&path, path.with_extension("retained")).unwrap();
+    stdfs::write(&path, []).unwrap();
+    stdfs::set_permissions(&path, stdfs::Permissions::from_mode(0o600)).unwrap();
+    assert!(owner.runtime_start_lock().is_err());
+}

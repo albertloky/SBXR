@@ -44,6 +44,16 @@ pub struct HostLock {
     file: Option<OwnedFd>,
     package_guard: Mutex<bool>,
 }
+/// A runtime-start duplicate cannot outlive the original Owner guard.
+pub struct OwnerStartLock<'a> {
+    lock: crate::runtime_handoff::StartLock,
+    _owner: &'a HostLock,
+}
+impl OwnerStartLock<'_> {
+    pub fn start_lock(&self) -> &crate::runtime_handoff::StartLock {
+        &self.lock
+    }
+}
 impl HostLock {
     pub fn acquire(root: &Path, uid: u32) -> Result<Self, HostError> {
         Self::acquire_mode(root, uid, true, true)
@@ -214,6 +224,18 @@ impl HostLock {
             FlockOperation::NonBlockingLockExclusive,
         )
         .map_err(err)
+    }
+    /// The Owner guard must outlive this runtime-start scope. Duplicating the
+    /// shared open-file description preserves exclusion; dropping StartLock
+    /// closes its copy without explicitly unlocking the Owner.
+    pub fn runtime_start_lock(&self) -> Result<OwnerStartLock<'_>, HostError> {
+        self.verify()?;
+        let fd = rustix::io::fcntl_dupfd_cloexec(self.file.as_ref().ok_or(HostError::Unsafe)?, 3)
+            .map_err(io)?;
+        let lock =
+            crate::runtime_handoff::StartLock::from_owner_duplicate(&self.path, self.uid, fd)
+                .map_err(|_| HostError::Unsafe)?;
+        Ok(OwnerStartLock { lock, _owner: self })
     }
     pub fn root(&self) -> &Path {
         &self.path

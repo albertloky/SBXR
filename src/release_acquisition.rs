@@ -157,7 +157,7 @@ impl AuthenticatedInstalled {
         identity::inspect_linux_artifact(current, architecture).map_err(|_| TrustError::Refused)?;
         let request = AcquisitionRequest::release_metadata(record.release_identity().tag())?;
         let response = transport.get(&request, budget)?;
-        let bytes = trust::read_response(response, request.max_bytes(), budget)?;
+        let bytes = trust::read_complete_json_response(response, request.max_bytes(), budget)?;
         let metadata = Metadata::decode(&bytes, &record)?;
         let claims = trust::verify_native_release(transport, &metadata.expected()?, budget)?;
         complete(

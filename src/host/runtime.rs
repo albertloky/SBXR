@@ -2,8 +2,10 @@
 use super::{HostError, filesystem::ProtectedFs, linux::observation, locks::HostLock};
 use crate::{
     private_roles::{Role, Runtime},
-    records::{OwnershipRecord, sha256_hex},
+    records::{OwnershipRecord, ReleaseIdentity, sha256_hex},
     release_acquisition::AuthenticatedInstalled,
+    runtime_handoff::{self, Error, ProxyStartHost, StartContext, StartLock},
+    subscription_serving::Cancellation,
 };
 use rustix::fs::Mode;
 use std::path::Path;
@@ -37,36 +39,57 @@ impl<'a> InjectedRuntime<'a> {
         lock.verify()
     }
     fn proxy_start(&self) -> Result<(), HostError> {
-        let lock = HostLock::existing(self.fs.path(), self.fs.uid)?;
-        self.installed()?;
-        if self
-            .fs
-            .metadata("var/lib/sbxr/proxy-ownership.json.sbxr-next")?
-            .is_some()
-            || self
-                .fs
-                .metadata(&format!("var/lib/sbxr/{}", crate::durable::STAGED_FILE))?
-                .is_some()
-        {
-            return Err(HostError::Foreign);
+        let context = StartContext::new(
+            Cancellation::new(),
+            std::time::Instant::now() + runtime_handoff::START_TIMEOUT,
+        );
+        runtime_handoff::authorize_proxy_start(self, &context).map_err(|_| HostError::Foreign)
+    }
+}
+fn refused(_: impl std::fmt::Debug) -> Error {
+    Error::Refused
+}
+impl ProxyStartHost for InjectedRuntime<'_> {
+    fn acquire_start(&self, context: &StartContext) -> Result<StartLock, Error> {
+        context.check()?;
+        StartLock::existing(self.fs.path(), self.fs.uid)
+    }
+    fn installed_identity(
+        &self,
+        lock: &StartLock,
+        context: &StartContext,
+    ) -> Result<ReleaseIdentity, Error> {
+        context.check()?;
+        lock.verify()?;
+        self.installed().map_err(refused)?;
+        Ok(self.authenticated.record().release_identity())
+    }
+    fn ownership(&self) -> Result<Vec<u8>, Error> {
+        self.installed().map_err(refused)?;
+        for path in [
+            "var/lib/sbxr/proxy-ownership.json.sbxr-next".to_owned(),
+            format!("var/lib/sbxr/{}", crate::durable::STAGED_FILE),
+            "var/lib/.sbxr-removal.json".to_owned(),
+        ] {
+            if self.fs.metadata(&path).map_err(refused)?.is_some() {
+                return Err(Error::Refused);
+            }
         }
-        let (body, _) = self
-            .fs
+        self.fs
             .raw(
                 "var/lib/sbxr/proxy-ownership.json",
                 Mode::from_raw_mode(0o600),
                 crate::records::MAX_RECORD_BYTES,
-            )?
-            .ok_or(HostError::Unsafe)?;
-        let record = OwnershipRecord::decode(&body).map_err(|_| HostError::Foreign)?;
-        if record.release_identity() != self.authenticated.record().release_identity() {
-            return Err(HostError::Foreign);
-        }
-        let expected = record
-            .ordinary_proxy_start_sha256()
-            .ok_or(HostError::LiveUnavailable)?;
-        if expected != sha256_hex(STARTUP) {
-            return Err(HostError::Foreign);
+            )
+            .map_err(refused)?
+            .map(|(body, _)| body)
+            .ok_or(Error::Refused)
+    }
+    fn verify_startup(&self, record: &OwnershipRecord) -> Result<(), Error> {
+        // This concrete fixture bridge supports only ordinary starts. Borrowed
+        // cutover and native systemd/NSS observations remain separate adapters.
+        if record.ordinary_proxy_start_sha256() != Some(sha256_hex(STARTUP).as_str()) {
+            return Err(Error::Refused);
         }
         let (drop_in, _) = self
             .fs
@@ -74,42 +97,34 @@ impl<'a> InjectedRuntime<'a> {
                 "etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf",
                 Mode::from_raw_mode(0o644),
                 4096,
-            )?
-            .ok_or(HostError::Foreign)?;
+            )
+            .map_err(refused)?
+            .ok_or(Error::Refused)?;
         if drop_in != STARTUP {
-            return Err(HostError::Foreign);
+            return Err(Error::Refused);
         }
+        Ok(())
+    }
+    fn configuration(&self) -> Result<Vec<u8>, Error> {
         let (config, proof) = self
             .fs
             .raw(
                 "etc/sing-box/config.json",
                 Mode::from_raw_mode(0o640),
                 1 << 20,
-            )?
-            .ok_or(HostError::Foreign)?;
-        if sha256_hex(&config) != record.configuration_sha256() {
-            return Err(HostError::Foreign);
-        }
-        // The fixture account must match the owned fixture files. Native NSS and
-        // runtime-start descriptor lending are separate prerequisites.
+            )
+            .map_err(refused)?
+            .ok_or(Error::Refused)?;
         if proof.gid != self.fs.gid {
-            return Err(HostError::Foreign);
+            return Err(Error::Refused);
         }
-        crate::server_configuration::ServerConfiguration::decode_standard(&config)
-            .map_err(|_| HostError::Foreign)?;
-        let (after, _) = self
-            .fs
-            .raw(
-                "var/lib/sbxr/proxy-ownership.json",
-                Mode::from_raw_mode(0o600),
-                crate::records::MAX_RECORD_BYTES,
-            )?
-            .ok_or(HostError::Foreign)?;
-        if after != body {
-            return Err(HostError::Foreign);
-        }
-        self.installed()?;
-        lock.verify()
+        Ok(config)
+    }
+    fn mutation_in_progress(&self) -> Result<bool, Error> {
+        Err(Error::Refused)
+    }
+    fn consume_authorization(&self, _: &str) -> Result<(), Error> {
+        Err(Error::Refused)
     }
 }
 impl Runtime for InjectedRuntime<'_> {

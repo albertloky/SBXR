@@ -71,6 +71,8 @@ or Karing verification.
 | `tooling/rust-package/` | Separate offline deterministic package/index CLI using the product release inspector |
 | `src/identity_generation.rs` | Ephemeral X25519/UUID/credential generation, injected entropy and Go-compatible validation |
 | `src/release_acquisition.rs`, `src/release_acquisition/` | Exact-tag metadata/Acceptance Record/signature/index/archive/current-byte binding; injected network boundary |
+| `src/release_https.rs` | Bounded certificate-verified public HTTPS, manual authorized redirects, asynchronous DNS and whole-request interruption |
+| `src/runtime_handoff.rs` | One-use authenticated descriptor lending, retained runtime starts, HTTP serving/watch composition and proxy cutover model |
 | `src/release_archive.rs` | Bounded in-memory single gzip/ustar member inspection, with no extraction or execution |
 | `src/private_roles.rs`, `src/host/runtime.rs` | Fixed silent private dispatch and protected injected lock/start checks; native dispatcher refuses |
 | `src/removal.rs`, `src/host/linux/removal.rs`, `src/proxyinstallation/removal.rs` | Forward removal model, concrete Standard host/finalizer and shared Interface bridge |
@@ -573,16 +575,16 @@ authenticated observer time. No current-time fallback or ambient roots are used.
 Private result constructors separate authenticated payload/claims from structural
 inspection. Signed SHA256 asset subjects and the SHA1 commit are checked in the
 same authenticated native payload. Snappy decompression and injected acquisition
-are bounded by size, deadlines and cancellation. The native HTTP acquisition
-transport itself is not implemented.
+are bounded by size, deadlines and cancellation. The later HTTPS increment below
+adds the actual bounded transport.
 
 Twenty-four trust tests include two preserved genuine bundles, signature/payload/
 timestamp/log tampering and forged claim rejection. The foreign repository's
 genuine native proof authenticates cryptographically but refuses SBXR admission.
 The backend intentionally refuses invalid extra timestamps and noncanonical wire
-aliases more strictly than Go. A genuine valid SBXR release/v0.2 bundle and the
-candidate fixture's raw manifest are absent, so complete positive authentication
-orchestration is not demonstrated. Authentication does not grant qualification.
+aliases more strictly than Go. The later public-release increment supplies genuine SBXR native proofs and
+positive acquisition. The candidate fixture's raw manifest remains absent.
+Authentication does not grant qualification.
 See `tests/testdata/artifact_trust/README.md` for policy and fixture provenance.
 
 The separate [offline package tool](../tooling/rust-package/README.md) reuses
@@ -622,8 +624,9 @@ selected archive to those authenticated digests. The unpacked executable must
 match the supplied installed bytes and pass retained Rust/historical Go ELF proof.
 An injected `AcquisitionTransport` must enforce its deadline, cancellation,
 HTTPS and redirect constraints. The current shared selection budget is 30 seconds;
-the native HTTP transport and parity with Go's longer archive-request window
-remain integration work. No live release was fetched by this increment.
+the later increment supplies native HTTP transport. Parity with Go's longer
+archive-request window remains integration work. This earlier increment fetched
+no live release.
 
 The current Acceptance Record reader intentionally covers the current
 `subscription-clean-install-only` policy, including five HTTP journeys and its
@@ -658,9 +661,9 @@ Actual pinned upstream key/DEB acquisition remains absent.
 The real acquisition entry refuses the preserved genuine foreign native bundle
 before downloading any index/archive. Positive index/archive/Standard integration
 unit tests cross the signature boundary through a private `cfg(test)` constructor
-only. That constructor is absent from product builds. A genuine SBXR native
-release/v0.2 positive bundle and the candidate fixture's raw manifest remain
-missing; the synthetic success path is not complete cryptographic acceptance.
+only. That constructor is absent from product builds. The later public-release
+proofs and example exercise genuine positive authentication independently of this
+unit helper. The candidate fixture's raw manifest remains missing.
 
 The zero-argument frontend remains the labeled simulator. It now recognizes only
 the six exact Go private arguments before menu dispatch: lock provision, proxy
@@ -670,8 +673,9 @@ silently, with the recorder's exact exit 125, until native prerequisites exist.
 ordinary proxy-start checks using authenticated installed bytes, exact startup
 unit/configuration and unchanged running authority. Provisioning creates only the
 fixed coordination inode under existing parents. Ordinary startup requires an
-existing inode. Descriptor lending for busy runtime starts, serving profile/service
-integration, legacy renewal roles and signal/watch handling remain unavailable.
+existing inode. The later handoff module supplies descriptor lending and bounded
+serving/watch composition. Native protected sandbox/process/service adapters and
+legacy renewal roles remain unavailable.
 
 `StandardRemovalHost` provides actual Standard file/command effects behind the
 worker's 29-test removal state machine. It requires an authenticated installed
@@ -731,3 +735,83 @@ for example, create `.scratch/acceptance/linux/t` as a fresh owned directory, th
 run `TMPDIR="$PWD/.scratch/acceptance/linux/t" CARGO_BUILD_JOBS=2 cargo test --locked`
 and `cargo build --locked`. This requires Rust 1.90 and an existing C compiler.
 These commands were not run in a Linux guest during this increment.
+
+
+## Bounded HTTPS and genuine public-release increment
+
+`HttpsTransport` now implements the acquisition boundary with pinned reqwest
+0.13.5, Tokio 1.54.1 and webpki-roots 1.0.11. Reqwest disables default features;
+Hickory supplies asynchronous DNS so cancellation does not leave an OS resolver
+thread behind. The single-thread runtime uses the existing explicit ring TLS
+provider and pinned Mozilla trust. It verifies TLS 1.2/1.3 certificates/hostnames,
+limits headers and raw streaming bytes, rejects automatic content decoding, and
+checks authorization before each of at most four redirects. It sends no cookies,
+authorization or referer; ambient proxy settings are deliberately disabled.
+Embedded roots and direct acquisition are stricter choices than Go's system-root
+and ambient-proxy transport. They need Linux compatibility validation, not a
+silent fallback. No production signature-verification callback is introduced.
+
+Every request, including DNS/connect/TLS/header/body phases, is covered by the
+selection deadline and cancellation. Tests exercise real TLS loopback, raw headers,
+allowed/refused redirects, oversized declared/chunked bodies, encoded bodies,
+untrusted certificates, nested runtimes, stalled reads and unresolved DNS.
+The return-time budget check fixes a timeout/cancellation classification race.
+The shared selection budget is still 30 seconds and is stricter than Go's longer
+archive window. Native deployment remains closed while that policy is reconciled.
+Exact release metadata now rejects Link headers before any proof or asset fetch;
+this fixes a gap exposed by the new boundary tests, preserving Go's completeness
+contract. Native proof pages retain their existing Link refusal.
+
+Public read-only v3.1.118/192 metadata, all three native Snappy proof blobs and the
+exact signed index are preserved under `tests/testdata/public_release/` with
+provenance. Temporary blob URL credentials are excluded. Both offline replay and
+actual `HttpsTransport` requests passed the complete `AuthenticatedInstalled`
+chain using the real 14,975,576-byte amd64 archive: every signature and timestamp,
+metadata/Acceptance Record, index/assets, archive, historical Go ELF proof and
+exact current/installed-byte binding. The archive was held in ignored evidence and
+parsed only in memory. No supplied code was executed or installed. This closes the
+genuine SBXR positive-acquisition gap; it does not requalify that historical release
+or qualify a Rust build. The repository-only evidence example documents replay.
+
+The completed `runtime_handoff` module is integrated with rustix's `net` feature.
+It implements single-use SCM_RIGHTS lending, exact process/peer identity binding,
+retained Owner exclusion, startup interruption, HTTP listener/watch shutdown and
+one-use configuration-bound proxy gates. Core `HostLock::runtime_start_lock`
+returns a duplicate whose Rust lifetime retains the original guard. The concrete
+injected-root ordinary proxy adapter now calls this shared authorization model
+and rechecks protected installed/unit/configuration/authority bytes. Temporary-root
+socket names stay relative to the same fixture directory to respect macOS's Unix
+socket length limit without changing process CWD or adding external symlinks.
+
+The private native dispatcher still refuses. Connecting `ServingHost` and borrowed
+proxy starts requires actual protected Linux process/sandbox/NSS/public-IP facts,
+service handoff wiring and atomic gate effects. These are explicit missing inputs;
+the fixture loopback route is never selected for production. Linux-only peer tests
+have not run on this Mac. Exact authenticated restoration of missing installed
+members, auxiliary removal, upstream pinned key/DEB acquisition and Rust build
+section/bootstrap/workflow integration remain concrete incomplete paths. No
+restoration is guessed from a newer release or ordinary structural inspection.
+
+The committed source-transfer archive is prepared under
+`.scratch/archives/rust-source/` with an external SHA-256/commit manifest. It contains
+only selected committed Rust source, tests, documentation, package tooling and
+required preserved proof fixtures; it excludes history, scratch evidence, caches,
+build outputs and the real downloaded archive. Parent can copy this local artifact
+using available `scp`, `sftp` or `rsync` after choosing a reviewed destination; no
+upload, SSH connection, VM or container has been started. An existing Linux amd64
+Rust 1.90 environment with a C compiler can run the documented tests/build. The
+Mac has QEMU and GNU target std but no prepared guest/container or
+`x86_64-linux-gnu-gcc`; no prerequisite was installed.
+
+Evidence for this increment is in `.scratch/acceptance/rust-https/`. All checks are
+local regression/authentication checks, not native deployment qualification.
+
+The integrated suite passed 284 product tests, including 25 portable handoff
+cases; the packaging crate passed eight tests. Strict all-target Clippy, format
+and both Mac builds passed. The complete public acquisition example passed again
+after the completeness fix. Removing that fix in a scoped mutation failed the
+regression before proof/asset acquisition; exact source was restored and the
+regression passed. All 126 added lockfile nodes are new HTTPS/DNS dependencies;
+no previously locked package version was replaced. Temporary fixture roots were
+cleaned. Linux-only execution, native installation and deployment qualification
+remain unperformed.

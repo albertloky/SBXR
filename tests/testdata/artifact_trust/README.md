@@ -46,6 +46,7 @@ this imposes no missing algorithm requirement on SBXR's release format.
 
 The backend rejects any supplied invalid timestamp even if another valid
 source would meet the threshold. This is stricter refusal than Go's timestamp
-threshold collector. A valid SBXR native release/v0.2 bundle and the exact raw
-manifest bytes for the candidate fixture are not present here; these tests do
-not claim an end-to-end positive qualification or deployment result.
+threshold collector. Genuine SBXR native proofs and the complete positive acquisition example now
+live in `tests/testdata/public_release/`. The exact raw manifest bytes for the
+candidate fixture remain absent. Neither fixture set claims a fresh positive
+qualification or deployment result.

@@ -19,7 +19,10 @@ the native frontend stays explicitly unavailable. Identity generation, structura
 release inspection and offline Sigstore authentication have separate modules and
 adjacent/integration tests. `tooling/rust-package/` is the separate offline CLI.
 Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decoding
-is `src/release_archive.rs`. Fixed private dispatch is `src/private_roles.rs`.
+is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
+public proofs and the repository evidence example cover actual acquisition.
+Runtime-start descriptor lending and serving composition are `src/runtime_handoff.rs`.
+Fixed private dispatch is `src/private_roles.rs` and remains closed natively.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Auxiliary removal and authenticated restoration
