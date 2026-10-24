@@ -1,6 +1,6 @@
 use super::{
     FixtureFault, HostError, Operation,
-    filesystem::{Evidence, FixtureFs, Kind, Resource},
+    filesystem::{Evidence, Kind, ProtectedFs, Resource},
 };
 use crate::records::{InstalledRecord, OwnershipRecord, ReleaseIdentity, sha256_hex};
 use rustix::fs::Mode;
@@ -209,14 +209,14 @@ impl HostObservation {
 }
 
 pub struct FixtureHost {
-    fs: FixtureFs,
+    fs: ProtectedFs,
     fault: Option<FixtureFault>,
 }
 impl FixtureHost {
     /// Initializes only an existing empty 0700 temporary fixture directory.
     /// The synthetic software pair proves fixture identity, never release trust.
     pub fn create(root: &Path, release: ReleaseIdentity) -> Result<Self, HostError> {
-        let fs = FixtureFs::open(root)?;
+        let fs = ProtectedFs::open(root)?;
         if !fs.empty()? {
             return Err(HostError::Foreign);
         }
@@ -240,7 +240,7 @@ impl FixtureHost {
         Ok(Self { fs, fault: None })
     }
     pub fn open(root: &Path) -> Result<Self, HostError> {
-        let fs = FixtureFs::open(root)?;
+        let fs = ProtectedFs::open(root)?;
         if fs.observe(MARKER)?.is_none() {
             return Err(HostError::Unsafe);
         }

@@ -9,6 +9,13 @@ pub fn run(
     installation: &mut impl Interface,
 ) -> io::Result<()> {
     match installation.review(Action::Status).mode {
+        ExecutionMode::InjectedHost => {
+            writeln!(output, "SBXR Rust — injected Linux host only")?;
+            writeln!(
+                output,
+                "Test-root files and an injected effect runner. Native deployment is unavailable."
+            )?;
+        }
         ExecutionMode::Simulation => {
             writeln!(output, "SBXR Rust — local simulation only")?;
             writeln!(
@@ -29,10 +36,15 @@ pub fn run(
         let qualifier = match current.mode {
             ExecutionMode::Simulation => "simulated",
             ExecutionMode::Fixture => "fixture",
+            ExecutionMode::InjectedHost => "injected host",
         };
         writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
         writeln!(output, "Subscription status: Not enabled ({qualifier})")?;
         match current.mode {
+            ExecutionMode::InjectedHost => writeln!(
+                output,
+                "Software Lifecycle status: Injected host pair (not release authenticated)"
+            )?,
             ExecutionMode::Simulation => writeln!(
                 output,
                 "Software Lifecycle status: Not inspected (simulation)"
@@ -145,6 +157,9 @@ fn setup(
             match prompt(input, output, "Apply setup? [y/N]")?.as_deref() {
                 Some("y") => {
                     match review.mode {
+                        ExecutionMode::InjectedHost => {
+                            writeln!(output, "Setup 3 — Apply injected host effects and check")?
+                        }
                         ExecutionMode::Simulation => {
                             writeln!(output, "Setup 3 — Simulate install and check")?
                         }

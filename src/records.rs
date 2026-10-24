@@ -15,6 +15,10 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 pub use transitions::{ChangeDirection, HTTP_ENABLEMENT_CHECKPOINTS, PendingChange};
 
+pub(crate) fn ownership_public_ipv4(value: &str) -> bool {
+    ownership::public_ipv4(value)
+}
+
 pub const MAX_RECORD_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

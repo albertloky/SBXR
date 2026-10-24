@@ -1,33 +1,37 @@
-//! Durable Standard setup and cleanup over the explicit fixture host adapter.
+//! Durable Standard setup/recovery over the concrete SetupHost contract.
+//! The original FixtureInstallation alias preserves the explicit fixture adapter.
 use super::{ExecutionMode, Interface, PreparedAction, PreparedBasis, Review};
 use crate::{
     domain::{Action, Availability, Confirmation, Outcome, Result as ActionResult, Status},
     durable::{OwnershipStore, Recovery, Snapshot},
-    host::{FIXTURE_CONFIGURATION, FixtureHost, HostError, HostObservation, Operation},
-    records::{OwnershipRecord, RecoveryDirection, ReleaseIdentity, SetupPhase, sha256_hex},
+    host::{FixtureHost, HostError, Operation, SetupHost, SetupObservation},
+    records::{OwnershipRecord, RecoveryDirection, ReleaseIdentity, SetupPhase},
 };
+#[cfg(test)]
+use crate::{host::FIXTURE_CONFIGURATION, records::sha256_hex};
 use std::{cell::RefCell, rc::Rc};
 
 pub(super) struct FixturePrepared {
     current: Option<Vec<u8>>,
     staged: Option<Vec<u8>>,
-    observation: HostObservation,
+    observation: SetupObservation,
 }
 struct State {
     snapshot: Snapshot,
-    observation: HostObservation,
+    observation: SetupObservation,
     status: Status,
     action: Option<Action>,
 }
 
-pub struct FixtureInstallation {
+pub struct StandardInstallation<H: SetupHost> {
     owner: RefCell<Rc<()>>,
-    host: FixtureHost,
+    host: H,
     store: OwnershipStore,
     release: ReleaseIdentity,
 }
-impl FixtureInstallation {
-    pub fn new(host: FixtureHost, release: ReleaseIdentity) -> Result<Self, HostError> {
+pub type FixtureInstallation = StandardInstallation<FixtureHost>;
+impl<H: SetupHost> StandardInstallation<H> {
+    pub fn new(host: H, release: ReleaseIdentity) -> Result<Self, HostError> {
         let store = OwnershipStore::open(&host.root().join("var/lib/sbxr"), host.uid())
             .map_err(|_| HostError::Unsafe)?;
         Ok(Self {
@@ -37,20 +41,30 @@ impl FixtureInstallation {
             release,
         })
     }
-    pub fn host(&self) -> &FixtureHost {
+    pub fn host(&self) -> &H {
         &self.host
     }
-    pub fn host_mut(&mut self) -> &mut FixtureHost {
+    pub fn host_mut(&mut self) -> &mut H {
         &mut self.host
     }
+    fn mode(&self) -> ExecutionMode {
+        if self.host.is_injected_system() {
+            ExecutionMode::InjectedHost
+        } else {
+            ExecutionMode::Fixture
+        }
+    }
     fn state(&self) -> Result<State, ()> {
+        if !self.host.effects_available() {
+            return Err(());
+        }
         let snapshot = self.store.load().map_err(|_| ())?;
-        let observation = self.host.inspect(&self.release).map_err(|_| ())?;
+        let observation = self.host.inspect_setup(&self.release).map_err(|_| ())?;
         if snapshot.current.as_ref().is_some_and(|current| {
             current.record.schema() != 1
                 || current.record.tunnel_authority().is_some()
                 || current.record.release_identity() != self.release
-                || current.record.configuration_sha256() != sha256_hex(FIXTURE_CONFIGURATION)
+                || current.record.configuration_sha256() != self.host.configuration_sha256()
                 || current.record.lock_provisioning_sha256().is_none()
         }) {
             return Err(());
@@ -80,7 +94,7 @@ impl FixtureInstallation {
     pub fn review(&self, action: Action) -> Review {
         *self.owner.borrow_mut() = Rc::new(());
         let Ok(state) = self.state() else {
-            return Review{mode:ExecutionMode::Fixture,details:vec!["Fixture authority could not be verified. Preserve unknown state; real deployment is unavailable.".into()],status:Status::ProblemDetected,legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("Fixture ownership or host observations are unsafe or unsupported. No deployment action is available."),prepared:None};
+            return Review{mode:self.mode(),details:vec!["Host authority could not be verified. Preserve unknown state; real deployment is unavailable.".into()],status:Status::ProblemDetected,legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("Host ownership or observations are unsafe or unsupported. No deployment action is available."),prepared:None};
         };
         let mut legal_actions = vec![Action::ViewDetails];
         legal_actions.extend(state.action);
@@ -97,16 +111,24 @@ impl FixtureInstallation {
         } else {
             None
         };
-        let plan=match action {
+        let mut plan=match action {
             Action::StartSetup=>vec!["FIXTURE ONLY: write the Standard setup footprint beneath the marked temporary root. No Ubuntu command is executed.".into(),"Before Activation committed, recover with Finish cleanup. After commitment, only Finish setup is legal.".into(),"Synthetic package/configuration facts do not prove real package trust, traffic, deployment or Karing.".into()],
             Action::FinishCleanup=>vec!["FIXTURE ONLY: remove only exactly matched recorded proxy resources; retain unknown files and the installed software pair.".into()],
             Action::FinishSetup=>vec!["FIXTURE ONLY: finish the committed activation forward using fresh exact resource checks.".into()],
             _=>vec![],
         };
+        if self.host.is_injected_system() && !plan.is_empty() {
+            plan=vec!["INJECTED LINUX HOST: only the supplied runner and protected test-root files may change. Native deployment remains unavailable.".into(),"Keep cleanup before activation commitment and forward completion afterward; these checks do not qualify Ubuntu, traffic or Karing.".into()];
+        }
         Review {
-            mode: ExecutionMode::Fixture,
+            mode: self.mode(),
             details: vec![format!(
-                "Fixture durable phase: {:?}. Synthetic fixture files prove no real runtime or release qualification.",
+                "{} durable phase: {:?}. Injected or synthetic host facts prove no real runtime or release qualification.",
+                if self.host.is_injected_system() {
+                    "Injected Linux host"
+                } else {
+                    "Fixture"
+                },
                 state.snapshot.current.as_ref().map(|r| r.record.phase())
             )],
             status: state.status,
@@ -153,8 +175,8 @@ impl FixtureInstallation {
         if prepared.action == Action::StartSetup {
             let Ok(record) = OwnershipRecord::new_standard(
                 self.release.clone(),
-                "8.8.8.8",
-                &sha256_hex(FIXTURE_CONFIGURATION),
+                self.host.public_ipv4(),
+                &self.host.configuration_sha256(),
             ) else {
                 return self.result(
                     Outcome::Refused,
@@ -205,7 +227,7 @@ impl FixtureInstallation {
                 _ => None,
             };
             if let Some(operation) = operation {
-                if self.host.apply(operation, &record).is_err() {
+                if self.host.apply_setup(operation, &record).is_err() {
                     return if record.recovery_direction() == RecoveryDirection::Cleanup {
                         self.cleanup(record)
                     } else {
@@ -215,13 +237,16 @@ impl FixtureInstallation {
             } else if next.phase() == SetupPhase::ActivationCommitted {
                 if !self
                     .host
-                    .inspect(&self.release)
+                    .inspect_setup(&self.release)
                     .is_ok_and(|o| o.ready_to_activate() && o.stopped())
                 {
                     return self.pending();
                 }
             } else if next.phase() == SetupPhase::Running
-                && !self.host.inspect(&self.release).is_ok_and(|o| o.running())
+                && !self
+                    .host
+                    .inspect_setup(&self.release)
+                    .is_ok_and(|o| o.running())
             {
                 return self.pending();
             }
@@ -281,7 +306,7 @@ impl FixtureInstallation {
         ];
         while (record.cleanup_checkpoint() as usize) < STEPS.len() {
             let operation = STEPS[record.cleanup_checkpoint() as usize];
-            if self.host.apply(operation, &record).is_err() {
+            if self.host.apply_setup(operation, &record).is_err() {
                 return self.pending();
             }
             let next = record
@@ -292,7 +317,11 @@ impl FixtureInstallation {
             }
             record = next;
         }
-        if !self.host.inspect(&self.release).is_ok_and(|o| o.empty()) {
+        if !self
+            .host
+            .inspect_setup(&self.release)
+            .is_ok_and(|o| o.empty())
+        {
             return self.pending();
         }
         if self
@@ -302,7 +331,11 @@ impl FixtureInstallation {
         {
             return self.pending();
         }
-        if !self.host.inspect(&self.release).is_ok_and(|o| o.empty()) {
+        if !self
+            .host
+            .inspect_setup(&self.release)
+            .is_ok_and(|o| o.empty())
+        {
             return self.result(
                 Outcome::Refused,
                 "Fixture cleanup ended without a proved empty footprint.",
@@ -345,6 +378,28 @@ impl FixtureInstallation {
         }
     }
     fn result(&self, outcome: Outcome, message: &'static str) -> ActionResult {
+        let message = if self.host.is_injected_system() {
+            match outcome {
+                Outcome::Cancelled => "Injected host action cancelled; no changes made.",
+                Outcome::Refused => {
+                    "Injected host authority refused. Preserve unknown state; native deployment is unavailable."
+                }
+                Outcome::SetupComplete => {
+                    "Injected Linux host setup completed with durable checks. Native Ubuntu deployment and outside traffic remain unverified."
+                }
+                Outcome::NeedsCleanup => {
+                    "Injected host setup requires Finish cleanup before activation commitment."
+                }
+                Outcome::NeedsCompletion => {
+                    "Injected host activation is committed. Only Finish setup is legal."
+                }
+                Outcome::CleanedUp => {
+                    "Injected host cleanup completed; exact recorded resources are absent and foreign files are preserved."
+                }
+            }
+        } else {
+            message
+        };
         ActionResult {
             outcome,
             status: self
@@ -361,11 +416,11 @@ impl FixtureInstallation {
 #[path = "fixture_tests.rs"]
 mod tests;
 
-impl Interface for FixtureInstallation {
+impl<H: SetupHost> Interface for StandardInstallation<H> {
     fn review(&self, action: Action) -> Review {
-        FixtureInstallation::review(self, action)
+        StandardInstallation::review(self, action)
     }
     fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> ActionResult {
-        FixtureInstallation::execute(self, prepared, confirmation)
+        StandardInstallation::execute(self, prepared, confirmation)
     }
 }

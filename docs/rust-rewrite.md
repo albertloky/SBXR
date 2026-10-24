@@ -58,10 +58,14 @@ or Karing verification.
 | `src/domain.rs` | Setup Action, Status, Confirmation, Availability, Phase and exact outcome codes |
 | `src/configuration.rs` | Fixed Standard host contract copied from Go: paths, port, sing-box 1.14.3 identity and REALITY destination |
 | `src/proxyinstallation.rs` | Two-operation Interface, shared Review/Prepared Action types, explicit mode and simulation admission |
-| `src/proxyinstallation/fixture.rs` | Durable Standard setup, activation, forward completion and eight-step cleanup through the fixture adapter |
+| `src/proxyinstallation/fixture.rs` | Shared `StandardInstallation<H>` setup/recovery; the original `FixtureInstallation` alias retains its explicit adapter |
 | `src/proxyinstallation/simulation.rs` | Explicit in-memory fixture facts, phases and interruption injection; no operating-system adapter |
 | `src/terminal.rs` | Numbered menu and wizard through Review/Execute; explicit simulation/fixture labels |
-| `src/host.rs`, `src/host/` | Fixed command templates, marked fixture roots, read-only file evidence and bound filesystem effects; no process runner |
+| `src/host.rs`, `src/host/` | `SetupHost` contract, protected descriptor-relative files, original fixtures and Linux observation/injected effects |
+| `src/host/process.rs` | Fixed native read-only argv, bounded output, cancellation, deadlines and owned process-group cleanup |
+| `src/host/linux.rs`, `src/host/linux/` | Fail-closed native observers; pinned material and explicit injected-root Standard effects |
+| `src/identity_generation.rs` | Ephemeral X25519/UUID/credential generation, injected entropy and Go-compatible validation |
+| `src/release_identity.rs` | Strict index/trailer bindings and explicit Rust/historical Go ELF inspection; no external authentication |
 | `src/subscription_artifact.rs` | Pure VLESS/VMess client encoding, HTTP link/token syntax and redacted secret-bearing types |
 | `src/records.rs`, `src/records/` | Strict schema-1/schema-2 historical authority, Installed Record codecs, exact ownership proofs and current HTTP/setup transitions |
 | `src/server_configuration.rs` | Pure supplied-identity sing-box configuration, pinned package metadata and exact dedicated tunnel unit |
@@ -84,9 +88,9 @@ Independent parity checks now live in `tests/parity.rs` and
 `tests/testdata/parity/`. Preserve their assertions and fixtures. They exposed
 and now guard expiration of earlier Prepared Actions after every later Review,
 including Status and View details. Pure server configuration and HTTP Subscription Serving are now implemented
-through public library APIs. Cryptographic generation, product orchestration,
-Software Lifecycle and a real Ubuntu Host Adapter remain separate integration
-scopes; the CLI still constructs only the Standard simulator.
+through public library APIs. Cryptographic generation and structural release inspection are now integrated.
+Product orchestration, Software Lifecycle, real Ubuntu mutation effects and
+external authentication remain separate integration scopes; the CLI still constructs only the Standard simulator.
 
 ## Local commands and evidence
 
@@ -122,14 +126,16 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
 
 ## Parity gaps that remain required
 
-- Real root-only Ubuntu admission, whole-host/package locks, fresh observations,
-  timeouts/cancellation, ownership publication/fsync and protected file handling.
+- Real Ubuntu mutation effects with retained whole-host/dpkg locks, authenticated
+  package acquisition, dynamic UID/GID changes and effect subprocess budgets.
+  Native root/OS/architecture observation and bounded read-only probes exist;
+  public-IP, destination TLS compatibility and TCP443 bind admission remain gaps.
 - Production integration of the strict records and Standard filesystem foundation.
   Historical schema-2, tunnel, HTTPS and removal records decode without migration;
   only current HTTP and setup transitions have writers. Physical crash/power-loss
   and native Linux durability qualification remain untested.
-- Real sing-box config validation, cryptographic key/Client Identity generation,
-  confirmed client disclosure, identity revocation and sequential cutover.
+- Packaged sing-box validation and product integration of the ephemeral identity
+  generators, confirmed client disclosure, revocation and sequential cutover.
 - Product-level HTTP serving/rotation orchestration and protected service/firewall
   installation; optional VMess/cloudflared prerequisite inspection and integration.
   Pure rendering, bounded HTTP runtime and durable HTTP transitions are available.
@@ -257,13 +263,13 @@ file ownership below the root. No systemd, APT, firewall, account, download or
 network operation executes. The adapter checks caller-owned fixture metadata;
 it does not claim the production root:sing-box ownership model is qualified.
 
-`planned_commands(Operation)` and `planned_observation_commands()` expose fixed
+`planned_commands(Operation)` and `planned_observation_commands()` retain fixed
 argv templates copied from Go, including the pinned package download directory
 and packaged configuration check. They are **not an executable command plan**:
 conditional/dynamic UID/GID, process/package exclusion, repository/download trust,
 deadlines and real host observations still need porting before a live runner can
-exist. `require_live_adapter()` explicitly refuses real deployment. No process
-runner or live adapter is implemented.
+exist. `require_live_adapter()` explicitly refuses real deployment. A separate bounded fixed-argv read-only native runner now exists; no native
+mutation runner or live adapter is implemented.
 
 `proxyinstallation::FixtureInstallation::new(host, release)` connects the
 fixture adapter to the strict records and protected Ownership Store. It shares
@@ -282,7 +288,7 @@ proxy footprint absent, then removes only the completed record. A visible target
 after uncertain publication is accepted only after an exact reread and successful
 file/directory synchronization. Unknown staging is retained and refused.
 
-The numbered terminal now consumes that same two-operation Interface. Its banner,
+The numbered terminal consumes that same two-operation Interface. Its banner,
 status suffixes and completion messages explicitly distinguish in-memory
 simulation from filesystem fixtures. Tests run the ordinary Standard wizard
 against the durable fixture journey, close/reopen the model after interruptions,
@@ -389,3 +395,96 @@ registry dependencies (`httparse` 1.10.1, `subtle` 2.6.1) were resolved offline 
 the local Cargo cache. Evidence is under `.scratch/acceptance/rust-authority/`;
 worker provenance remains under `rust-server/` and `rust-serving/`. No production
 system, VPS, Karing, release signing or publication was exercised.
+
+
+## Linux observation and injected Standard orchestration increment
+
+`host::linux::NativeObserver::open()` refuses every platform except root Linux
+Ubuntu 24.04 amd64, before running a probe. Native observation uses a protected
+root descriptor, no-follow parents, root-owned non-writable executable paths and
+fixed read-only queries for package/hold/account/process/systemd/listener/clock
+facts. `/etc/os-release` permits only the fixed Ubuntu `../usr/lib/os-release`
+symlink to a protected regular file. Unexpected statuses/exit codes, incomplete
+observations, changed executable evidence and contradictory facts refuse.
+
+`NativeObserver::{read_ownership,read_installed,read_configuration}` provide actual
+bounded filesystem observations. Ownership remains strict validated authority;
+configuration requires root ownership, 0640, the freshly observed package GID and
+its exact expected digest. Installed pairs require protected files plus matching
+record/trailer identity, sequence and whole-executable digest, and explicit Linux
+ELF/build proof from `release_identity`. These are structural coherence checks,
+not signer/index/attestation authentication. `production_admitted` is always false:
+network/bind admission and retained real mutation/package locks are not supplied.
+
+`host::process` exposes fixed typed `Query` values, not shell strings. Native
+commands have five-second deadlines, a combined 1 MiB output cap, null stdin,
+cleared environment, fixed PATH/locale and `/` working directory. Output reads
+are nonblocking and check cancellation/deadline on every iteration. Child processes
+run in a dedicated process group; wait-without-reaping retains the owned leader
+until group termination and reaping, including descendant-held pipes and errors.
+Raw stdout/stderr are never formatted by errors or Debug. Native configuration
+validation and every mutation effect remain unavailable. Injected runners have
+an explicit cooperative-cancellation contract; a production mutation transport
+with its five-minute Go operation budgets has not been implemented.
+
+`StandardInstallation<H: SetupHost>` reuses the existing Review/Execute state
+machine and opaque Prepared Action for both the original fixture and a Linux
+adapter with injected effects. Every later Review expires authority, Execute
+rechecks exact record/stage bytes and file/command fingerprints, and each durable
+checkpoint still selects cleanup before Activation committed and only forward
+completion afterward. An already enabled, quiescent service can be retried after
+an interrupted enable checkpoint; active/foreign processes do not pass the
+pre-activation stopped check. Traffic remains `cannot be verified`.
+
+`LinuxHost::injected` requires an explicit protected 0700 root different from `/`
+and a runner declaring injected effects. NativeReadOnly cannot become that
+capability. `InjectedAdmission` values are test inputs, never real privilege,
+network or lock proofs. This adapter publishes production-format APT/config/unit
+files below that root and verifies fresh package/service/account facts through
+the supplied runner. Native root writes are separately refused by protected
+filesystem primitives. Current injected UID/GID mappings are caller-owned test
+files; native chown, package/account exclusivity and systemd effects are not
+implemented. There is no native-to-fixture fallback and no real effect runner.
+
+`SetupMaterial::verified` requires the pinned upstream signing-key digest and
+DEB size/digest, a bounded fixed Standard configuration, and no implicit download.
+Tests use private cfg(test) construction with visibly synthetic key/package bytes;
+this never weakens the public pinned constructor or qualifies upstream trust.
+The installed test executable uses inert Go-verified ELF bytes with a synthetic
+trailer/record; it is never executed.
+
+The executable retains its explicitly labeled simulator. Injected-host menus have
+a separate banner and qualifier. `require_live_adapter()` distinguishes unsupported
+native hosts from unavailable production effects and never returns a simulator.
+No new public flag, hidden environment switch or native installation path exists.
+
+Adjacent host tests run real protected files and controlled child processes with
+fake package/systemd/account commands. They cover every reopened setup checkpoint,
+pre/post-effect failure, forward enable/start retry, partial cleanup, stale Review,
+foreign children, unsafe parents, hardlinks, changed roots, configuration/pair
+bindings, output limits, cancellation and descendant pipe deadlines. A failure
+injection exposed and corrected the overly strict enable retry without weakening
+its assertion. Native mutation capability and parent no-follow guard mutation
+checks demonstrate regression detection. Logs are under
+`.scratch/acceptance/rust-linux/`.
+
+The official Linux amd64 GNU standard-library target was installed only in the
+workspace-local Rust 1.90 toolchain. `cargo check --target x86_64-unknown-linux-gnu`
+is a cross-compilation/type check, not linking, a musl build, running Ubuntu,
+embedding release metadata, package validation, service isolation, physical crash,
+VPS/Karing or deployment qualification.
+
+`identity_generation` integrates pinned dalek X25519, getrandom, base64 and zeroize
+with no handwritten cryptography. Its ten tests retain five Go/RFC derivation
+vectors, 29 Go validation cases, independent entropy allocation, fail-closed
+partial entropy, redaction and ephemeral OS randomness. Its adapters feed the
+existing server/client codecs; no generated credential is installed or disclosed
+by a product action. Explicit accessors remain subject to future Owner authority.
+
+`release_identity` integrates sixteen offline tests for strict raw-byte index and
+trailer bindings, installed-pair coherence, explicit pinned Rust metadata/static
+ELF and historical Go build proof. It introduces no dependency and removes no Go
+proof requirement. External attestation/trusted-root verification, authenticated
+archive extraction, native Rust build/packaging proof and existing Go-only release
+workflow changes remain gaps. Structural inspection alone never authorizes a
+trusted release, deployment or publication. See each fixture subtree README.

@@ -2,7 +2,7 @@
 //! Explicit simulation and filesystem-fixture adapters share Review/Execute.
 //! No live host adapter or deployment capability is implemented.
 mod fixture;
-pub use fixture::FixtureInstallation;
+pub use fixture::{FixtureInstallation, StandardInstallation};
 mod simulation;
 pub use simulation::{Facts, SimulatedHost, SimulationFault};
 
@@ -38,6 +38,7 @@ enum PreparedBasis {
 pub enum ExecutionMode {
     Simulation,
     Fixture,
+    InjectedHost,
 }
 
 /// The existing two-operation product boundary, shared by concrete adapters.

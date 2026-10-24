@@ -26,8 +26,15 @@ pub(super) struct Resource {
 pub(super) struct Evidence {
     identity: String,
     digest: Option<String>,
+    pub(super) gid: u32,
 }
-pub(super) struct FixtureFs {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Metadata {
+    pub kind: FileType,
+    pub uid: u32,
+    pub gid: u32,
+}
+pub(super) struct ProtectedFs {
     root: OwnedFd,
     path: PathBuf,
     pub uid: u32,
@@ -35,7 +42,7 @@ pub(super) struct FixtureFs {
 fn failure(_: impl std::fmt::Debug) -> HostError {
     HostError::Io
 }
-impl FixtureFs {
+impl ProtectedFs {
     pub fn open(path: &Path) -> Result<Self, HostError> {
         let uid = std::fs::symlink_metadata(path).map_err(failure)?.uid();
         let root = crate::durable::open_directory(path, uid).map_err(|_| HostError::Unsafe)?;
@@ -48,12 +55,43 @@ impl FixtureFs {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    pub(super) fn native() -> Result<Self, HostError> {
+        super::linux::require_native_platform()?;
+        let root = fs::open(
+            "/",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(failure)?;
+        let stat = fs::fstat(&root).map_err(failure)?;
+        if stat.st_uid != 0 || stat.st_mode & 0o022 != 0 {
+            return Err(HostError::Unsafe);
+        }
+        Ok(Self {
+            root,
+            path: PathBuf::from("/"),
+            uid: 0,
+        })
+    }
     fn check_root(&self) -> Result<(), HostError> {
-        let current =
-            crate::durable::open_directory(&self.path, self.uid).map_err(|_| HostError::Unsafe)?;
+        let current = if self.path == Path::new("/") {
+            super::linux::require_native_platform()?;
+            fs::open(
+                "/",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(failure)?
+        } else {
+            crate::durable::open_directory(&self.path, self.uid).map_err(|_| HostError::Unsafe)?
+        };
         let a = fs::fstat(&self.root).map_err(failure)?;
         let b = fs::fstat(current).map_err(failure)?;
-        if a.st_dev != b.st_dev || a.st_ino != b.st_ino {
+        if a.st_dev != b.st_dev
+            || a.st_ino != b.st_ino
+            || b.st_uid != self.uid
+            || b.st_mode & 0o022 != 0
+        {
             return Err(HostError::Unsafe);
         }
         Ok(())
@@ -157,14 +195,19 @@ impl FixtureFs {
             || after.st_ino != stat.st_ino
             || after.st_uid != stat.st_uid
             || after.st_mode != stat.st_mode
+            || after.st_gid != stat.st_gid
             || after.st_nlink != 1
             || after.st_size as usize != bytes.len()
         {
             return Err(HostError::Unsafe);
         }
         let evidence = Evidence {
-            identity: format!("{}:{}", stat.st_dev, stat.st_ino),
+            identity: format!(
+                "{}:{}:{}:{}:{}:{}",
+                stat.st_dev, stat.st_ino, stat.st_uid, stat.st_gid, stat.st_mode, stat.st_nlink
+            ),
             digest: Some(sha256_hex(&bytes)),
+            gid: stat.st_gid,
         };
         Ok(Some((bytes, evidence)))
     }
@@ -211,11 +254,18 @@ impl FixtureFs {
             _ => return Err(HostError::Foreign),
         }
         Ok(Some(Evidence {
-            identity: format!("{}:{}", stat.st_dev, stat.st_ino),
+            identity: format!(
+                "{}:{}:{}:{}:{}:{}",
+                stat.st_dev, stat.st_ino, stat.st_uid, stat.st_gid, stat.st_mode, stat.st_nlink
+            ),
             digest: None,
+            gid: stat.st_gid,
         }))
     }
     pub fn install(&self, resource: Resource) -> Result<(), HostError> {
+        if self.path == Path::new("/") {
+            return Err(HostError::LiveUnavailable);
+        }
         if self.observe(resource)?.is_some() {
             return Ok(());
         }
@@ -257,6 +307,9 @@ impl FixtureFs {
         Ok(())
     }
     pub fn remove(&self, resource: Resource) -> Result<(), HostError> {
+        if self.path == Path::new("/") {
+            return Err(HostError::LiveUnavailable);
+        }
         if self.observe(resource)?.is_none() {
             return Ok(());
         }
@@ -279,7 +332,95 @@ impl FixtureFs {
         }
         Ok(())
     }
+    pub(super) fn metadata(&self, path: &str) -> Result<Option<Metadata>, HostError> {
+        let Some((dir, name)) = self.parent(path, false)? else {
+            return Ok(None);
+        };
+        let stat = match fs::statat(&dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(failure(e)),
+        };
+        Ok(Some(Metadata {
+            kind: FileType::from_raw_mode(stat.st_mode),
+            uid: stat.st_uid,
+            gid: stat.st_gid,
+        }))
+    }
+    pub(super) fn publish_bytes(
+        &self,
+        path: &str,
+        body: &[u8],
+        mode: Mode,
+    ) -> Result<(), HostError> {
+        if self.path == Path::new("/") {
+            return Err(HostError::LiveUnavailable);
+        }
+        let stage = format!("{path}.sbxr-next");
+        if let Some((existing, _)) = self.raw(path, mode, 1 << 26)? {
+            if existing != body {
+                return Err(HostError::Foreign);
+            }
+            if self.metadata(&stage)?.is_some() {
+                return Err(HostError::Foreign);
+            }
+            return Ok(());
+        }
+        if let Some((existing, _)) = self.raw(&stage, mode, 1 << 26)? {
+            if existing != body {
+                return Err(HostError::Foreign);
+            }
+        } else {
+            self.install_bytes(&stage, body, mode)?;
+        }
+        let (dir, name) = self.parent(path, false)?.ok_or(HostError::Unsafe)?;
+        let stage_name = format!("{name}.sbxr-next");
+        fs::renameat_with(
+            &dir,
+            stage_name.as_str(),
+            &dir,
+            name.as_str(),
+            fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(failure)?;
+        fs::fsync(&dir).map_err(failure)?;
+        if self
+            .raw(path, mode, 1 << 26)?
+            .is_none_or(|(bytes, _)| bytes != body)
+        {
+            return Err(HostError::Unsafe);
+        }
+        Ok(())
+    }
+    pub(super) fn remove_bytes(
+        &self,
+        path: &str,
+        body: &[u8],
+        mode: Mode,
+    ) -> Result<(), HostError> {
+        if self.path == Path::new("/") {
+            return Err(HostError::LiveUnavailable);
+        }
+        let Some((existing, evidence)) = self.raw(path, mode, 1 << 26)? else {
+            return Ok(());
+        };
+        if existing != body {
+            return Err(HostError::Foreign);
+        }
+        let (dir, name) = self.parent(path, false)?.ok_or(HostError::Unsafe)?;
+        if self
+            .raw(path, mode, 1 << 26)?
+            .is_none_or(|(_, fresh)| fresh != evidence)
+        {
+            return Err(HostError::Unsafe);
+        }
+        fs::unlinkat(&dir, name.as_str(), AtFlags::empty()).map_err(failure)?;
+        fs::fsync(dir).map_err(failure)
+    }
     pub fn install_bytes(&self, path: &str, body: &[u8], mode: Mode) -> Result<(), HostError> {
+        if self.path == Path::new("/") {
+            return Err(HostError::LiveUnavailable);
+        }
         if self.raw(path, mode, 1 << 20)?.is_some() {
             return Err(HostError::Foreign);
         }

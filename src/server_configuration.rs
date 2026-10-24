@@ -118,6 +118,17 @@ impl ServerConfiguration {
         Self::encode(value)
     }
 
+    pub(crate) fn is_standard_only(&self) -> bool {
+        let Ok(value) = serde_json::from_slice::<Value>(&self.0) else {
+            return false;
+        };
+        value["inbounds"]
+            .as_array()
+            .is_some_and(|inbounds| inbounds.len() == 1)
+            && value["inbounds"][0]["tls"]["server_name"] == STANDARD.server_name
+            && value["inbounds"][0]["tls"]["reality"]["handshake"]["server"] == "google.com"
+            && value["inbounds"][0]["tls"]["reality"]["handshake"]["server_port"] == 443
+    }
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }

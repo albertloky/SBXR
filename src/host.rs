@@ -1,9 +1,14 @@
 //! Standard Ubuntu command plans and an explicit filesystem-fixture adapter.
-//! There is deliberately no process runner or deployable live adapter.
+//! Native observation is read-only; mutation effects require an explicit injected root/runner.
+//! A deployable live adapter remains unavailable.
 mod filesystem;
 mod fixture;
+pub mod linux;
+pub mod process;
+mod setup;
 use crate::records::SetupPhase;
 pub use fixture::{FIXTURE_CONFIGURATION, FixtureHost, HostObservation};
+pub use setup::{SetupHost, SetupObservation};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,12 +18,20 @@ pub enum HostError {
     Io,
     Injected,
     LiveUnavailable,
+    UnsupportedHost,
+    Cancelled,
+    Timeout,
+    OutputLimit,
 }
 impl fmt::Display for HostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::LiveUnavailable => "Real deployment is unavailable in this Rust increment.",
-            _ => "Fixture host facts or effects could not be safely verified.",
+            Self::UnsupportedHost => "This host is unsupported; Linux Ubuntu 24.04 amd64 and root are required. No simulation fallback is selected.",
+            Self::Cancelled => "Host operation cancelled; reinspect before further effects.",
+            Self::Timeout => "Host operation timed out; reinspect before further effects.",
+            Self::OutputLimit => "Host command exceeded its bounded output contract.",
+            _ => "Host facts or effects could not be safely verified.",
         })
     }
 }
@@ -26,6 +39,7 @@ impl std::error::Error for HostError {}
 
 /// Explicit capability refusal; never substitutes the fixture adapter for live work.
 pub fn require_live_adapter() -> Result<(), HostError> {
+    linux::require_native_environment()?;
     Err(HostError::LiveUnavailable)
 }
 

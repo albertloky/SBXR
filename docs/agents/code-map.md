@@ -6,6 +6,19 @@ in [docs/adr](../adr). The [documentation index](../README.md) separates current
 MVP guidance from historical material. Module READMEs explain the contracts
 behind these paths.
 
+## Isolated Rust rewrite
+
+The Owner-requested Rust implementation lives in the isolated sibling workspace
+documented by [the Rust handoff](../rust-rewrite.md). In that workspace, Standard
+setup/recovery is `src/proxyinstallation/fixture.rs` (`StandardInstallation<H>`);
+`src/host/setup.rs` defines its narrow host contract. Native observations and
+injected-root effects are in `src/host/linux.rs` and its small submodules; bounded
+read-only process transport is `src/host/process.rs`. Identity generation and
+structural release inspection have separate modules and adjacent/integration
+tests. A native production mutation adapter remains unavailable. Read that handoff
+before selecting Rust checks; Go live qualification never follows from local
+Rust fixture or cross-compilation results.
+
 ## Product execution
 
 `cmd/sbxr` selects the platform entry point and private runtime roles. Normal
