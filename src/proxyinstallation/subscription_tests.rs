@@ -2419,3 +2419,119 @@ fn disclosure_status_uses_metadata_without_reading_subscription_credential() {
     assert!(session.status().unwrap().client_configuration_available);
     assert_eq!(fs::metadata(path).unwrap().accessed().unwrap(), before);
 }
+
+struct OfflineOwnerIo(Arc<OwnerIoFixture>);
+impl PeerObservations for OfflineOwnerIo {
+    fn current(&self) -> Result<ProcessIdentity, runtime_handoff::Error> {
+        self.0.current()
+    }
+    fn peer(
+        &self,
+        s: &std::os::unix::net::UnixStream,
+    ) -> Result<ProcessIdentity, runtime_handoff::Error> {
+        self.0.peer(s)
+    }
+}
+impl crate::host::owner_runtime::OwnerIo for OfflineOwnerIo {
+    fn query(
+        &self,
+        q: crate::host::owner_runtime::Observation,
+        c: &StartContext,
+    ) -> Result<crate::host::process::CommandOutput, HostError> {
+        self.0.query(q, c)
+    }
+    fn service(
+        &self,
+        a: ServiceAction,
+        o: &Arc<HostLock>,
+        s: Option<&std::path::Path>,
+        c: &StartContext,
+    ) -> Result<(), HostError> {
+        self.0.service(a, o, s, c)
+    }
+    fn port_available(&self, p: u16, c: &StartContext) -> Result<bool, HostError> {
+        self.0.port_available(p, c)
+    }
+    fn process(&self, p: u32) -> Result<ProcessIdentity, HostError> {
+        self.0.process(p)
+    }
+    fn public_ipv4(&self, _: &StartContext) -> Result<Ipv4Addr, HostError> {
+        panic!("offline removal must not request a public IP")
+    }
+    fn validate_configuration(
+        &self,
+        _: &Arc<HostLock>,
+        _: &str,
+        _: &StartContext,
+    ) -> Result<bool, HostError> {
+        panic!("offline removal must not execute sing-box")
+    }
+}
+#[test]
+fn native_removal_runtime_stops_and_joins_real_fixture_serving_without_network_probe() {
+    use crate::host::{linux::AuxiliaryRuntime, owner_runtime::OwnerRuntime};
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let mut frontend = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let prepared = frontend
+        .review(Action::EnableSubscription)
+        .prepared
+        .unwrap();
+    assert_eq!(
+        frontend.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::SubscriptionEnabled
+    );
+    drop(frontend);
+    let path = "var/lib/sbxr/proxy-ownership.json";
+    let source = OwnershipRecord::decode(&fs::read(root.0.join(path)).unwrap()).unwrap();
+    let committed =
+        crate::removal::commit_removal(Some(&source), &proof.record().release_identity()).unwrap();
+    root.write(path, &committed.encode().unwrap(), 0o600);
+    let mut runtime =
+        OwnerRuntime::injected(&root.0, &proof, OfflineOwnerIo(io.clone()), io.address).unwrap();
+    assert!(runtime.observe(&committed).unwrap().serving_running);
+    let owner = Arc::new(HostLock::existing(&root.0, root.uid()).unwrap());
+    runtime.disable(false, &committed, &owner).unwrap();
+    let facts = runtime.observe(&committed).unwrap();
+    assert!(!facts.serving_running && facts.quiescent);
+    runtime.disable(true, &committed, &owner).unwrap();
+    assert!(
+        !runtime
+            .observe(&committed)
+            .unwrap()
+            .firewall_rules
+            .contains("sbxr-subscription")
+    );
+    assert!(TcpStream::connect_timeout(&io.address, Duration::from_millis(100)).is_err());
+    assert_eq!(
+        fs::read(root.0.join(path)).unwrap(),
+        committed.encode().unwrap()
+    );
+    let mut checkpoint = committed;
+    for _ in 0..9 {
+        checkpoint = crate::removal::next_checkpoint(&checkpoint).unwrap();
+    }
+    root.write(path, &checkpoint.encode().unwrap(), 0o600);
+    fs::remove_file(root.0.join("usr/local/bin/sbxr")).unwrap();
+    runtime.observe(&checkpoint).unwrap();
+    fs::remove_file(root.0.join("var/lib/sbxr/installed.json")).unwrap();
+    assert!(runtime.observe(&checkpoint).is_err());
+    checkpoint = crate::removal::next_checkpoint(&checkpoint).unwrap();
+    root.write(path, &checkpoint.encode().unwrap(), 0o600);
+    runtime.observe(&checkpoint).unwrap();
+}

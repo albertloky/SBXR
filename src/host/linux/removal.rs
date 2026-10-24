@@ -1,5 +1,6 @@
-//! Concrete Standard-only removal. Auxiliary authority refuses rather than
-//! claiming absent effects. Native production entry remains closed.
+//! Concrete offline removal with exact current HTTP/startup auxiliary ownership.
+//! Historical HTTPS/tunnel authority remains unavailable. Production entry is closed.
+mod auxiliary;
 use super::*;
 use crate::{
     durable::{OWNERSHIP_FILE, OwnershipStore, STAGED_FILE},
@@ -8,9 +9,11 @@ use crate::{
         RemovalEffect, RemovalFacts, RemovalHost,
     },
 };
+pub use auxiliary::{AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime};
 const CURRENT: &str = "var/lib/sbxr/proxy-ownership.json";
 const FINAL: &str = "var/lib/.sbxr-removal.json";
-pub struct StandardRemovalHost<R> {
+pub struct StandardRemovalHost<R, B = NoAuxiliaryRuntime> {
+    auxiliary: B,
     pub(super) inner: LinuxHost<R>,
     store: Option<OwnershipStore>,
     package_locks: Option<super::super::locks::PackageLocks<'static>>,
@@ -19,7 +22,7 @@ pub struct StandardRemovalHost<R> {
     #[cfg(test)]
     fault: Option<u8>,
 }
-impl<R: CommandRunner> StandardRemovalHost<R> {
+impl<R: CommandRunner> StandardRemovalHost<R, NoAuxiliaryRuntime> {
     pub fn new(inner: LinuxHost<R>) -> Result<Self, HostError> {
         let installed = inner
             .authenticated
@@ -42,6 +45,7 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
                 .map_err(|_| HostError::Unsafe)?,
         );
         Ok(Self {
+            auxiliary: NoAuxiliaryRuntime,
             inner,
             store,
             package_locks: None,
@@ -51,32 +55,29 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
             fault: None,
         })
     }
+    pub fn with_auxiliary<B: AuxiliaryRuntime>(self, auxiliary: B) -> StandardRemovalHost<R, B> {
+        StandardRemovalHost {
+            auxiliary,
+            inner: self.inner,
+            store: self.store,
+            package_locks: self.package_locks,
+            installed: self.installed,
+            executable: self.executable,
+            #[cfg(test)]
+            fault: self.fault,
+        }
+    }
+}
+impl<R: CommandRunner, B: AuxiliaryRuntime> StandardRemovalHost<R, B> {
     #[cfg(test)]
     pub(super) fn interrupt_finalization(&mut self, point: u8) {
         self.fault = Some(point)
     }
     fn supported(&self, record: &OwnershipRecord) -> Result<(), HostError> {
+        self.current_auxiliary(record)?;
         let value: serde_json::Value =
             serde_json::from_slice(&record.encode().map_err(|_| HostError::Foreign)?)
                 .map_err(|_| HostError::Foreign)?;
-        for key in [
-            "tunnel",
-            "serving",
-            "renewal",
-            "certificate_activation",
-            "subscription_enablement",
-            "subscription_rotation",
-            "subscription_repair",
-            "subscription_resources",
-            "proxy_startup",
-            "client_identity_rotation",
-            "https_retirement",
-            "subscription_transport_migration",
-        ] {
-            if value.get(key).is_some() {
-                return Err(HostError::LiveUnavailable);
-            }
-        }
         if value["proxy_package_identity"] == "" {
             if record.release_identity() != self.installed.release_identity() || !self.absent()? {
                 return Err(HostError::Foreign);
@@ -131,6 +132,16 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
             "etc/sing-box",
             "var/lib/sing-box",
             "usr/lib/systemd/system/sing-box.service",
+            crate::host::identity::STARTUP,
+            crate::host::identity::TARGET,
+            crate::host::identity::CONFIG_STAGE,
+            crate::host::subscription::TOKEN,
+            crate::host::subscription::STATE,
+            crate::host::subscription::STAGING,
+            crate::host::subscription::UNIT,
+            crate::host::subscription::LINK,
+            crate::host::subscription::FIREWALL,
+            crate::host::subscription::FIREWALL_LINK,
         ] {
             if self.inner.fs.metadata(path)?.is_some()
                 || self
@@ -144,16 +155,20 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
         }
         Ok(true)
     }
-    fn owned_proxy(&self) -> Result<String, HostError> {
+    fn owned_proxy(&self, record: &OwnershipRecord) -> Result<String, HostError> {
         let facts = Facts::removal(&self.inner.runner, &self.inner.stop)?;
         self.inner.runner.removal_identity_safe(&self.inner.stop)?;
         let mut fingerprint = facts.fingerprint.clone();
-        for (path, body, mode) in [
-            (KEY, self.inner.material.key.as_slice(), 0o644),
-            (SOURCE, APT_SOURCE, 0o644),
-            (CONFIG, self.inner.material.configuration.as_bytes(), 0o640),
-            (ARTIFACT, self.inner.material.package.as_slice(), 0o600),
-            (LOCK_UNIT, UNIT, 0o644),
+        for (path, digest, mode) in [
+            (KEY, self.inner.material.key_sha256.clone(), 0o644),
+            (SOURCE, sha256_hex(APT_SOURCE), 0o644),
+            (
+                CONFIG,
+                self.inner.material.configuration_digest.clone(),
+                0o640,
+            ),
+            (ARTIFACT, self.inner.material.package_sha256.clone(), 0o600),
+            (LOCK_UNIT, sha256_hex(UNIT), 0o644),
         ] {
             for selected in [path.to_string(), format!("{path}.sbxr-next")] {
                 if let Some((bytes, evidence)) =
@@ -161,8 +176,13 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
                         .fs
                         .raw(&selected, Mode::from_raw_mode(mode), 1 << 26)?
                 {
-                    if bytes != body
-                        || path == CONFIG && (!facts.identity || Some(evidence.gid) != facts.gid)
+                    if (if path == CONFIG {
+                        !self
+                            .configuration_digests(record)?
+                            .contains(&sha256_hex(&bytes))
+                    } else {
+                        sha256_hex(&bytes) != digest || evidence.gid != self.inner.fs.gid
+                    }) || path == CONFIG && (!facts.identity || Some(evidence.gid) != facts.gid)
                     {
                         return Err(HostError::Foreign);
                     }
@@ -196,9 +216,11 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
             .fs
             .directory_entries("etc/sing-box", Mode::from_raw_mode(0o755))?
             .is_some_and(|names| {
-                names
-                    .iter()
-                    .any(|s| s != "config.json" && s != "config.json.sbxr-next")
+                names.iter().any(|s| {
+                    s != "config.json"
+                        && s != "config.json.sbxr-next"
+                        && s != ".config.json.sbxr-next"
+                })
             })
         {
             return Err(HostError::Foreign);
@@ -223,11 +245,32 @@ impl<R: CommandRunner> StandardRemovalHost<R> {
         }
         Ok(fingerprint)
     }
+    fn remove_bound_configuration(&self, record: &OwnershipRecord) -> Result<(), HostError> {
+        let digests = self.configuration_digests(record)?;
+        for path in [CONFIG.to_owned(), format!("{CONFIG}.sbxr-next")] {
+            if let Some((bytes, _)) =
+                self.inner
+                    .fs
+                    .raw(&path, Mode::from_raw_mode(0o640), 1 << 20)?
+            {
+                if !digests.contains(&sha256_hex(&bytes)) {
+                    return Err(HostError::Foreign);
+                }
+                self.inner
+                    .fs
+                    .remove_bytes(&path, &bytes, Mode::from_raw_mode(0o640))?;
+            }
+        }
+        Ok(())
+    }
     fn guard(&self) -> Result<(), HostError> {
         self.inner.lock.as_ref().ok_or(HostError::Unsafe)?.verify()
     }
 }
-impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
+impl<R: CommandRunner, B: AuxiliaryRuntime> RemovalHost for StandardRemovalHost<R, B> {
+    fn is_native_system(&self) -> bool {
+        self.inner.native_mode
+    }
     fn effects_available(&self) -> bool {
         self.inner.effects_available() && self.inner.authenticated.is_some()
     }
@@ -276,6 +319,13 @@ impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
                 "installed.json",
                 "sing-box_1.14.3_amd64.deb",
                 "sing-box_1.14.3_amd64.deb.sbxr-next",
+                "subscription-token",
+                "subscription-token.sbxr-next",
+                "subscription-serving.json",
+                "subscription-serving.json.sbxr-next",
+                "subscription-staging",
+                "client-identity-target.json",
+                "client-identity-target.json.sbxr-next",
             ]
             .contains(&n.as_str())
         }) {
@@ -283,7 +333,11 @@ impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
         }
         let fingerprint = if let Some(record) = record {
             self.supported(record)?;
-            self.owned_proxy()?
+            format!(
+                "{}:{}",
+                self.owned_proxy(record)?,
+                self.inspect_auxiliary(record)?
+            )
         } else {
             if !self.absent()? {
                 return Err(HostError::Foreign);
@@ -410,7 +464,8 @@ impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
         record: &OwnershipRecord,
     ) -> Result<EffectState, HostError> {
         self.supported(record)?;
-        self.owned_proxy()?;
+        self.owned_proxy(record)?;
+        self.inspect_auxiliary(record)?;
         use RemovalEffect::*;
         let present = match effect {
             Executable => self.inner.fs.metadata("usr/local/bin/sbxr")?.is_some(),
@@ -462,7 +517,7 @@ impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
                         .metadata(&format!("{KEY}.sbxr-next"))?
                         .is_some()
             }
-            _ => return Err(HostError::LiveUnavailable),
+            _ => self.auxiliary_effect(effect, record)?,
         };
         self.inspect_lifecycle(&self.installed.release_identity())?;
         Ok(if present {
@@ -531,12 +586,12 @@ impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
                 effect.host_operation().ok_or(HostError::Unsafe)?,
                 &self.inner.stop,
             ),
-            PackageArtifact => self
-                .inner
-                .remove(ARTIFACT, &self.inner.material.package, 0o600),
-            ConfigurationState => {
+            PackageArtifact => {
                 self.inner
-                    .remove(CONFIG, self.inner.material.configuration.as_bytes(), 0o640)?;
+                    .remove_hashed(ARTIFACT, &self.inner.material.package_sha256, 0o600)
+            }
+            ConfigurationState => {
+                self.remove_bound_configuration(record)?;
                 self.inner.fs.remove(Resource {
                     path: "etc/sing-box",
                     kind: Kind::Directory(Mode::from_raw_mode(0o755)),
@@ -550,12 +605,15 @@ impl<R: CommandRunner> RemovalHost for StandardRemovalHost<R> {
                 Ok(())
             }
             AptSource => self.inner.remove(SOURCE, APT_SOURCE, 0o644),
-            AptKey => self.inner.remove(KEY, &self.inner.material.key, 0o644),
-            _ => Err(HostError::LiveUnavailable),
+            AptKey => self
+                .inner
+                .remove_hashed(KEY, &self.inner.material.key_sha256, 0o644),
+            _ => self.apply_auxiliary(effect, record),
         }
     }
     fn proxy_absent(&self, record: &OwnershipRecord) -> Result<bool, HostError> {
         self.supported(record)?;
+        self.inspect_auxiliary(record)?;
         self.absent()
     }
     fn finalize(

@@ -75,7 +75,12 @@ impl<H: SetupHost> StandardInstallation<H> {
             return Err(());
         }
         let (status, action) = match snapshot.recovery() {
-            Recovery::Absent if observation.empty() => (Status::NotSetUp, Some(Action::StartSetup)),
+            Recovery::Absent if observation.empty() => (
+                Status::NotSetUp,
+                self.host
+                    .setup_inputs_available()
+                    .then_some(Action::StartSetup),
+            ),
             Recovery::Cleanup => (Status::SetupIncomplete, Some(Action::FinishCleanup)),
             Recovery::FinishSetup if observation.ready_to_activate() => {
                 let phase = snapshot.current.as_ref().ok_or(())?.record.phase();

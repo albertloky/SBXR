@@ -58,8 +58,13 @@ Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using
 `AuthenticatedArchive` and the protected prefix-staging helper in
-`src/host/filesystem/restoration.rs`. It supports only explicit injected roots;
-native recovery and auxiliary removal remain unavailable. Read that handoff before selecting Rust checks; Go live qualification never follows from local
+`src/host/filesystem/restoration.rs`. It now includes a native unreleased constructor and sealed exact-inode finisher
+takeover behind the existing closed production gate. Current HTTP/startup auxiliary
+removal is `src/host/linux/removal/auxiliary.rs`, with local native runtime
+observations in `src/host/owner_runtime/removal.rs`. Digest-only cleanup/removal
+material is in `src/host/linux/material.rs`; it never downloads or regenerates
+secrets. Historical HTTPS/tunnel and Client Identity subscription-artifact
+removal remain unavailable. Read that handoff before selecting Rust checks; Go live qualification never follows from local
 Rust fixture or cross-compilation results.
 
 ## Product execution

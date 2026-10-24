@@ -82,7 +82,9 @@ impl Root {
             package_sha256: sha256_hex(&package),
             key,
             package,
-            configuration,
+            configuration_digest: configuration.sha256_hex(),
+            configuration: Some(configuration),
+            offline: false,
         };
         LinuxHost::injected(&self.0, Fake::new(&self.0), material, admission()).unwrap()
     }
@@ -284,8 +286,8 @@ impl CommandRunner for Fake {
         Ok(())
     }
 }
-fn execute(
-    installation: &mut StandardInstallation<LinuxHost<Fake>>,
+fn execute<R: CommandRunner>(
+    installation: &mut StandardInstallation<LinuxHost<R>>,
     action: Action,
 ) -> crate::domain::Result {
     let prepared = installation
@@ -298,7 +300,7 @@ fn execute(
 fn injected_linux_setup_uses_actual_configuration_and_durable_core() {
     let root = Root::new();
     let host = root.host();
-    let expected = host.material.configuration.as_bytes().to_vec();
+    let expected = host.material.configuration_bytes().unwrap().to_vec();
     let mut installation = StandardInstallation::new(host, release()).unwrap();
     assert_eq!(installation.review(Action::Status).status, Status::NotSetUp);
     let result = execute(&mut installation, Action::StartSetup);
@@ -557,7 +559,10 @@ fn protected_native_readers_bind_exact_records_configuration_and_pair() {
     let expected = host.configuration_sha256();
     let config =
         read_configuration(&host.fs, &host.runner, &expected, &Cancellation::new()).unwrap();
-    assert_eq!(config.as_bytes(), host.material.configuration.as_bytes());
+    assert_eq!(
+        config.as_bytes(),
+        host.material.configuration_bytes().unwrap()
+    );
     assert_eq!(config.sha256_hex(), expected);
     assert!(!format!("{config:?}").contains("private_key"));
     assert!(
@@ -762,7 +767,7 @@ fn system_host(root: &Root) -> (SystemHost, CommandLog, std::rc::Rc<std::cell::C
     let runner = super::super::system::SystemRunner::injected(
         &root.0,
         transport,
-        &base.material.configuration.sha256_hex(),
+        &base.material.configuration_sha256(),
     )
     .unwrap()
     .fixture_package(&base.material.package);
@@ -1133,7 +1138,7 @@ fn authenticated_standard_factory_and_private_roles_recheck_protected_installed_
 fn existing_standard_decoding_preserves_raw_hash_and_derives_client_values() {
     let root = Root::new();
     let host = root.host();
-    let bytes = host.material.configuration.as_bytes();
+    let bytes = host.material.configuration_bytes().unwrap();
     let decoded = ServerConfiguration::decode_standard(bytes).unwrap();
     assert_eq!(decoded.as_bytes(), bytes);
     let facts = decoded.connection_facts("8.8.8.8").unwrap();
@@ -1566,5 +1571,502 @@ fn fake_package_material_has_explicit_contract_modes() {
             fs::metadata(root.0.join(path)).unwrap().mode() & 0o7777,
             mode
         );
+    }
+}
+
+#[test]
+fn journal_only_cleanup_reopens_without_saved_secrets_or_network() {
+    for phase in [
+        SetupPhase::OwnershipRecorded,
+        SetupPhase::AptKeyInstalled,
+        SetupPhase::AptSourceInstalled,
+        SetupPhase::ServiceMasked,
+        SetupPhase::PackageInstalled,
+        SetupPhase::PackageHeld,
+        SetupPhase::StateDirectoryCreated,
+        SetupPhase::ConfigurationInstalled,
+        SetupPhase::ConfigurationValidated,
+        SetupPhase::ServiceUnmasked,
+    ] {
+        let root = Root::new();
+        let (mut host, commands, _) = system_host(&root);
+        host.interrupt_after(Some(phase));
+        let mut setup = StandardInstallation::new(host, release()).unwrap();
+        assert_eq!(
+            execute(&mut setup, Action::StartSetup).outcome,
+            Outcome::NeedsCleanup
+        );
+        let mut host = setup.into_host();
+        let record = read_ownership(&host.fs).unwrap().unwrap();
+        let mut offline = SetupMaterial::for_cleanup(&record).unwrap();
+        // Only these synthetic test hashes replace the production upstream pins.
+        offline.key_sha256 = host.material.key_sha256.clone();
+        offline.package_sha256 = host.material.package_sha256.clone();
+        assert!(
+            offline.configuration.is_none() && offline.key.is_empty() && offline.package.is_empty()
+        );
+        host.material = offline;
+        host.interrupt_after(None);
+        host.admission.destination_compatible = false;
+        host.admission.tcp443_available = false;
+        host.runner.transport().fail_clock.set(true);
+        let count = commands.borrow().len();
+        let mut reopened = StandardInstallation::new(host, release()).unwrap();
+        let review = reopened.review(Action::FinishCleanup);
+        assert!(
+            review.prepared.is_some(),
+            "{phase:?}: {:?}",
+            reopened.host().inspect_setup(&release())
+        );
+        assert_eq!(
+            reopened
+                .execute(review.prepared.unwrap(), Confirmation::Approved)
+                .outcome,
+            Outcome::CleanedUp,
+            "{phase:?}"
+        );
+        assert!(reopened.review(Action::StartSetup).prepared.is_none());
+        assert_eq!(reopened.review(Action::Status).status, Status::NotSetUp);
+        assert!(!root.0.join(CONFIG).exists());
+        assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+        assert!(commands.borrow()[count..].iter().all(|c| {
+            !matches!(c.program(), "/usr/bin/sing-box" | "/usr/bin/getent")
+                || c.arguments()
+                    .first()
+                    .is_some_and(|a| matches!(a.as_str(), "passwd" | "group"))
+        }));
+    }
+}
+#[test]
+fn journal_only_cleanup_preserves_unbound_configuration_and_cannot_reverse_commitment() {
+    let root = Root::new();
+    let mut host = root.host();
+    host.interrupt_after(Some(SetupPhase::OwnershipRecorded));
+    let mut setup = StandardInstallation::new(host, release()).unwrap();
+    assert_eq!(
+        execute(&mut setup, Action::StartSetup).outcome,
+        Outcome::NeedsCleanup
+    );
+    let mut host = setup.into_host();
+    let source = read_ownership(&host.fs).unwrap().unwrap();
+    host.material = SetupMaterial::for_cleanup(&source).unwrap();
+    root.write(CONFIG, b"unrecorded configuration", 0o640);
+    let setup = StandardInstallation::new(host, release()).unwrap();
+    assert!(setup.review(Action::FinishCleanup).prepared.is_none());
+    assert_eq!(
+        fs::read(root.0.join(CONFIG)).unwrap(),
+        b"unrecorded configuration"
+    );
+    let mut record = source;
+    while record.phase() != SetupPhase::ActivationCommitted {
+        record = record.next_setup_checkpoint().unwrap();
+    }
+    assert!(SetupMaterial::for_cleanup(&record).is_err());
+}
+
+#[derive(Clone)]
+struct RemovalAuxiliary {
+    active: std::rc::Rc<std::cell::Cell<bool>>,
+    firewall: std::rc::Rc<std::cell::Cell<bool>>,
+    fail_stop: std::rc::Rc<std::cell::Cell<bool>>,
+}
+impl AuxiliaryRuntime for RemovalAuxiliary {
+    fn observe(&self, _: &OwnershipRecord) -> Result<AuxiliaryFacts, HostError> {
+        let rule = if self.firewall.get() {
+            "-A INPUT -d 8.8.8.8/32 -p tcp -m tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT\n"
+        } else {
+            ""
+        };
+        Ok(AuxiliaryFacts {
+            fingerprint: format!("fixture:{}", self.active.get()),
+            serving_running: self.active.get(),
+            quiescent: !self.active.get(),
+            firewall_rules: format!("*filter\n:INPUT ACCEPT [0:0]\n{rule}COMMIT\n"),
+        })
+    }
+    fn disable(
+        &mut self,
+        firewall: bool,
+        _: &OwnershipRecord,
+        owner: &Arc<super::super::locks::HostLock>,
+    ) -> Result<(), HostError> {
+        owner.verify()?;
+        if self.fail_stop.get() {
+            return Err(HostError::Injected);
+        }
+        if firewall {
+            self.firewall.set(false);
+        } else {
+            self.active.set(false);
+        }
+        Ok(())
+    }
+}
+fn http_removal_host(
+    root: &Root,
+    pending: bool,
+) -> (
+    StandardRemovalHost<
+        super::super::system::SystemRunner<SystemFixtureTransport>,
+        RemovalAuxiliary,
+    >,
+    RemovalAuxiliary,
+) {
+    let (mut host, _) = running_removal_host(root);
+    let record = read_ownership(&host.inner.fs).unwrap().unwrap();
+    let credential =
+        crate::subscription_artifact::SubscriptionCredential::parse(&"A".repeat(43)).unwrap();
+    let firewall = crate::host::subscription::http_firewall_unit(record.public_ipv4()).unwrap();
+    let mut record = record
+        .begin_http_enablement(
+            &"1".repeat(32),
+            &credential,
+            &"2".repeat(32),
+            &sha256_hex(&firewall),
+        )
+        .unwrap();
+    for _ in 1..crate::records::HTTP_ENABLEMENT_CHECKPOINTS.len() {
+        record = record.advance_http_enablement().unwrap();
+    }
+    if !pending {
+        record = record.commit_http_enablement().unwrap();
+    }
+    // Existing writers perform this transition; fixture setup leaves the exact
+    // canonical resulting record, not a forged host-admission shortcut.
+    root.write(
+        "var/lib/sbxr/proxy-ownership.json",
+        &record.encode().unwrap(),
+        0o600,
+    );
+    use crate::host::subscription as h;
+    root.write(
+        h::TOKEN,
+        format!("{}\n", credential.as_str()).as_bytes(),
+        0o600,
+    );
+    let serving = if pending {
+        match record.http_operation().unwrap().unwrap() {
+            crate::records::HttpOperation::Enablement { target, .. } => target,
+            _ => unreachable!(),
+        }
+    } else {
+        record.serving_authority().unwrap()
+    };
+    root.write(h::STATE, &serving.state_bytes().unwrap(), 0o600);
+    root.write(
+        h::UNIT,
+        crate::runtime_handoff::SERVING_UNIT.as_bytes(),
+        0o644,
+    );
+    root.write(h::FIREWALL, &firewall, 0o644);
+    fs::create_dir_all(root.0.join(h::STAGING)).unwrap();
+    fs::set_permissions(root.0.join(h::STAGING), fs::Permissions::from_mode(0o700)).unwrap();
+    symlink("../sbxr-subscription.service", root.0.join(h::LINK)).unwrap();
+    symlink(
+        "../sbxr-subscription-firewall.service",
+        root.0.join(h::FIREWALL_LINK),
+    )
+    .unwrap();
+    let mut offline = SetupMaterial::for_removal(Some(&record)).unwrap();
+    offline.key_sha256 = host.inner.material.key_sha256.clone();
+    offline.package_sha256 = host.inner.material.package_sha256.clone();
+    host.inner.material = offline;
+    host.inner.runner.transport().fail_clock.set(true);
+    let runtime = RemovalAuxiliary {
+        active: std::rc::Rc::new(std::cell::Cell::new(true)),
+        firewall: std::rc::Rc::new(std::cell::Cell::new(true)),
+        fail_stop: std::rc::Rc::new(std::cell::Cell::new(false)),
+    };
+    (host.with_auxiliary(runtime.clone()), runtime)
+}
+#[test]
+fn offline_http_removal_cleans_current_and_prepared_resources_with_forward_retry() {
+    for pending in [false, true] {
+        let root = Root::new();
+        let (host, runtime) = http_removal_host(&root, pending);
+        let mut removal = crate::proxyinstallation::RemovalInstallation::new(host);
+        runtime.fail_stop.set(true);
+        let prepared = removal.review(Action::CompleteRemoval).prepared.unwrap();
+        assert_eq!(
+            removal.execute(prepared, Confirmation::Approved).outcome,
+            Outcome::RemovalNeedsCompletion
+        );
+        let committed = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+        assert_eq!(
+            OwnershipRecord::decode(&committed)
+                .unwrap()
+                .recovery_direction(),
+            crate::records::RecoveryDirection::Removal
+        );
+        assert!(root.0.join(crate::host::subscription::TOKEN).exists());
+        runtime.fail_stop.set(false);
+        let prepared = removal.review(Action::FinishRemoval).prepared.unwrap();
+        assert_eq!(
+            removal.execute(prepared, Confirmation::Approved).outcome,
+            Outcome::RemovalComplete
+        );
+        assert!(!runtime.active.get() && !runtime.firewall.get());
+        assert!(!root.0.join("var/lib/sbxr").exists());
+        assert!(!root.0.join(crate::host::subscription::UNIT).exists());
+        assert!(!root.0.join(CONFIG).exists());
+    }
+}
+#[test]
+fn offline_http_removal_refuses_changed_token_foreign_staging_and_startup_without_commitment() {
+    for changed in 0..3 {
+        let root = Root::new();
+        let (host, runtime) = http_removal_host(&root, false);
+        let foreign_token = format!("{}A\n", "C".repeat(42));
+        let (path, body, mode) = match changed {
+            0 => (
+                crate::host::subscription::TOKEN,
+                foreign_token.as_bytes(),
+                0o600,
+            ),
+            1 => (
+                "var/lib/sbxr/subscription-staging/foreign",
+                b"preserved".as_slice(),
+                0o600,
+            ),
+            _ => (
+                crate::host::identity::STARTUP,
+                b"unowned route".as_slice(),
+                0o644,
+            ),
+        };
+        root.write(path, body, mode);
+        let before = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+        let removal = crate::proxyinstallation::RemovalInstallation::new(host);
+        assert!(removal.review(Action::CompleteRemoval).prepared.is_none());
+        assert_eq!(fs::read(root.0.join(path)).unwrap(), body);
+        assert_eq!(
+            fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+            before
+        );
+        assert!(runtime.active.get() && runtime.firewall.get());
+    }
+}
+
+#[test]
+fn offline_http_rotation_removal_accepts_only_recorded_source_and_target_publications() {
+    let root = Root::new();
+    let (mut host, runtime) = http_removal_host(&root, false);
+    let record = read_ownership(&host.inner.fs).unwrap().unwrap();
+    let credential = crate::subscription_artifact::SubscriptionCredential::parse(&format!(
+        "{}A",
+        "B".repeat(42)
+    ))
+    .unwrap();
+    let rotated = record
+        .begin_http_link_rotation(&"3".repeat(32), &"4".repeat(32), &credential)
+        .unwrap();
+    let target = match rotated.http_operation().unwrap().unwrap() {
+        crate::records::HttpOperation::Rotation { target, .. } => target,
+        _ => unreachable!(),
+    };
+    root.write(
+        "var/lib/sbxr/proxy-ownership.json",
+        &rotated.encode().unwrap(),
+        0o600,
+    );
+    use crate::host::subscription as h;
+    root.write(
+        h::CANDIDATE_TOKEN,
+        format!("{}\n", credential.as_str()).as_bytes(),
+        0o600,
+    );
+    root.write(h::CANDIDATE_STATE, &target.state_bytes().unwrap(), 0o600);
+    root.write(
+        &format!("{}.sbxr-next", h::STATE),
+        &target.state_bytes().unwrap(),
+        0o600,
+    );
+    host.inner.material.configuration_digest = rotated.configuration_sha256().into();
+    let mut removal = crate::proxyinstallation::RemovalInstallation::new(host);
+    let prepared = removal.review(Action::CompleteRemoval).prepared.unwrap();
+    assert_eq!(
+        removal.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::RemovalComplete
+    );
+    assert!(!runtime.active.get() && !runtime.firewall.get());
+    assert!(!root.0.join("var/lib/sbxr").exists());
+}
+#[test]
+fn offline_removal_cleans_only_recorded_proxy_startup_and_preserves_shared_directory() {
+    for created in [false, true] {
+        let root = Root::new();
+        let (host, _) = running_removal_host(&root);
+        let source = read_ownership(&host.inner.fs).unwrap().unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&source.encode().unwrap()).unwrap();
+        value["schema"] = 2.into();
+        value["permitted_resources"][0] =
+            "/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-2".into();
+        value["resource_creating_releases"] =
+            vec![
+                value["release_identity"].clone();
+                value["permitted_resources"].as_array().unwrap().len()
+            ]
+            .into();
+        let body = crate::client_identity::STARTUP_DROP_IN.as_bytes();
+        value["proxy_startup"] =
+            serde_json::json!({"drop_in_sha256":sha256_hex(body),"directory_created":created});
+        let mut resources = vec![format!(
+            "/etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf root:root 0644 one-link sha256:{}",
+            sha256_hex(body)
+        )];
+        if created {
+            resources.push("/etc/systemd/system/sing-box.service.d root:root 0755 SBXR-created empty-after-drop-in-removal".into());
+        }
+        for resource in resources {
+            value["permitted_resources"]
+                .as_array_mut()
+                .unwrap()
+                .push(resource.into());
+            let creator = value["release_identity"].clone();
+            value["resource_creating_releases"]
+                .as_array_mut()
+                .unwrap()
+                .push(creator);
+        }
+        let record = OwnershipRecord::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        root.write(
+            "var/lib/sbxr/proxy-ownership.json",
+            &record.encode().unwrap(),
+            0o600,
+        );
+        root.write(crate::host::identity::STARTUP, body, 0o644);
+        fs::set_permissions(
+            root.0.join(crate::host::identity::STARTUP_DIR),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let mut removal = crate::proxyinstallation::RemovalInstallation::new(host);
+        let prepared = removal.review(Action::CompleteRemoval).prepared.unwrap();
+        assert_eq!(
+            removal.execute(prepared, Confirmation::Approved).outcome,
+            Outcome::RemovalComplete
+        );
+        assert!(!root.0.join(crate::host::identity::STARTUP).exists());
+        assert_eq!(
+            root.0.join(crate::host::identity::STARTUP_DIR).exists(),
+            !created
+        );
+    }
+}
+
+#[test]
+fn offline_client_target_removal_uses_go_contract_without_restoring_revoked_source() {
+    for fixture in [
+        include_bytes!("../../tests/testdata/removal/client-cleanup.json").as_slice(),
+        include_bytes!("../../tests/testdata/removal/client-forward.json").as_slice(),
+    ] {
+        let root = Root::new();
+        let (mut host, commands) = running_removal_host(&root);
+        let base = read_ownership(&host.inner.fs).unwrap().unwrap();
+        let source = fs::read(root.0.join(CONFIG)).unwrap();
+        let target = String::from_utf8(source.clone())
+            .unwrap()
+            .replace(
+                "12345678-1234-4234-8234-123456789abc",
+                "87654321-4321-4321-8321-cba987654321",
+            )
+            .into_bytes();
+        assert_ne!(source, target);
+        let mut template: serde_json::Value = serde_json::from_slice(fixture).unwrap();
+        let old_source = template["client_identity_rotation"]["source_configuration_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let old_target = template["client_identity_rotation"]["target_configuration_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        template = serde_json::from_str(
+            &serde_json::to_string(&template)
+                .unwrap()
+                .replace(&old_source, &sha256_hex(&source))
+                .replace(&old_target, &sha256_hex(&target)),
+        )
+        .unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&base.encode().unwrap()).unwrap();
+        value["schema"] = 2.into();
+        value["permitted_resources"][0] =
+            "/var/lib/sbxr/proxy-ownership.json root:root 0600 one-link schema-2".into();
+        value["resource_creating_releases"] =
+            vec![
+                value["release_identity"].clone();
+                value["permitted_resources"].as_array().unwrap().len()
+            ]
+            .into();
+        value["proxy_startup"] = template["proxy_startup"].clone();
+        value["client_identity_rotation"] = template["client_identity_rotation"].clone();
+        let additions = template["permitted_resources"].as_array().unwrap();
+        for resource in &additions[additions.len() - 6..] {
+            value["permitted_resources"]
+                .as_array_mut()
+                .unwrap()
+                .push(resource.clone());
+            let creator = value["release_identity"].clone();
+            value["resource_creating_releases"]
+                .as_array_mut()
+                .unwrap()
+                .push(creator);
+        }
+        if template["client_identity_rotation"]["direction"] == "forward" {
+            value["configuration_sha256"] = sha256_hex(&target).into();
+            for resource in value["permitted_resources"].as_array_mut().unwrap() {
+                if resource
+                    .as_str()
+                    .is_some_and(|r| r.starts_with("/etc/sing-box/config.json sha256:"))
+                {
+                    *resource =
+                        format!("/etc/sing-box/config.json sha256:{}", sha256_hex(&target)).into();
+                }
+            }
+            root.write(CONFIG, &target, 0o640);
+        }
+        let record = OwnershipRecord::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+        root.write(
+            "var/lib/sbxr/proxy-ownership.json",
+            &record.encode().unwrap(),
+            0o600,
+        );
+        root.write(crate::host::identity::TARGET, &target, 0o600);
+        root.write(crate::host::identity::CONFIG_STAGE, &target, 0o640);
+        root.write(
+            crate::host::identity::STARTUP,
+            crate::client_identity::STARTUP_DROP_IN.as_bytes(),
+            0o644,
+        );
+        fs::set_permissions(
+            root.0.join(crate::host::identity::STARTUP_DIR),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let mut material = SetupMaterial::for_removal(Some(&record)).unwrap();
+        material.key_sha256 = host.inner.material.key_sha256.clone();
+        material.package_sha256 = host.inner.material.package_sha256.clone();
+        host.inner.material = material;
+        let count = commands.borrow().len();
+        let mut removal = crate::proxyinstallation::RemovalInstallation::new(host);
+        let prepared = removal.review(Action::CompleteRemoval).prepared.unwrap();
+        assert_eq!(
+            removal.execute(prepared, Confirmation::Approved).outcome,
+            Outcome::RemovalComplete
+        );
+        for p in [
+            CONFIG,
+            crate::host::identity::TARGET,
+            crate::host::identity::CONFIG_STAGE,
+            crate::host::identity::STARTUP,
+        ] {
+            assert!(!root.0.join(p).exists());
+        }
+        assert!(!commands.borrow()[count..].iter().any(|c| {
+            c.arguments()
+                .first()
+                .is_some_and(|a| a == "start" || a == "restart")
+        }));
     }
 }

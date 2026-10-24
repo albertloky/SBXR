@@ -452,3 +452,77 @@ fn a_finisher_missing_the_recorded_runtime_capability_refuses_before_publication
     assert!(!root.0.join(INSTALLED).exists());
     assert!(!root.0.join(EXECUTABLE).exists());
 }
+
+#[test]
+fn exact_finisher_holds_authenticated_inode_and_both_locks_without_executing() {
+    use std::io::Read;
+    let a = archive();
+    let root = Root::new();
+    let authority = root.journal(&a, true);
+    let mut host = RestorationHost::injected(&root.0).unwrap();
+    let pair = host.restore(&a, &SelectionBudget::new()).unwrap();
+    let finisher = host
+        .prepare_finisher(pair, &SelectionBudget::new())
+        .unwrap();
+    assert!(finisher.record() == a.record());
+    let mut bytes = Vec::new();
+    finisher
+        .descriptor
+        .try_clone()
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(bytes, a.executable());
+    finisher.recheck().unwrap();
+    assert!(matches!(
+        HostLock::existing(&root.0, root.uid()),
+        Err(HostError::Busy)
+    ));
+    assert!(OwnershipStore::open(&root.0.join(STATE), root.uid()).is_err());
+    assert_eq!(fs::read(root.0.join(FINAL)).unwrap(), authority);
+    drop(finisher);
+    HostLock::existing(&root.0, root.uid()).unwrap();
+    OwnershipStore::open(&root.0.join(STATE), root.uid()).unwrap();
+}
+#[test]
+fn exact_finisher_refuses_path_replacement_and_changed_forward_authority() {
+    for change_authority in [false, true] {
+        let a = archive();
+        let root = Root::new();
+        root.journal(&a, true);
+        let mut host = RestorationHost::injected(&root.0).unwrap();
+        let pair = host.restore(&a, &SelectionBudget::new()).unwrap();
+        let finisher = host
+            .prepare_finisher(pair, &SelectionBudget::new())
+            .unwrap();
+        if change_authority {
+            root.write(FINAL, b"foreign authority", 0o600);
+        } else {
+            let renamed = root.0.join("usr/local/bin/old-executable");
+            fs::rename(root.0.join(EXECUTABLE), renamed).unwrap();
+            root.write(EXECUTABLE, a.executable(), 0o755);
+        }
+        assert!(finisher.recheck().is_err());
+        assert!(root.0.join(EXECUTABLE).exists());
+    }
+}
+#[test]
+fn unreleased_finisher_exec_refuses_injected_root_and_preserves_restoration() {
+    let a = archive();
+    let root = Root::new();
+    let authority = root.journal(&a, true);
+    let mut host = RestorationHost::injected(&root.0).unwrap();
+    let pair = host.restore(&a, &SelectionBudget::new()).unwrap();
+    let finisher = host
+        .prepare_finisher(pair, &SelectionBudget::new())
+        .unwrap();
+    assert!(finisher.exec_native_unreleased().is_err());
+    root.assert_pair(&a);
+    assert_eq!(fs::read(root.0.join(FINAL)).unwrap(), authority);
+    if !cfg!(target_os = "linux") {
+        assert!(matches!(
+            RestorationHost::native_unreleased(),
+            Err(HostError::UnsupportedHost)
+        ));
+    }
+}

@@ -13,7 +13,7 @@ pub(super) fn rule(ipv4: &str) -> String {
         "-A INPUT -d {ipv4}/32 -p tcp -m tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT"
     )
 }
-pub(super) fn firewall(body: &str, ip: &str, present: bool) -> bool {
+pub(in crate::host) fn firewall(body: &str, ip: &str, present: bool) -> bool {
     body.len() <= 1 << 20
         && body.contains("*filter\n")
         && body.lines().any(|l| l.starts_with(":INPUT "))
@@ -25,7 +25,7 @@ pub(super) fn firewall(body: &str, ip: &str, present: bool) -> bool {
             !body.contains("sbxr-subscription")
         }
 }
-pub(super) fn normalized_rules(body: &str) -> String {
+pub(in crate::host) fn normalized_rules(body: &str) -> String {
     body.lines()
         .filter(|line| !line.starts_with('#'))
         .map(|line| {

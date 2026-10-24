@@ -301,6 +301,9 @@ impl TunnelAuthority {
         }
         Ok(Self(wire))
     }
+    pub fn binary_sha256(&self) -> &str {
+        &self.0.binary_sha256
+    }
     pub fn tunnel_id(&self) -> &str {
         &self.0.tunnel_id
     }

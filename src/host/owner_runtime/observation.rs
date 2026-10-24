@@ -264,7 +264,7 @@ fn firewall_exec(body: &str, expected: &str) -> bool {
         .map(|s| format!("/bin/sh -ec {s}"));
     expected.is_some_and(|expected| exact_exec(body, "/bin/sh", &expected))
 }
-pub(super) fn exact_exec(body: &str, path: &str, argv: &str) -> bool {
+pub(in crate::host) fn exact_exec(body: &str, path: &str, argv: &str) -> bool {
     let body = body.trim();
     if !body.starts_with('{')
         || !body.ends_with('}')

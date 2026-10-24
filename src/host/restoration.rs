@@ -1,6 +1,6 @@
 //! Exact missing-member recovery under committed removal authority. This slice
-//! supplies real protected filesystem effects only through an explicit injected
-//! root. It does not select a latest release, start code or authorize native work.
+//! verifies exact authenticated bytes before protected file restoration. Native
+//! takeover remains gated; tests use explicit roots and never execute artifacts.
 use super::{HostError, filesystem::ProtectedFs, locks::HostLock};
 use crate::{
     artifact_trust::SelectionBudget,
@@ -10,7 +10,7 @@ use crate::{
     removal::{AuthoritySnapshot, LifecycleFacts, exact_restoration},
 };
 use rustix::fs::Mode;
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 const STATE: &str = "var/lib/sbxr";
 const CURRENT: &str = "var/lib/sbxr/proxy-ownership.json";
 const FINAL: &str = "var/lib/.sbxr-removal.json";
@@ -22,7 +22,7 @@ const DIRECTORY: Mode = Mode::from_raw_mode(0o700);
 
 pub struct RestorationHost {
     fs: ProtectedFs,
-    guard: HostLock,
+    guard: Arc<HostLock>,
     writer: Option<OwnershipStore>,
     authority: AuthoritySnapshot,
     release: ReleaseIdentity,
@@ -49,6 +49,97 @@ impl std::fmt::Debug for RestoredPair {
         f.write_str("Exact removal finisher restored; proxy authority unchanged")
     }
 }
+/// A one-use exact-inode takeover. All inputs originate in authenticated
+/// restoration; the descriptor and argv cannot be replaced by callers.
+pub struct RestoredFinisher {
+    host: RestorationHost,
+    descriptor: std::fs::File,
+    record: InstalledRecord,
+}
+impl std::fmt::Debug for RestoredFinisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Authenticated exact removal finisher")
+    }
+}
+impl RestoredFinisher {
+    pub fn record(&self) -> &InstalledRecord {
+        &self.record
+    }
+    /// Replace this process with the exact restored finisher, preserving the
+    /// interactive terminal. Never spawn a competing Owner while locks are held.
+    /// The public native adapter gate remains closed in this increment.
+    pub fn exec_native_unreleased(self) -> Result<std::convert::Infallible, HostError> {
+        super::require_live_adapter()?;
+        if self.host.fs.path() != Path::new("/") {
+            return Err(HostError::LiveUnavailable);
+        }
+        self.recheck()?;
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::{fd::AsRawFd, unix::process::CommandExt};
+            let Self {
+                mut host,
+                descriptor,
+                ..
+            } = self;
+            let path = format!("/proc/self/fd/{}", descriptor.as_raw_fd());
+            // Explicitly unlock the private store before exec: CLOEXEC closing
+            // alone is insufficient when another fork retains its description.
+            host.writer = None;
+            host.fs.authorize_native_writes(None)?;
+            drop(host);
+            let _error = std::process::Command::new(path)
+                .arg0("/usr/local/bin/sbxr")
+                .env_clear()
+                .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+                .env("LANG", "C")
+                .env("LC_ALL", "C")
+                .current_dir("/")
+                .exec();
+            Err(HostError::Io)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(HostError::UnsupportedHost)
+        }
+    }
+    fn recheck(&self) -> Result<(), HostError> {
+        self.host.recheck()?;
+        use std::os::unix::fs::MetadataExt;
+        let metadata = self.descriptor.metadata().map_err(|_| HostError::Io)?;
+        if !metadata.is_file()
+            || metadata.uid() != self.host.fs.uid
+            || metadata.gid() != self.host.fs.gid
+            || metadata.mode() & 0o7777 != 0o755
+            || metadata.nlink() != 1
+        {
+            return Err(HostError::Foreign);
+        }
+        let (bytes, _) = self
+            .host
+            .fs
+            .raw(
+                EXECUTABLE,
+                EXECUTABLE_MODE,
+                crate::release_identity::MAX_EXECUTABLE_BYTES,
+            )?
+            .ok_or(HostError::Foreign)?;
+        if crate::records::sha256_hex(&bytes) != self.record.executable_sha256()
+            || !self
+                .host
+                .member(INSTALLED, &self.record.encode().map_err(refused)?, PRIVATE)?
+        {
+            return Err(HostError::Foreign);
+        }
+        // A replacement of the pathname cannot redirect descriptor execution.
+        let current = self.host.fs.restoration_executable(&bytes)?;
+        let observed = current.metadata().map_err(|_| HostError::Io)?;
+        if observed.dev() != metadata.dev() || observed.ino() != metadata.ino() {
+            return Err(HostError::Foreign);
+        }
+        Ok(())
+    }
+}
 fn refused(_: impl std::fmt::Debug) -> HostError {
     HostError::Foreign
 }
@@ -60,8 +151,20 @@ impl RestorationHost {
         if root == Path::new("/") {
             return Err(HostError::LiveUnavailable);
         }
-        let fs = ProtectedFs::open(root)?;
-        let guard = HostLock::provision(root, fs.uid)?;
+        Self::open(ProtectedFs::open(root)?)
+    }
+    /// File restoration is authenticated independently; native public launch is
+    /// still controlled by the existing complete-adapter qualification boundary.
+    pub fn native_unreleased() -> Result<Self, HostError> {
+        super::linux::require_native_environment()?;
+        Self::open(ProtectedFs::native()?)
+    }
+    fn open(mut fs: ProtectedFs) -> Result<Self, HostError> {
+        let root = fs.path().to_path_buf();
+        let guard = Arc::new(HostLock::provision(&root, fs.uid)?);
+        if root == Path::new("/") {
+            fs.authorize_native_writes(Some(guard.clone()))?;
+        }
         let authority = read_authority(&fs)?;
         let release = authority.restoration_release().map_err(refused)?;
         let writer = if fs.directory_entries(STATE, DIRECTORY)?.is_some() {
@@ -201,6 +304,46 @@ impl RestorationHost {
             executable_restored: !present_executable,
             installed_record_restored: !present_record,
         })
+    }
+    /// Consume the restored pair into a retained exact-inode launch. Authority,
+    /// installed record, executable hash and inode are freshly rechecked.
+    pub fn prepare_finisher(
+        self,
+        pair: RestoredPair,
+        budget: &SelectionBudget,
+    ) -> Result<RestoredFinisher, HostError> {
+        self.recheck()?;
+        budget_check(budget)?;
+        if pair.installed.release_identity() != self.release {
+            return Err(HostError::Foreign);
+        }
+        let (bytes, _) = self
+            .fs
+            .raw(
+                EXECUTABLE,
+                EXECUTABLE_MODE,
+                crate::release_identity::MAX_EXECUTABLE_BYTES,
+            )?
+            .ok_or(HostError::Foreign)?;
+        if crate::records::sha256_hex(&bytes) != pair.installed.executable_sha256()
+            || !self.member(
+                INSTALLED,
+                &pair.installed.encode().map_err(refused)?,
+                PRIVATE,
+            )?
+        {
+            return Err(HostError::Foreign);
+        }
+        crate::release_identity::verify_installed_pair(&pair.installed, &bytes).map_err(refused)?;
+        let descriptor = self.fs.restoration_executable(&bytes)?;
+        let finisher = RestoredFinisher {
+            host: self,
+            descriptor,
+            record: pair.installed,
+        };
+        finisher.recheck()?;
+        budget_check(budget)?;
+        Ok(finisher)
     }
     fn member(&self, path: &str, body: &[u8], mode: Mode) -> Result<bool, HostError> {
         match self.fs.raw(path, mode, body.len())? {

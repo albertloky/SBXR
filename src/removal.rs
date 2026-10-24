@@ -314,6 +314,9 @@ pub enum FinalizationError {
 /// Every method must be bounded, preserve foreign/shared resources, and never
 /// depend on CA, Cloudflare, network access or a tunnel token/binary for removal.
 pub trait RemovalHost {
+    fn is_native_system(&self) -> bool {
+        false
+    }
     fn effects_available(&self) -> bool {
         false
     }

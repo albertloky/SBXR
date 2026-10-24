@@ -10,7 +10,10 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
         &self.admission.public_ipv4
     }
     fn configuration_sha256(&self) -> String {
-        self.material.configuration.sha256_hex()
+        self.material.configuration_sha256()
+    }
+    fn setup_inputs_available(&self) -> bool {
+        !self.material.offline
     }
     fn is_native_system(&self) -> bool {
         self.native_mode
@@ -55,7 +58,18 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
         if self.stop.cancelled() {
             return Err(HostError::Cancelled);
         }
-        let facts = Facts::query(&self.runner, &self.stop)?;
+        let bound = observation::read_ownership(&self.fs)?;
+        if self.material.offline
+            && bound.as_ref().is_some_and(|r| {
+                r.recovery_direction() != crate::records::RecoveryDirection::Cleanup
+                    || r.configuration_sha256() != self.configuration_sha256()
+                    || r.release_identity() != *release
+                    || r.public_ipv4() != self.public_ipv4()
+            })
+        {
+            return Err(HostError::Foreign);
+        }
+        let facts = self.facts()?;
         self.admission(&facts)?;
         let (installed, record_proof) = self
             .fs
@@ -91,15 +105,20 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             "{}:{record_proof:?}:{exec_proof:?}:{:?}",
             facts.fingerprint, self.admission
         );
-        let key = self.file(KEY, &self.material.key, 0o644, &mut fingerprint)?;
+        let key = self.hashed_file(KEY, &self.material.key_sha256, 0o644, &mut fingerprint)?;
         let source = self.file(SOURCE, APT_SOURCE, 0o644, &mut fingerprint)?;
-        let configuration = self.file(
+        let configuration = self.hashed_file(
             CONFIG,
-            self.material.configuration.as_bytes(),
+            &self.material.configuration_digest,
             0o640,
             &mut fingerprint,
         )?;
-        let artifact = self.file(ARTIFACT, &self.material.package, 0o600, &mut fingerprint)?;
+        let artifact = self.hashed_file(
+            ARTIFACT,
+            &self.material.package_sha256,
+            0o600,
+            &mut fingerprint,
+        )?;
         let lock = self.file(LOCK_UNIT, UNIT, 0o644, &mut fingerprint)?;
         let link = self.fs.observe(Resource {
             path: LOCK_LINK,
@@ -155,15 +174,15 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             }
         }
         let mut staged = false;
-        for (path, bytes, mode) in [
-            (KEY, self.material.key.as_slice(), 0o644),
-            (SOURCE, APT_SOURCE, 0o644),
-            (CONFIG, self.material.configuration.as_bytes(), 0o640),
-            (ARTIFACT, self.material.package.as_slice(), 0o600),
-            (LOCK_UNIT, UNIT, 0o644),
+        for (path, digest, mode) in [
+            (KEY, self.material.key_sha256.clone(), 0o644),
+            (SOURCE, sha256_hex(APT_SOURCE), 0o644),
+            (CONFIG, self.material.configuration_digest.clone(), 0o640),
+            (ARTIFACT, self.material.package_sha256.clone(), 0o600),
+            (LOCK_UNIT, sha256_hex(UNIT), 0o644),
         ] {
             let stage_path = format!("{path}.sbxr-next");
-            let present = self.file(&stage_path, bytes, mode, &mut fingerprint)?;
+            let present = self.hashed_file(&stage_path, &digest, mode, &mut fingerprint)?;
             if path == CONFIG
                 && present
                 && (!facts.identity
@@ -182,7 +201,7 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             1 << 20,
         )?;
         fingerprint.push_str(&format!("{:?}", package_unit.as_ref().map(|(_, p)| p)));
-        let validated = if configuration && facts.package {
+        let validated = if configuration && facts.package && !self.material.offline {
             let validation = self
                 .runner
                 .query(Query::ValidateConfiguration, &self.stop)?;
@@ -240,7 +259,10 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             && !facts.process
             && facts.listener.is_empty()
             && !staged;
-        if empty && !self.admission.tcp443_available {
+        if self.material.offline && bound.is_none() && !empty {
+            return Err(HostError::Foreign);
+        }
+        if empty && !self.material.offline && !self.admission.tcp443_available {
             return Err(HostError::Unsafe);
         }
         Ok(SetupObservation {
@@ -271,7 +293,7 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
         }
         let before = self.inspect_setup(&authority.release_identity())?;
         if operation == Operation::EnableService {
-            let facts = Facts::query(&self.runner, &self.stop)?;
+            let facts = self.facts()?;
             // A succeeded enable effect may precede an interrupted checkpoint.
             // Retry it idempotently without permitting an active source process.
             if !before.ready_to_activate()
@@ -287,8 +309,27 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
         {
             return Err(HostError::Unsafe);
         }
-        if sha256_hex(&self.material.key) != self.material.key_sha256
-            || sha256_hex(&self.material.package) != self.material.package_sha256
+        let cleanup = matches!(
+            operation,
+            Operation::StopDisableService
+                | Operation::UnmaskService
+                | Operation::RemovePackageArtifact
+                | Operation::RemovePackage
+                | Operation::RemovePackageHold
+                | Operation::RemoveConfigurationState
+                | Operation::RemovePackageIdentity
+                | Operation::RemoveAptSource
+                | Operation::RemoveAptKey
+        );
+        if self.material.offline
+            && (!cleanup
+                || authority.recovery_direction() != crate::records::RecoveryDirection::Cleanup)
+        {
+            return Err(HostError::Foreign);
+        }
+        if !self.material.offline
+            && (sha256_hex(&self.material.key) != self.material.key_sha256
+                || sha256_hex(&self.material.package) != self.material.package_sha256)
         {
             return Err(HostError::Foreign);
         }
@@ -297,20 +338,20 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             InstallAptKey => self.install(KEY, &self.material.key, 0o644),
             InstallAptSource => self.install(SOURCE, APT_SOURCE, 0o644),
             InstallConfiguration => {
-                let facts = Facts::query(&self.runner, &self.stop)?;
+                let facts = self.facts()?;
                 let gid = facts.gid.ok_or(HostError::Unsafe)?;
                 if !facts.identity {
                     return Err(HostError::Unsafe);
                 }
                 self.fs.publish_bytes_group(
                     CONFIG,
-                    self.material.configuration.as_bytes(),
+                    self.material.configuration_bytes()?,
                     Mode::from_raw_mode(0o640),
                     gid,
                 )
             }
             CreateStateDirectory => {
-                let facts = Facts::query(&self.runner, &self.stop)?;
+                let facts = self.facts()?;
                 self.fs.install(Resource {
                     path: "var/lib/sing-box",
                     kind: Kind::OwnedDirectory(
@@ -334,13 +375,13 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                 self.runner.reload_units(&self.stop)
             }
             InstallPackage => {
-                let before = Facts::query(&self.runner, &self.stop)?;
+                let before = self.facts()?;
                 if !before.masked || before.active {
                     return Err(HostError::Unsafe);
                 }
                 self.install(ARTIFACT, &self.material.package, 0o600)?;
                 self.runner.effect(operation, &self.stop)?;
-                let after = Facts::query(&self.runner, &self.stop)?;
+                let after = self.facts()?;
                 if !after.package || !after.masked || after.active {
                     return Err(HostError::Unsafe);
                 }
@@ -359,7 +400,7 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             }
             StopDisableService => {
                 let _ = self.runner.effect(operation, &self.stop);
-                let after = Facts::query(&self.runner, &self.stop)?;
+                let after = self.facts()?;
                 if after.enabled
                     || after.active
                     || after.process
@@ -381,9 +422,11 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                     kind: Kind::Link("/dev/null"),
                 })
             }
-            RemovePackageArtifact => self.remove(ARTIFACT, &self.material.package, 0o600),
+            RemovePackageArtifact => {
+                self.remove_hashed(ARTIFACT, &self.material.package_sha256, 0o600)
+            }
             RemoveConfigurationState => {
-                self.remove(CONFIG, self.material.configuration.as_bytes(), 0o640)?;
+                self.remove_hashed(CONFIG, &self.material.configuration_digest, 0o640)?;
                 self.fs.remove(Resource {
                     path: "etc/sing-box",
                     kind: Kind::Directory(Mode::from_raw_mode(0o755)),
@@ -401,7 +444,7 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                 Ok(())
             }
             RemoveAptSource => self.remove(SOURCE, APT_SOURCE, 0o644),
-            RemoveAptKey => self.remove(KEY, &self.material.key, 0o644),
+            RemoveAptKey => self.remove_hashed(KEY, &self.material.key_sha256, 0o644),
             HoldPackage
             | EnableService
             | StartService

@@ -1,5 +1,5 @@
 //! Concrete installed native Owner sources. Public entry remains closed while
-//! Standard input/recovery, auxiliary cleanup and disclosure owners are incomplete.
+//! native recovery, auxiliary cleanup and exact-candidate qualification are incomplete.
 use super::{HostError, filesystem::ProtectedFs};
 use crate::{
     proxyinstallation::{
@@ -38,6 +38,18 @@ impl<'a> NativeOwnerSources<'a> {
         };
         let fs = ProtectedFs::native()?;
         let record = super::linux::observation::read_ownership(&fs)?;
+        if fs.metadata("var/lib/.sbxr-removal.json")?.is_some() {
+            return Err(HostError::Foreign);
+        }
+        if let Some(record) = record
+            .as_ref()
+            .filter(|r| r.recovery_direction() == RecoveryDirection::Cleanup)
+        {
+            return self.offline_host(
+                super::linux::SetupMaterial::for_cleanup(record)?,
+                record.public_ipv4(),
+            );
+        }
         let require_bind = !record.as_ref().is_some_and(|r| {
             matches!(
                 r.recovery_direction(),
@@ -85,6 +97,58 @@ impl<'a> NativeOwnerSources<'a> {
             runner, material, network, self.proof,
         )
     }
+    fn offline_host(
+        &self,
+        material: super::linux::SetupMaterial,
+        public_ipv4: &str,
+    ) -> Result<
+        super::linux::LinuxHost<super::system::SystemRunner<super::system::NativeTransport>>,
+        HostError,
+    > {
+        let runner = super::system::SystemRunner::native(
+            super::system::NativeTransport::new()?,
+            &material.configuration_sha256(),
+        )?;
+        super::linux::LinuxHost::native_offline_authenticated_unreleased(
+            runner,
+            material,
+            public_ipv4,
+            self.proof,
+        )
+    }
+    fn removal_host(
+        &self,
+    ) -> Result<
+        super::linux::StandardRemovalHost<
+            super::system::SystemRunner<super::system::NativeTransport>,
+            super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>,
+        >,
+        HostError,
+    > {
+        let fs = ProtectedFs::native()?;
+        let current = super::linux::observation::read_ownership(&fs)?;
+        let finalizer = fs
+            .raw(
+                "var/lib/.sbxr-removal.json",
+                rustix::fs::Mode::from_raw_mode(0o600),
+                crate::records::MAX_RECORD_BYTES,
+            )?
+            .map(|(b, _)| {
+                crate::records::OwnershipRecord::decode(&b).map_err(|_| HostError::Foreign)
+            })
+            .transpose()?;
+        if current.is_some() && finalizer.is_some() {
+            return Err(HostError::Foreign);
+        }
+        let record = current.as_ref().or(finalizer.as_ref());
+        let material = super::linux::SetupMaterial::for_removal(record)?;
+        Ok(super::linux::StandardRemovalHost::new(
+            self.offline_host(material, record.map(|r| r.public_ipv4()).unwrap_or(""))?,
+        )?
+        .with_auxiliary(super::owner_runtime::OwnerRuntime::native_unreleased(
+            self.proof,
+        )?))
+    }
     pub fn frontend(self) -> OwnerInstallation<'a, Self> {
         OwnerInstallation::new(self)
     }
@@ -97,6 +161,25 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             return Err(HostError::Foreign);
         }
         let r = super::linux::observation::read_ownership(&fs)?;
+        if let Some((bytes, _)) = fs.raw(
+            "var/lib/.sbxr-removal.json",
+            rustix::fs::Mode::from_raw_mode(0o600),
+            crate::records::MAX_RECORD_BYTES,
+        )? {
+            if r.is_some() {
+                return Err(HostError::Foreign);
+            }
+            let record =
+                crate::records::OwnershipRecord::decode(&bytes).map_err(|_| HostError::Foreign)?;
+            if crate::removal::finishing_release(&record).map_err(|_| HostError::Foreign)?
+                != self.proof.record().release_identity()
+                || crate::removal::checkpoint(&record).map_err(|_| HostError::Foreign)?
+                    != crate::removal::checkpoint_limit(&record).map_err(|_| HostError::Foreign)?
+            {
+                return Err(HostError::Foreign);
+            }
+            return Ok(vec![Journey::Removal]);
+        }
         let Some(r) = r else {
             return Ok(vec![Journey::Standard, Journey::Removal]);
         };
@@ -141,9 +224,9 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
                     self.proof.record().release_identity(),
                 )?,
             )),
-            // Offline removal must not acquire a package or probe external
-            // destinations. Its native input builder remains a separate owner.
-            Journey::Removal => Err(HostError::LiveUnavailable),
+            Journey::Removal => Ok(Box::new(
+                crate::proxyinstallation::RemovalInstallation::new(self.removal_host()?),
+            )),
             Journey::Disclosure => Ok(Box::new(
                 crate::proxyinstallation::DisclosureInstallation::new(
                     super::disclosure::ProtectedDisclosureHost::native_unreleased(self.proof)?,

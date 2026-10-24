@@ -6,6 +6,7 @@ mod disclosure;
 mod effects;
 mod observation;
 mod probe;
+mod removal;
 use super::{
     HostError,
     filesystem::ProtectedFs,
@@ -163,3 +164,5 @@ impl<I: OwnerIo> ServiceCommands for Commands<'_, I> {
 #[cfg(test)]
 #[path = "owner_runtime/tests.rs"]
 mod tests;
+
+pub(in crate::host) use observation::exact_exec as exact_connector_exec;

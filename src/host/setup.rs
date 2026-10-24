@@ -34,6 +34,9 @@ pub trait SetupHost {
     fn uid(&self) -> u32;
     fn public_ipv4(&self) -> &str;
     fn configuration_sha256(&self) -> String;
+    fn setup_inputs_available(&self) -> bool {
+        true
+    }
     fn inspect_setup(&self, release: &ReleaseIdentity) -> Result<SetupObservation, HostError>;
     fn apply_setup(
         &mut self,

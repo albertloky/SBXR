@@ -1,7 +1,7 @@
 //! Current HTTP protected effects. Only an explicit injected root is admitted;
 //! native Owner dispatch remains closed pending full host qualification.
 mod effects;
-mod material;
+pub(in crate::host) mod material;
 use super::{
     HostError,
     filesystem::{Kind, ProtectedFs, Resource},

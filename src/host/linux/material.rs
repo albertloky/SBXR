@@ -4,15 +4,65 @@ use super::*;
 pub struct SetupMaterial {
     pub(super) key: Vec<u8>,
     pub(super) package: Vec<u8>,
-    pub(super) configuration: ServerConfiguration,
+    pub(super) configuration: Option<ServerConfiguration>,
+    pub(super) configuration_digest: String,
+    pub(super) offline: bool,
     pub(super) key_sha256: String,
     pub(super) package_sha256: String,
 }
 impl SetupMaterial {
     pub fn configuration_sha256(&self) -> String {
-        sha256_hex(self.configuration.as_bytes())
+        self.configuration_digest.clone()
     }
 
+    /// Journal-bound cleanup has no package/configuration bytes and cannot be
+    /// used to install or activate a service. Existing residues are hash-checked.
+    pub fn for_cleanup(record: &OwnershipRecord) -> Result<Self, HostError> {
+        if record.schema() != 1
+            || record.tunnel_authority().is_some()
+            || record.recovery_direction() != crate::records::RecoveryDirection::Cleanup
+        {
+            return Err(HostError::Foreign);
+        }
+        Self::offline_bound(Some(record))
+    }
+    /// Complete removal needs only public pins and committed local authority.
+    /// It never downloads a package or regenerates an absent Client Identity.
+    pub fn for_removal(record: Option<&OwnershipRecord>) -> Result<Self, HostError> {
+        Self::offline_bound(record)
+    }
+    fn offline_bound(record: Option<&OwnershipRecord>) -> Result<Self, HostError> {
+        let digest = record
+            .map(OwnershipRecord::configuration_sha256)
+            .unwrap_or("");
+        if !digest.is_empty()
+            && (digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
+        {
+            return Err(HostError::Foreign);
+        }
+        Ok(Self {
+            key: Vec::new(),
+            package: Vec::new(),
+            configuration: None,
+            configuration_digest: if digest.is_empty() {
+                "0".repeat(64)
+            } else {
+                digest.into()
+            },
+            key_sha256: PINNED_SING_BOX.signing_key_sha256.into(),
+            package_sha256: PINNED_SING_BOX.sha256.into(),
+            offline: true,
+        })
+    }
+    pub(super) fn configuration_bytes(&self) -> Result<&[u8], HostError> {
+        self.configuration
+            .as_ref()
+            .map(ServerConfiguration::as_bytes)
+            .ok_or(HostError::Foreign)
+    }
     /// Acquired pinned material is consumed without exposing host mutation
     /// authority. Identity generation still follows verified-input admission.
     pub fn from_acquired_package(
@@ -80,7 +130,9 @@ impl SetupMaterial {
         Ok(Self {
             key,
             package,
-            configuration,
+            configuration_digest: configuration.sha256_hex(),
+            configuration: Some(configuration),
+            offline: false,
             key_sha256: PINNED_SING_BOX.signing_key_sha256.into(),
             package_sha256: PINNED_SING_BOX.sha256.into(),
         })

@@ -1280,3 +1280,108 @@ still closed; the next incomplete functional path is the guarded tunnel
 connector/probe/frontend adapter, followed by native recovery/removal and release
 build/qualification work. No live effects, credential deployment, upload,
 signing, push or publication occurred.
+
+## Offline recovery and current auxiliary removal increment
+
+`SetupMaterial::for_cleanup` binds precommit cleanup to the existing strict
+Ownership Record and compiled upstream package/key pins. It carries no saved
+configuration, package bytes or credentials. The concrete host checks any
+remaining canonical/staged file against the recorded digest before removing it.
+It cannot install or activate resources, and after cleanup it cannot advertise a
+new setup using these incomplete inputs. The ten precommit setup checkpoints
+reopen through the actual command adapter without saved secrets or available
+network, listener-bind or clock facts. Activation commitment still refuses this
+cleanup constructor. Native Owner construction selects this branch before
+package acquisition; it refuses a removal finalizer in the setup factory.
+
+`SetupMaterial::for_removal` and the native offline host builder likewise need no
+package download, entropy, external destination or public-IP probe. Native Owner
+sources now construct `RemovalInstallation` through that builder. The production
+effect/public-entry gates remain closed. These constructors are implementation
+boundaries, not evidence of a qualified native installation or removal.
+
+`StandardRemovalHost<R, B>` accepts a narrow local `AuxiliaryRuntime`. The default
+runtime refuses auxiliary authority. Its current HTTP implementation checks the
+recorded serving generations, credential hashes, canonical/staged publication
+bytes, exact service/firewall units and links, and known staging children before
+commitment or effects. It stops the owned serving runtime and proves quiescence
+before unlinking secret material, removes only its recorded firewall unit/rule,
+and finishes existing removal commitment forward. Recorded source and target
+publications may coexist; cleanup deletes them without selecting or resurrecting
+a source. The exact Client Identity startup drop-in is removed only after proxy
+shutdown; an SBXR-created empty parent is removed, while a shared parent is
+preserved. Unknown files, credential changes and foreign startup routes refuse.
+Historical HTTPS/renewal, dedicated tunnel and Client Identity subscription
+artifact removal still refuse; their codecs remain readable.
+
+`OwnerRuntime` supplies local systemd/process/cgroup/listener/firewall observation
+and fixed disable commands for this adapter. It does not call public-IP discovery
+or execute sing-box during removal. A concrete test starts the real loopback HTTP
+module, commits removal, then disables/joins serving and the firewall using the
+same runtime logic with injected system effects. Its network/configuration probe
+methods deliberately panic if called. Temporary-root removal tests also cover
+failed stop/retry, prepared enablement, source/target publication cleanup and
+shared versus created startup directories.
+
+`RestorationHost::native_unreleased` now supplies the same protected missing-member
+filesystem implementation for a supported native root, using authenticated exact
+archive bytes and retained whole-host/store exclusion. No native restoration was
+executed during development. `prepare_finisher` consumes the sealed restored pair
+and rechecks the exact release, authority, installed record, bytes, mode, GID and
+inode into `RestoredFinisher`. Its fixed zero-argument Linux takeover uses the
+retained executable descriptor, a cleared environment and the interactive
+terminal. It explicitly releases the private store before exec, preserving the
+separate close-only lifetime of intentionally lent HostLock descriptors. The
+existing complete-adapter gate prevents takeover until production integration and
+qualification are complete. Descriptor preparation/stale-authority/lock tests are
+local evidence; the actual Linux exec path remains unexecuted and unvalidated.
+
+The native tunnel worker's four-file export patch has been reviewed and integrated:
+`host::tunnel_native`, the exact systemd argv parser, and the recorded cloudflared
+binary digest getter. Its injected tests execute only their synthetic test
+executable with explicit helper names, temporary roots and loopback TLS/HTTP
+fixtures. The concrete connector/probe implementation is exported, but
+`StandardHost` still needs the shared protected Standard bridge and an
+authenticated pinned probe-image digest. Initial setup must also gain only the
+exact valid retained proxy-start checkpoint; the current Running-only controller
+continues to refuse it. No plain-start fallback or weakened authorization was
+introduced. Tunnel frontend composition is a subsequent bounded integration.
+
+Remaining feature/release checklist after this increment:
+
+1. Compose the native public Owner entry after remaining inputs/owners are
+   complete; the existing simulator and unavailable native gates remain explicit.
+   Early no-config cleanup and offline removal construction are implemented.
+2. Qualify protected disclosure/output/compromise on the supported Linux host;
+   the composed fixture journeys already exist.
+3. Implement the tunnel `StandardHost` bridge, authenticated probe-image binding,
+   exact setup-start admission and Owner frontend composition. Connector/probe
+   code exists; Linux/kernel/systemd/actual VMess validation is still absent.
+4. Finish auxiliary Client Identity subscription-artifact, tunnel and historical
+   HTTPS/renewal removal. Current HTTP/startup and non-subscription identity-target
+   cleanup are implemented. Native restoration/takeover remains gated and needs
+   Linux exec and complete product recovery qualification.
+5. Complete the generic interrupted-publication retry and historical HTTPS
+   mutation/certificate-selection paths where current retained authority needs
+   them; unsupported paths continue to refuse.
+6. Validate the current complete source on Linux, including native command,
+   process/cgroup, lock and durability behavior. Earlier independent Linux results
+   apply only to the older `0940fc9` snapshot plus its recorded patch.
+7. Finish retained Rust ELF build identity, dual-architecture musl packages and
+   reviewed bootstrap/workflow integration. Offline package tests are narrower
+   evidence and do not qualify a release.
+8. Qualify the exact packaged candidate's five supported live journeys and
+   outside-client/Karing behavior, then obtain the required exact publication
+   approval. This increment performs no live, credential/security, signing,
+   upload, push or publication action.
+
+Final validation for this increment passed **461 product tests and 8 offline
+packaging tests** under umask 077, plus format, strict all-target Clippy and a
+Mac debug build. The credential-digest removal mutation failed at the intended
+foreign-token assertion and exact source restoration passed. Evidence is under
+`.scratch/acceptance/rust-recovery/`, including the reviewed test scope and final
+logs. The parent-reported worker broad-test denial had not executed; after
+reviewing changed target side effects, one explicit retry with that evidence was
+admitted and passed. No denied operation was silently rerouted. These results do
+not qualify Linux native effects, descriptor exec, actual VMess traffic, an
+installed package, a VPS or a release candidate.

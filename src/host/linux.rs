@@ -3,7 +3,7 @@
 mod effects;
 mod material;
 mod removal;
-pub use removal::StandardRemovalHost;
+pub use removal::{AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime, StandardRemovalHost};
 pub(super) mod observation;
 pub use material::SetupMaterial;
 use observation::{Facts, ubuntu};
@@ -159,6 +159,42 @@ impl<R: CommandRunner> LinuxHost<R> {
         host.authenticated = Some(authenticated.record().clone());
         Ok(host)
     }
+    /// Offline recovery/removal construction consumes no network observation or
+    /// downloaded package. Material is digest-only and cannot install resources.
+    pub fn native_offline_authenticated_unreleased(
+        runner: R,
+        material: SetupMaterial,
+        public_ipv4: &str,
+        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+    ) -> Result<Self, HostError> {
+        require_native_environment()?;
+        let fs = ProtectedFs::native()?;
+        if !runner.native_effects()
+            || !material.offline
+            || observation::read_installed(&fs)?.as_ref() != Some(authenticated.record())
+        {
+            return Err(HostError::Foreign);
+        }
+        Ok(Self {
+            fs,
+            runner,
+            material,
+            admission: InjectedAdmission {
+                public_ipv4: public_ipv4.into(),
+                root: true,
+                architecture: "amd64".into(),
+                destination_compatible: false,
+                tcp443_available: false,
+                host_lock_held: true,
+                package_locks_held: true,
+            },
+            stop: Cancellation::new(),
+            interruption: None,
+            lock: None,
+            native_mode: true,
+            authenticated: Some(authenticated.record().clone()),
+        })
+    }
     pub fn native_unreleased(
         runner: R,
         material: SetupMaterial,
@@ -212,13 +248,20 @@ impl<R: CommandRunner> LinuxHost<R> {
     pub fn interrupt_after(&mut self, phase: Option<SetupPhase>) {
         self.interruption = phase
     }
+    fn facts(&self) -> Result<Facts, HostError> {
+        if self.material.offline {
+            Facts::removal(&self.runner, &self.stop)
+        } else {
+            Facts::query(&self.runner, &self.stop)
+        }
+    }
     fn admission(&self, facts: &Facts) -> Result<(), HostError> {
         let a = &self.admission;
         if let Some(lock) = &self.lock {
             lock.verify()?;
             lock.packages_available()?;
         }
-        if self.native_mode {
+        if self.native_mode && !self.material.offline {
             let direction = observation::read_ownership(&self.fs)?.map(|r| r.recovery_direction());
             let require_bind = !matches!(
                 direction,
@@ -238,10 +281,10 @@ impl<R: CommandRunner> LinuxHost<R> {
             return Err(HostError::UnsupportedHost);
         }
         if !crate::records::ownership_public_ipv4(&a.public_ipv4)
-            || !a.destination_compatible
+            || !self.material.offline && !a.destination_compatible
             || !a.host_lock_held
             || !a.package_locks_held
-            || !facts.clock
+            || !self.material.offline && !facts.clock
         {
             return Err(HostError::Unsafe);
         }
@@ -265,6 +308,44 @@ impl<R: CommandRunner> LinuxHost<R> {
             fingerprint.push_str(&format!("{path}:absent;"));
             Ok(false)
         }
+    }
+    fn hashed_file(
+        &self,
+        path: &str,
+        digest: &str,
+        mode: rustix::fs::RawMode,
+        fingerprint: &mut String,
+    ) -> Result<bool, HostError> {
+        match self.fs.raw(path, Mode::from_raw_mode(mode), 1 << 26)? {
+            Some((bytes, evidence)) => {
+                if sha256_hex(&bytes) != digest {
+                    return Err(HostError::Foreign);
+                }
+                fingerprint.push_str(&format!("{path}:{evidence:?}"));
+                Ok(true)
+            }
+            None => {
+                fingerprint.push_str(&format!("{path}:absent;"));
+                Ok(false)
+            }
+        }
+    }
+    fn remove_hashed(
+        &self,
+        path: &str,
+        digest: &str,
+        mode: rustix::fs::RawMode,
+    ) -> Result<(), HostError> {
+        for selected in [path.to_string(), format!("{path}.sbxr-next")] {
+            if let Some((bytes, _)) = self.fs.raw(&selected, Mode::from_raw_mode(mode), 1 << 26)? {
+                if sha256_hex(&bytes) != digest {
+                    return Err(HostError::Foreign);
+                }
+                self.fs
+                    .remove_bytes(&selected, &bytes, Mode::from_raw_mode(mode))?;
+            }
+        }
+        Ok(())
     }
     fn install(
         &self,

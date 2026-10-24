@@ -194,6 +194,32 @@ impl ProtectedFs {
         self.sync_restoration_member(path, body, mode)?;
         check(budget)
     }
+    /// Open the already authenticated inode for Linux descriptor-based exec.
+    /// Neither the path nor a caller-provided executable enters the launch API.
+    pub(in crate::host) fn restoration_executable(&self, body: &[u8]) -> Result<File, HostError> {
+        let path = "usr/local/bin/sbxr";
+        let mode = Mode::from_raw_mode(0o755);
+        let (bytes, proof) = self
+            .raw(path, mode, body.len())?
+            .ok_or(HostError::Foreign)?;
+        if bytes != body || proof.gid != self.gid {
+            return Err(HostError::Foreign);
+        }
+        let (dir, name) = self.parent(path, false)?.ok_or(HostError::Unsafe)?;
+        let descriptor = fs::openat(
+            &dir,
+            name.as_str(),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(failure)?;
+        if identity(&fs::fstat(&descriptor).map_err(failure)?) != proof.identity
+            || self.raw(path, mode, body.len())?.map(|(_, p)| p) != Some(proof)
+        {
+            return Err(HostError::Unsafe);
+        }
+        Ok(File::from(descriptor))
+    }
     pub(in crate::host) fn sync_restoration_member(
         &self,
         path: &str,

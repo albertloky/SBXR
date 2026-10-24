@@ -188,3 +188,6 @@ pub fn planned_observation_commands() -> Vec<CommandPlan> {
         command("ss", &["-H", "-ltnp", "sport", "=", ":443"]),
     ]
 }
+
+#[path = "tunnel_native.rs"]
+pub mod tunnel_native;
