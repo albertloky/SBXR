@@ -93,6 +93,9 @@ impl StartContext {
             parents: Vec::new(),
         }
     }
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
     pub fn check(&self) -> Result<(), Error> {
         if self.stop.is_cancelled() || self.parents.iter().any(Cancellation::is_cancelled) {
             Err(Error::Cancelled)
@@ -448,11 +451,15 @@ impl fmt::Debug for StartLock {
 /// Owns the listener and consumes exactly one connection, including refusal.
 /// The caller binds a fresh abstract Linux address (no stale path to remove) or
 /// supplies a fixture socket; this API never adopts/removes a filesystem socket.
+enum ExpectedPeer {
+    Exact(ProcessIdentity),
+    Service { executable_sha256: String },
+}
 pub struct Handoff<'a> {
     listener: UnixListener,
     owner: &'a StartLock,
     role: Role,
-    expected: ProcessIdentity,
+    expected: ExpectedPeer,
 }
 impl<'a> Handoff<'a> {
     pub fn new(
@@ -471,7 +478,31 @@ impl<'a> Handoff<'a> {
             listener,
             owner,
             role,
-            expected,
+            expected: ExpectedPeer::Exact(expected),
+        })
+    }
+    /// Systemd assigns the child PID after start. Pin its authenticated image,
+    /// UID and fixed role cgroup, then bind/recheck the observed kernel PID and
+    /// start time before lending. No request/environment PID is trusted.
+    pub fn service(
+        listener: UnixListener,
+        owner: &'a StartLock,
+        role: Role,
+        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+    ) -> Result<Self, Error> {
+        role_name(role)?;
+        if owner.borrowed {
+            return Err(Error::Refused);
+        }
+        owner.verify()?;
+        listener.set_nonblocking(true).map_err(refused)?;
+        Ok(Self {
+            listener,
+            owner,
+            role,
+            expected: ExpectedPeer::Service {
+                executable_sha256: authenticated.record().executable_sha256().into(),
+            },
         })
     }
     pub fn accept(
@@ -492,12 +523,20 @@ impl<'a> Handoff<'a> {
         };
         drop(self.listener);
         connection.set_nonblocking(true).map_err(refused)?;
-        if observations.peer(&connection)? != self.expected {
+        let expected = observations.peer(&connection)?;
+        let accepted = match &self.expected {
+            ExpectedPeer::Exact(exact) => &expected == exact,
+            ExpectedPeer::Service { executable_sha256 } => {
+                expected.accepts(self.role, self.owner.path.uid)
+                    && &expected.executable_sha256 == executable_sha256
+            }
+        };
+        if !accepted {
             return Err(Error::Refused);
         }
         read_role(&mut connection, self.role, context)?;
         self.owner.verify()?;
-        if observations.peer(&connection)? != self.expected {
+        if observations.peer(&connection)? != expected {
             return Err(Error::Refused);
         }
         let duplicate = self.owner.descriptor()?;
@@ -1035,11 +1074,17 @@ pub trait ProxyStartHost {
         context: &StartContext,
     ) -> Result<ReleaseIdentity, Error>;
     fn ownership(&self) -> Result<Vec<u8>, Error>;
-    fn verify_startup(&self, record: &OwnershipRecord) -> Result<(), Error>;
+    fn verify_startup(&self, record: &OwnershipRecord, context: &StartContext)
+    -> Result<(), Error>;
     fn configuration(&self) -> Result<Vec<u8>, Error>;
     fn mutation_in_progress(&self) -> Result<bool, Error>;
     /// Atomically consume the exact configuration-bound one-use Owner gate.
-    fn consume_authorization(&self, configuration_sha256: &str) -> Result<(), Error>;
+    fn consume_authorization(
+        &self,
+        configuration_sha256: &str,
+        lock: &StartLock,
+        context: &StartContext,
+    ) -> Result<(), Error>;
 }
 /// Ordinary starts may use the source before the cutover gate. At/after the
 /// gate only a borrowed Owner lock plus one consumed exact authorization works.
@@ -1064,7 +1109,7 @@ pub fn authorize_proxy_start(
     {
         return Err(Error::Refused);
     }
-    host.verify_startup(&record)?;
+    host.verify_startup(&record, context)?;
     let configuration = host.configuration()?;
     if configuration.is_empty()
         || configuration.len() > MAX_CONFIGURATION
@@ -1078,38 +1123,55 @@ pub fn authorize_proxy_start(
     }
     lock.verify()?;
     context.check()?;
-    if let Some(rotation) = wire.get("client_identity_rotation") {
-        let checkpoint = rotation["checkpoint"].as_str().ok_or(Error::Refused)?;
-        let ordinary = matches!(
-            checkpoint,
-            "rotation authorized"
-                | "target prepared"
-                | "startup integration published"
-                | "systemd reloaded"
-                | "startup route verified"
-        );
-        if ordinary {
-            if rotation["source_configuration_sha256"].as_str()
-                != Some(record.configuration_sha256())
-            {
-                return Err(Error::Refused);
-            }
-        } else {
-            if !lock.is_borrowed() || !host.mutation_in_progress()? {
-                return Err(Error::Refused);
-            }
-            let selected = if rotation["direction"] == "forward" {
-                "target_configuration_sha256"
-            } else {
-                "source_configuration_sha256"
-            };
-            if rotation[selected].as_str() != Some(record.configuration_sha256()) {
-                return Err(Error::Refused);
-            }
-            host.consume_authorization(record.configuration_sha256())?;
+    if let Some(selected) = cutover_configuration(&record)? {
+        if !lock.is_borrowed() || !host.mutation_in_progress()? {
+            return Err(Error::Refused);
         }
+        host.consume_authorization(&selected, &lock, context)?;
+        context.check()?;
     }
     Ok(())
+}
+
+/// Selects only the currently recorded configuration. This grants no permission:
+/// gated starts still need the borrowed Owner lock and a consumed one-use token.
+pub fn cutover_configuration(record: &OwnershipRecord) -> Result<Option<String>, Error> {
+    if record.phase() != SetupPhase::Running
+        || record.recovery_direction() != RecoveryDirection::None
+    {
+        return Err(Error::Refused);
+    }
+    let wire: serde_json::Value =
+        serde_json::from_slice(&record.encode().map_err(refused)?).map_err(refused)?;
+    if wire["subscription_transport_migration"] == true {
+        return Err(Error::Refused);
+    }
+    let Some(rotation) = wire.get("client_identity_rotation") else {
+        return Ok(None);
+    };
+    let checkpoint = rotation["checkpoint"].as_str().ok_or(Error::Refused)?;
+    let ordinary = matches!(
+        checkpoint,
+        "rotation authorized"
+            | "target prepared"
+            | "startup integration published"
+            | "systemd reloaded"
+            | "startup route verified"
+    );
+    let selected = if ordinary || rotation["direction"] != "forward" {
+        "source_configuration_sha256"
+    } else {
+        "target_configuration_sha256"
+    };
+    let selected = rotation[selected].as_str().ok_or(Error::Refused)?;
+    if selected != record.configuration_sha256() {
+        return Err(Error::Refused);
+    }
+    Ok(if ordinary {
+        None
+    } else {
+        Some(selected.into())
+    })
 }
 
 #[cfg(test)]

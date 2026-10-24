@@ -1090,7 +1090,7 @@ impl ProxyStartHost for ProxyFixture {
     fn ownership(&self) -> Result<Vec<u8>, Error> {
         Ok(self.record.encode().unwrap())
     }
-    fn verify_startup(&self, record: &OwnershipRecord) -> Result<(), Error> {
+    fn verify_startup(&self, record: &OwnershipRecord, _: &StartContext) -> Result<(), Error> {
         let wire: serde_json::Value = serde_json::from_slice(&record.encode().unwrap()).unwrap();
         assert!(wire["proxy_startup"]["drop_in_sha256"].is_string());
         Ok(())
@@ -1101,7 +1101,12 @@ impl ProxyStartHost for ProxyFixture {
     fn mutation_in_progress(&self) -> Result<bool, Error> {
         Ok(self.owner.is_some())
     }
-    fn consume_authorization(&self, expected: &str) -> Result<(), Error> {
+    fn consume_authorization(
+        &self,
+        expected: &str,
+        _: &StartLock,
+        _: &StartContext,
+    ) -> Result<(), Error> {
         assert_eq!(expected, self.record.configuration_sha256());
         if self.consumed.swap(true, Ordering::SeqCst) {
             Err(Error::Refused)

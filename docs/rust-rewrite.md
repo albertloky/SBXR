@@ -887,3 +887,90 @@ Clippy, format and the Mac build. The genuine offline archive-to-restored-pair
 example passed through the real signature backend. Removing executable-only
 residue refusal made its adversarial test fail; exact source was restored and
 the test passed. No Linux, real-root or deployment qualification was performed.
+
+
+## Linux regressions and concrete proxy cutover increment
+
+The parent independently validated snapshot `0940fc9` on Linux under `umask 077`.
+It reproduced a retained-descriptor writer-lock failure and fixture-mode failures;
+after its three-file patch, 287 product tests, eight packaging tests, format,
+strict Clippy and both GNU builds passed. Those results cover that snapshot and
+patch only. Current native code has not been executed or cross-built on Linux.
+The Mac still lacks a Linux C cross-compiler or prepared container/guest; no
+prerequisite was installed and no privileged environment was started.
+
+The retained-descriptor failure is confirmed: flock exclusion belongs to the
+open file description and survives closing one descriptor while a duplicate
+remains. A concurrent fork retaining a CLOEXEC descriptor until exec is the
+inferred cause of the intermittent original failure. `OwnershipStore` now
+explicitly unlocks on Drop because its private directory description is never
+intentionally lent. A deterministic regression retains a duplicate, drops the
+store, opens its successor and confirms closing the old duplicate cannot unlock
+the successor. This is distinct from `HostLock` and runtime-start lending, whose
+duplicates intentionally retain Owner exclusion. A separate regression proves
+store release does not revoke that borrowed Host lock authority.
+
+The adapted fixture corrections explicitly set package directory/unit modes to
+0755/0644 and restoration fixture parents to their existing contract modes.
+They remove ambient-umask assumptions without relaxing production ownership,
+mode, parent, inode or hardlink checks. The genuine restoration evidence example
+uses the same explicit fixture-parent modes.
+
+`ProxyRuntimeHost` implements fresh authenticated installed-pair, ownership,
+pending/finalizer absence, startup drop-in, effective ExecCondition and canonical
+configuration checks. Native observations use `LinuxPeers` and fixed bounded
+`systemctl show --property=ExecCondition --value sing-box.service`; injected
+roots require explicit process/command observations. Cancellation and deadlines
+propagate to the command runner, with the watcher joined on all return paths.
+The native factory checks the actual Linux/Ubuntu/root/architecture environment;
+unsupported hosts cannot select a simulator implicitly.
+
+`host/runtime_io.rs` supplies nonblocking, close-on-exec Unix connections with
+bounded polling and startup cancellation. Linux uses the fixed abstract address,
+never filesystem-socket adoption or deletion. Fixture routes require an owned
+protected root and direct-child socket, refuse parent escapes/symlinks and
+recheck socket identity. Darwin uses only the explicit fixture route.
+
+`ProxyRuntimeHost::prepare_cutover` rechecks Owner exclusion, actual observed
+current image, release identity, canonical configuration and recorded recovery
+direction before publishing the exact 65-byte volatile start gate. `CutoverGate`
+retains the Owner through the scoped start and provides checked `finish` cleanup.
+It removes only exact owned material, preserves foreign changes and reports an
+explicit uncertain cleanup without silently retrying it in Drop. Its native
+start helper binds the fixed channel and wraps a trusted bounded fixed systemd
+start effect; complete native controller dispatch remains unavailable.
+
+`Handoff::service` handles the PID assigned by systemd after startup begins.
+It pins authenticated executable bytes, Owner UID and the fixed role cgroup,
+then binds and rechecks the observed PID, start time and identity before lending.
+The exact-identity `Handoff::new` constructor and wire protocol remain intact.
+Native peer facts come from the kernel/proc observer. Portable tests inject those
+facts while exercising actual sockets, SCM_RIGHTS, retained locks, file modes,
+no-replace publication, exact one-use consumption and parent synchronization.
+No caller-provided PID or environment value grants native authority.
+
+The consumer requires a verified same-root borrowed StartLock, exact recorded
+configuration token, one-link protected file and stable metadata. It unlinks and
+syncs that gate only after capability/context rechecks. Ordinary starts remain
+available only before the recorded cutover boundary; forward recovery selects
+the target and cleanup selects the permitted source. A revoked source cannot
+become executable through a stale or foreign token.
+
+Current Mac validation under `umask 077` passed 311 product tests, eight packaging
+tests, format, strict all-target Clippy and the build. Temporarily removing the
+service executable binding made the adversarial handoff test fail; exact source
+was restored and that test passed. Genuine preserved v3.1.118 authentication and
+exact temporary-root restoration also passed offline. Temporary fixtures were
+cleaned. Evidence is `.scratch/acceptance/rust-runtime/`. Rustix's already pinned
+version only gains its `event` feature; no lockfile dependency version changed.
+
+Concrete `ServingHost` and its sandbox/current-process proof bootstrap remain
+the next incomplete path. The serving sandbox hides /proc, so proof cannot be
+invented or replaced with fixture observations. Native serving material/watch/
+bind and full service-controller dispatch remain closed. Auxiliary cleanup still
+needs exact canonical/staged two-link proof, and pinned upstream key/DEB
+acquisition, historical qualification-policy acquisition, transport timeout
+parity, retained Rust build sections and bootstrap/workflow integration remain
+unfinished. Exact missing-member restoration remains injected-root only. No
+native root effect, new source upload, signing, push or publication occurred.
+These tests do not qualify a Rust deployment or enable Go-to-Rust migration.

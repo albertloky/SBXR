@@ -1,4 +1,7 @@
 //! Private-role protected-file integration. Injected roots remain explicit fixtures.
+mod gate;
+mod material;
+mod proxy;
 use super::{HostError, filesystem::ProtectedFs, linux::observation, locks::HostLock};
 use crate::{
     private_roles::{Role, Runtime},
@@ -7,6 +10,8 @@ use crate::{
     runtime_handoff::{self, Error, ProxyStartHost, StartContext, StartLock},
     subscription_serving::Cancellation,
 };
+pub use gate::CutoverGate;
+pub use proxy::ProxyRuntimeHost;
 use rustix::fs::Mode;
 use std::path::Path;
 const STARTUP: &[u8] = b"[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n";
@@ -85,7 +90,7 @@ impl ProxyStartHost for InjectedRuntime<'_> {
             .map(|(body, _)| body)
             .ok_or(Error::Refused)
     }
-    fn verify_startup(&self, record: &OwnershipRecord) -> Result<(), Error> {
+    fn verify_startup(&self, record: &OwnershipRecord, _: &StartContext) -> Result<(), Error> {
         // This concrete fixture bridge supports only ordinary starts. Borrowed
         // cutover and native systemd/NSS observations remain separate adapters.
         if record.ordinary_proxy_start_sha256() != Some(sha256_hex(STARTUP).as_str()) {
@@ -123,7 +128,7 @@ impl ProxyStartHost for InjectedRuntime<'_> {
     fn mutation_in_progress(&self) -> Result<bool, Error> {
         Err(Error::Refused)
     }
-    fn consume_authorization(&self, _: &str) -> Result<(), Error> {
+    fn consume_authorization(&self, _: &str, _: &StartLock, _: &StartContext) -> Result<(), Error> {
         Err(Error::Refused)
     }
 }

@@ -84,3 +84,37 @@ signing, publication, Git/index, or commit action was taken.
 Full Linux cross-checking stopped in ring's build script because
 `x86_64-linux-gnu-gcc` is unavailable. No compiler or service was installed. Linux
 execution and deployment qualification remain outstanding.
+
+## Core proxy/cutover integration
+
+The later core increment supplies `ProxyRuntimeHost`, `CutoverGate` and bounded
+Unix transport in `src/host/runtime/` and `src/host/runtime_io.rs`. Rustix's existing
+`event` feature supports deadline-aware polling; no dependency version changed.
+`ProxyStartHost::verify_startup` now receives `StartContext`, and gate consumption
+receives both that context and the actual borrowed `StartLock` for independent
+capability checks. Existing fixture assertions are preserved.
+
+`Handoff::new` retains exact preselected identity matching. `Handoff::service`
+pins the authenticated installed executable, Owner UID and fixed role cgroup,
+then captures and rechecks the observed peer's PID, start time and complete
+identity before sending a descriptor. This permits systemd to assign the child
+PID during startup. The native path uses Linux kernel/proc observations;
+portable integration tests explicitly inject those observations while exercising
+real descriptor passing, locks, Unix transport and protected filesystem effects.
+The protocol and its one-use/no-relending constraints are unchanged.
+
+`ProxyRuntimeHost::prepare_cutover` publishes only the currently recorded gated
+configuration under the retained Owner lock. `CutoverGate::start_native` binds
+the fixed abstract address and wraps a trusted bounded fixed systemd-start
+callback; `start_fixture` is an explicit injected route. Checked `finish` removes
+only matching owned bytes and reports uncertainty once. Unwind cleanup also
+preserves changed foreign material. Revoked source configurations never regain
+authority. The authorization consumer requires the borrowed Owner description,
+exact canonical token, safe metadata and one link before unlink and parent sync.
+
+Native dispatch remains unavailable. Concrete `ServingHost`, protected sandbox/
+current-process bootstrap and full service-controller orchestration are not
+implemented by this increment. A service with hidden /proc cannot substitute
+synthetic process facts. Portable tests are not Linux execution or deployment
+qualification. The parent separately validated the earlier 0940fc9 snapshot plus
+its Linux patch; that evidence does not cover these newer native branches.

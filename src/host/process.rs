@@ -48,10 +48,20 @@ pub enum Query {
     ValidateConfiguration,
     DestinationDns,
     PublicIpDns,
+    ProxyStartCondition,
 }
 impl Query {
     pub(super) fn argv(self) -> (&'static str, &'static [&'static str]) {
         match self {
+            Self::ProxyStartCondition => (
+                "/usr/bin/systemctl",
+                &[
+                    "show",
+                    "--property=ExecCondition",
+                    "--value",
+                    "sing-box.service",
+                ],
+            ),
             Self::DestinationDns => ("/usr/bin/getent", &["ahosts", "google.com"]),
             Self::PublicIpDns => ("/usr/bin/getent", &["ahostsv4", "api.ipify.org"]),
             Self::Package => (

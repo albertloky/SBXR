@@ -22,7 +22,12 @@ Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decodi
 is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
 public proofs and the repository evidence example cover actual acquisition.
 Runtime-start descriptor lending and serving composition are `src/runtime_handoff.rs`.
-Fixed private dispatch is `src/private_roles.rs` and remains closed natively.
+Concrete proxy-start checks, protected material and scoped cutover publication are
+`src/host/runtime/{proxy,material,gate}.rs`; `src/host/runtime_io.rs` provides bounded
+Unix transport. The one-use consume effect is `src/host/filesystem/runtime.rs`.
+These native library adapters are tested through explicit injected roots and
+process/command observations; native serving and private dispatch remain closed.
+Fixed private dispatch is `src/private_roles.rs`.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

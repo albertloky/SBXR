@@ -229,6 +229,7 @@ impl CommandRunner for Fake {
                     (1, String::new())
                 }
             }
+            Query::ProxyStartCondition => return Err(HostError::LiveUnavailable),
             Query::Clock => (0, "yes".into()),
             Query::ValidateConfiguration => (0, String::new()),
         };

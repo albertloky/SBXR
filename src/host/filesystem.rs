@@ -1,6 +1,8 @@
 mod restoration;
+mod runtime;
 use super::HostError;
 use crate::records::sha256_hex;
+pub(super) use runtime::PROXY_GATE;
 use rustix::{
     fs::{self, AtFlags, FileType, Mode, OFlags},
     io::Errno,
