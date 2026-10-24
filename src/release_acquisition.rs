@@ -46,9 +46,19 @@ struct Metadata {
 }
 impl Metadata {
     fn decode(bytes: &[u8], record: &InstalledRecord) -> Result<Self> {
+        let selected = record.release_identity();
+        let selected =
+            ReleaseIdentity::new(selected.tag(), selected.commit(), selected.index_sha256())
+                .map_err(|_| TrustError::Refused)?;
+        let result = Self::decode_exact(bytes, &selected)?;
+        if result.sequence != record.sequence() {
+            return Err(TrustError::Refused);
+        }
+        Ok(result)
+    }
+    fn decode_exact(bytes: &[u8], selected: &ReleaseIdentity) -> Result<Self> {
         let value = trust::json_object(bytes, MAX_INDEX_BYTES)?;
         let wire: WireRelease = serde_json::from_value(value).map_err(|_| TrustError::Refused)?;
-        let selected = record.release_identity();
         if wire.draft
             || wire.prerelease
             || !wire.immutable
@@ -102,9 +112,6 @@ impl Metadata {
         }
         let proofs: Vec<_> = assets.values().map(|a| a.proof.clone()).collect();
         let sequence = acceptance::check(&wire.body, &identity, &proofs)?;
-        if sequence != record.sequence() {
-            return Err(TrustError::Refused);
-        }
         Ok(Self {
             identity,
             sequence,
@@ -116,6 +123,66 @@ impl Metadata {
             self.identity.clone(),
             self.assets.values().map(|a| a.proof.clone()).collect(),
         )
+    }
+}
+/// Exact authenticated release bytes. This proves no installed file or process,
+/// grants no restoration permission and cannot be constructed from structural
+/// checks. Filesystem recovery separately requires committed removal authority.
+pub struct AuthenticatedArchive {
+    record: InstalledRecord,
+    index: ReleaseIndex,
+    executable: Vec<u8>,
+}
+impl fmt::Debug for AuthenticatedArchive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Authenticated exact release archive")
+    }
+}
+impl AuthenticatedArchive {
+    pub fn record(&self) -> &InstalledRecord {
+        &self.record
+    }
+    pub fn index(&self) -> &ReleaseIndex {
+        &self.index
+    }
+    pub fn executable(&self) -> &[u8] {
+        &self.executable
+    }
+    pub fn acquire(
+        transport: &mut impl AcquisitionTransport,
+        selected: &crate::records::ReleaseIdentity,
+        architecture: Architecture,
+        budget: &SelectionBudget,
+    ) -> Result<Self> {
+        budget.check()?;
+        let expected =
+            ReleaseIdentity::new(selected.tag(), selected.commit(), selected.index_sha256())
+                .map_err(|_| TrustError::Refused)?;
+        let request = AcquisitionRequest::release_metadata(selected.tag())?;
+        let response = transport.get(&request, budget)?;
+        let bytes = trust::read_complete_json_response(response, request.max_bytes(), budget)?;
+        let metadata = Metadata::decode_exact(&bytes, &expected)?;
+        let claims = trust::verify_native_release(transport, &metadata.expected()?, budget)?;
+        acquire_archive(transport, &metadata, &claims, architecture, budget)
+    }
+    /// Native callers must freshly read protected installed/current executable
+    /// bytes. The archive alone makes no assertion about their physical source.
+    pub fn bind_current(
+        &self,
+        installed: &[u8],
+        current: &[u8],
+        budget: &SelectionBudget,
+    ) -> Result<AuthenticatedInstalled> {
+        budget.check()?;
+        if installed != self.executable || current != self.executable {
+            return Err(TrustError::Refused);
+        }
+        let installed = AuthenticatedInstalled {
+            record: self.record.clone(),
+            index: self.index.clone(),
+        };
+        budget.check()?;
+        Ok(installed)
     }
 }
 /// Only the actual acquisition/authentication path constructs this result.
@@ -180,6 +247,19 @@ fn complete(
     architecture: Architecture,
     budget: &SelectionBudget,
 ) -> Result<AuthenticatedInstalled> {
+    let archive = acquire_archive(transport, metadata, claims, architecture, budget)?;
+    if archive.record != record {
+        return Err(TrustError::Refused);
+    }
+    archive.bind_current(installed, installed, budget)
+}
+fn acquire_archive(
+    transport: &mut impl AcquisitionTransport,
+    metadata: &Metadata,
+    claims: &VerifiedNativeReleaseClaims,
+    architecture: Architecture,
+    budget: &SelectionBudget,
+) -> Result<AuthenticatedArchive> {
     budget.check()?;
     if claims.identity() != &metadata.identity {
         return Err(TrustError::Refused);
@@ -223,13 +303,29 @@ fn complete(
         budget,
     )?;
     let executable = crate::release_archive::unpack(&bytes, budget)?;
-    if executable != installed {
-        return Err(TrustError::Refused);
-    }
     identity::inspect_release_executable(&index, &executable, architecture)
         .map_err(|_| TrustError::Refused)?;
     budget.check()?;
-    Ok(AuthenticatedInstalled { record, index })
+    let id = index.identity();
+    let release = crate::records::ReleaseIdentity::new(id.tag(), id.commit(), id.index_sha256())
+        .map_err(|_| TrustError::Refused)?;
+    let arch = match architecture {
+        Architecture::Amd64 => "amd64",
+        Architecture::Arm64 => "arm64",
+    };
+    let record = InstalledRecord::new(
+        release,
+        index.sequence(),
+        arch,
+        &crate::records::sha256_hex(&executable),
+    )
+    .map_err(|_| TrustError::Refused)?;
+    budget.check()?;
+    Ok(AuthenticatedArchive {
+        record,
+        index,
+        executable,
+    })
 }
 #[cfg(test)]
 #[path = "release_acquisition_tests.rs"]
@@ -238,4 +334,26 @@ mod tests;
 #[cfg(test)]
 pub(crate) fn fixture_authenticated() -> (AuthenticatedInstalled, Vec<u8>) {
     tests::verified_fixture()
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_archive() -> AuthenticatedArchive {
+    let (installed, executable) = tests::verified_fixture();
+    AuthenticatedArchive {
+        record: installed.record,
+        index: installed.index,
+        executable,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_archive_with_capabilities() -> AuthenticatedArchive {
+    let (installed, executable) = tests::verified_fixture_with_markers(
+        b"SBXR-DEDICATED-TUNNEL-V1 SBXR-SUBSCRIPTION-HTTP-V1 SBXR-SUBSCRIPTION-HTTPS-RETIREMENT-V1",
+    );
+    AuthenticatedArchive {
+        record: installed.record,
+        index: installed.index,
+        executable,
+    }
 }

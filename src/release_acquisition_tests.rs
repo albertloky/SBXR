@@ -29,13 +29,18 @@ impl AcquisitionTransport for Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_markers(&[])
+    }
+    fn with_markers(markers: &[u8]) -> Self {
         let old = identity::read_executable_identity(include_bytes!(
             "../tests/testdata/release_identity/go-amd64-valid.bin"
         ))
         .unwrap();
         let commit = "c5e17a62e06a1d201570249c61fae531e9244e1b";
+        let mut payload = old.payload().to_vec();
+        payload.extend_from_slice(markers);
         let executable =
-            identity::stamp_executable(old.payload(), "v3.1.118", commit, 192, Architecture::Amd64)
+            identity::stamp_executable(&payload, "v3.1.118", commit, 192, Architecture::Amd64)
                 .unwrap();
         let archive = crate::release_archive::tests::archive(&executable);
         let assets = vec![
@@ -280,4 +285,43 @@ fn paginated_exact_metadata_is_refused_before_proof_or_asset_requests() {
         Err(TrustError::Refused)
     ));
     assert_eq!(transport.calls, 1);
+}
+
+#[test]
+fn exact_authenticated_archive_derives_record_and_refuses_unbound_or_interrupted_current_bytes() {
+    let mut f = Fixture::new();
+    let release = f.record.release_identity();
+    let selected =
+        ReleaseIdentity::new(release.tag(), release.commit(), release.index_sha256()).unwrap();
+    let metadata = Metadata::decode_exact(&f.metadata, &selected).unwrap();
+    let claims = trust::fixture_claims(&metadata.expected().unwrap());
+    let archive = acquire_archive(
+        &mut f,
+        &metadata,
+        &claims,
+        Architecture::Amd64,
+        &SelectionBudget::new(),
+    )
+    .unwrap();
+    assert!(archive.record() == &f.record);
+    assert_eq!(archive.executable(), f.executable);
+    assert!(
+        archive
+            .bind_current(archive.executable(), b"different", &SelectionBudget::new())
+            .is_err()
+    );
+    let budget = SelectionBudget::new();
+    budget.cancel();
+    assert!(matches!(
+        archive.bind_current(archive.executable(), archive.executable(), &budget),
+        Err(TrustError::Interrupted)
+    ));
+    let changed =
+        ReleaseIdentity::new("v3.1.117", selected.commit(), selected.index_sha256()).unwrap();
+    assert!(Metadata::decode_exact(&f.metadata, &changed).is_err());
+}
+
+pub(super) fn verified_fixture_with_markers(markers: &[u8]) -> (AuthenticatedInstalled, Vec<u8>) {
+    let mut f = Fixture::with_markers(markers);
+    (f.finish().unwrap(), f.executable)
 }

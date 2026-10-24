@@ -168,6 +168,10 @@ struct SelectedAuthority {
     location: AuthorityLocation,
 }
 impl AuthoritySnapshot {
+    /// Select only the exact committed finisher; no Latest or creator fallback.
+    pub fn restoration_release(&self) -> Result<ReleaseIdentity, RemovalError> {
+        finishing_release(&self.selected()?.ok_or(RemovalError::Authority)?.record)
+    }
     fn selected(&self) -> Result<Option<SelectedAuthority>, RemovalError> {
         let (bytes, location) = match (&self.current, &self.finalizer) {
             (Some(bytes), None) => (bytes, AuthorityLocation::Current),

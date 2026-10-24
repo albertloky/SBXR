@@ -38,9 +38,10 @@ JSON and policy-matching digest subjects, and must fail signature verification.
 No test-only signature constructor is involved.
 
 `examples/verify_public_release.rs` also verifies the complete archive, ELF/trailer
-and installed-byte binding using the real acquisition API. Supply the ignored
-evidence directory containing only the fixed archive basename; no path is ever
-executed or extracted to disk:
+and installed-byte binding using the real acquisition API. It also exercises
+exact restoration into a disposable protected temporary root. Supply the ignored evidence directory containing the
+fixed archive basename. Archive decoding stays in memory; recovery writes only
+its two fixed fixture paths and never executes them:
 
 ```sh
 cargo run --locked --offline --example verify_public_release -- <evidence-directory>
@@ -49,5 +50,5 @@ cargo run --locked --offline --example verify_public_release -- <evidence-direct
 
 The first command replays these preserved public proof/metadata/index bytes and
 the local archive. The second uses actual bounded HTTPS for every exact-release
-request and checks against the same inert local bytes. The example is a repository
-evidence tool, not a public installation action or production authority bypass.
+request and checks against the same inert local bytes. The fixture root is cleaned
+on success or refusal. The example is a repository evidence tool, not a public installation action or production authority bypass.

@@ -1,3 +1,4 @@
+mod restoration;
 use super::HostError;
 use crate::records::sha256_hex;
 use rustix::{

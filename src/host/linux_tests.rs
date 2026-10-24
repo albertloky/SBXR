@@ -1480,3 +1480,63 @@ fn standard_removal_requires_ownership_without_clock_or_network_availability() {
         Outcome::RemovalComplete
     );
 }
+
+#[test]
+fn restored_exact_finisher_reopens_and_completes_actual_product_only_removal() {
+    let root = Root::new();
+    let archive = crate::release_acquisition::fixture_archive();
+    fs::remove_file(root.0.join("usr/local/bin/sbxr")).unwrap();
+    fs::remove_file(root.0.join("var/lib/sbxr/installed.json")).unwrap();
+    fs::remove_dir(root.0.join("var/lib/sbxr")).unwrap();
+    fs::create_dir_all(root.0.join("run/lock")).unwrap();
+    let mut record =
+        crate::removal::commit_removal(None, &archive.record().release_identity()).unwrap();
+    while crate::removal::checkpoint(&record).unwrap()
+        < crate::removal::checkpoint_limit(&record).unwrap()
+    {
+        record = crate::removal::next_checkpoint(&record).unwrap();
+    }
+    let authority = record.encode().unwrap();
+    root.write("var/lib/.sbxr-removal.json", &authority, 0o600);
+    let restored = {
+        let mut recovery = crate::host::restoration::RestorationHost::injected(&root.0).unwrap();
+        recovery
+            .restore(&archive, &crate::artifact_trust::SelectionBudget::new())
+            .unwrap()
+    };
+    assert_eq!(
+        fs::read(root.0.join("var/lib/.sbxr-removal.json")).unwrap(),
+        authority
+    );
+    // This injected test supplies simulated current bytes. Native recovery must
+    // launch and authenticate the exact finisher; restoration proves files only.
+    assert!(restored.record() == archive.record());
+    let bytes = fs::read(root.0.join("usr/local/bin/sbxr")).unwrap();
+    let authenticated = archive
+        .bind_current(
+            &bytes,
+            &bytes,
+            &crate::artifact_trust::SelectionBudget::new(),
+        )
+        .unwrap();
+    let (base, commands, _) = system_host(&root);
+    let host = LinuxHost::injected_authenticated(
+        &root.0,
+        base.runner,
+        base.material,
+        admission(),
+        &authenticated,
+    )
+    .unwrap();
+    let mut removal =
+        crate::proxyinstallation::RemovalInstallation::new(StandardRemovalHost::new(host).unwrap());
+    let prepared = removal.review(Action::FinishRemoval).prepared.unwrap();
+    assert_eq!(
+        removal.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::RemovalComplete
+    );
+    assert!(!root.0.join("var/lib/sbxr").exists());
+    assert!(!root.0.join("usr/local/bin/sbxr").exists());
+    assert!(!root.0.join("var/lib/.sbxr-removal.json").exists());
+    assert!(!commands.borrow().iter().any(|c| c.mutation()));
+}

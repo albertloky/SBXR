@@ -1,12 +1,13 @@
-//! Repository-only evidence checker. Never executes or installs supplied bytes.
+//! Repository-only evidence checker. Never executes supplied bytes or installs
+//! on a real host. Recovery writes only fixed paths in a disposable owned root.
 use sbxr::{
     artifact_trust::{
         AcquisitionRequest, AcquisitionResponse, AcquisitionTransport, SelectionBudget, TrustError,
     },
-    records::{InstalledRecord, ReleaseIdentity, sha256_hex},
-    release_acquisition::AuthenticatedInstalled,
+    records::ReleaseIdentity,
+    release_acquisition::AuthenticatedArchive,
     release_https::HttpsTransport,
-    release_identity::ReleaseIndex,
+    release_identity::{Architecture, ReleaseIndex},
 };
 use std::{
     collections::BTreeMap,
@@ -71,20 +72,13 @@ fn verify() -> Result<(), TrustError> {
     let executable = sbxr::release_archive::unpack(&archive, &SelectionBudget::new())?;
     let index = ReleaseIndex::decode(INDEX).map_err(|_| TrustError::Refused)?;
     let identity = index.identity();
-    let record = InstalledRecord::new(
-        ReleaseIdentity::new(identity.tag(), identity.commit(), identity.index_sha256())
-            .map_err(|_| TrustError::Refused)?,
-        index.sequence(),
-        "amd64",
-        &sha256_hex(&executable),
-    )
-    .map_err(|_| TrustError::Refused)?;
+    let selected = ReleaseIdentity::new(identity.tag(), identity.commit(), identity.index_sha256())
+        .map_err(|_| TrustError::Refused)?;
     let admitted = if args.len() == 2 {
-        AuthenticatedInstalled::acquire(
+        AuthenticatedArchive::acquire(
             &mut HttpsTransport::new()?,
-            record,
-            &executable,
-            &executable,
+            &selected,
+            Architecture::Amd64,
             &SelectionBudget::new(),
         )?
     } else {
@@ -123,21 +117,60 @@ fn verify() -> Result<(), TrustError> {
                 bytes,
             );
         }
-        AuthenticatedInstalled::acquire(
+        AuthenticatedArchive::acquire(
             &mut Replay(sources),
-            record,
-            &executable,
-            &executable,
+            &selected,
+            Architecture::Amd64,
             &SelectionBudget::new(),
         )?
     };
-    if admitted.index().identity() != identity {
+    if admitted.index().identity() != identity || admitted.executable() != executable {
         return Err(TrustError::Refused);
     }
+    admitted.bind_current(&executable, &executable, &SelectionBudget::new())?;
+    restore_fixture(&admitted)?;
     println!(
-        "Verified v3.1.118/192 release and installed bytes; no artifact executed, installed or deployment-qualified."
+        "Verified v3.1.118/192 release and exact temporary-root restoration; no artifact executed or deployed."
     );
     Ok(())
+}
+fn restore_fixture(archive: &AuthenticatedArchive) -> Result<(), TrustError> {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let root = std::env::temp_dir().join(format!("public-restore-{}", std::process::id()));
+    fs::create_dir(&root).map_err(|_| TrustError::Refused)?;
+    let result = (|| -> Result<(), TrustError> {
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .map_err(|_| TrustError::Refused)?;
+        for path in ["run/lock", "var/lib", "usr/local/bin"] {
+            fs::create_dir_all(root.join(path)).map_err(|_| TrustError::Refused)?;
+        }
+        let mut record = sbxr::removal::commit_removal(None, &archive.record().release_identity())
+            .map_err(|_| TrustError::Refused)?;
+        while sbxr::removal::checkpoint(&record).map_err(|_| TrustError::Refused)?
+            < sbxr::removal::checkpoint_limit(&record).map_err(|_| TrustError::Refused)?
+        {
+            record = sbxr::removal::next_checkpoint(&record).map_err(|_| TrustError::Refused)?;
+        }
+        let authority = record.encode().map_err(|_| TrustError::Refused)?;
+        let path = root.join("var/lib/.sbxr-removal.json");
+        fs::write(&path, &authority).map_err(|_| TrustError::Refused)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .map_err(|_| TrustError::Refused)?;
+        let restored = {
+            let mut host = sbxr::host::restoration::RestorationHost::injected(&root)
+                .map_err(|_| TrustError::Refused)?;
+            host.restore(archive, &SelectionBudget::new())
+                .map_err(|_| TrustError::Refused)?
+        };
+        if restored.record() != archive.record()
+            || fs::read(path).map_err(|_| TrustError::Refused)? != authority
+        {
+            return Err(TrustError::Refused);
+        }
+        Ok(())
+    })();
+    let cleanup = fs::remove_dir_all(&root).map_err(|_| TrustError::Refused);
+    result.and(cleanup)
 }
 fn main() -> std::process::ExitCode {
     if verify().is_ok() {

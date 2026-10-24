@@ -7,6 +7,7 @@ pub mod linux;
 pub mod locks;
 pub mod network;
 pub mod process;
+pub mod restoration;
 pub mod runtime;
 mod setup;
 pub mod system;

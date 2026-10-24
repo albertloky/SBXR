@@ -70,7 +70,8 @@ or Karing verification.
 | `src/artifact_trust.rs` | Real offline Sigstore verification against pinned roots/policies, exact authenticated claims and bounded acquisition interface |
 | `tooling/rust-package/` | Separate offline deterministic package/index CLI using the product release inspector |
 | `src/identity_generation.rs` | Ephemeral X25519/UUID/credential generation, injected entropy and Go-compatible validation |
-| `src/release_acquisition.rs`, `src/release_acquisition/` | Exact-tag metadata/Acceptance Record/signature/index/archive/current-byte binding; injected network boundary |
+| `src/release_acquisition.rs`, `src/release_acquisition/` | Exact-tag authenticated archive acquisition, Installed Record derivation and separate current-byte binding |
+| `src/host/restoration.rs`, `src/host/filesystem/restoration.rs` | Exact committed-finisher recovery, retained exclusion, prefix staging and record-first file publication; injected roots only |
 | `src/release_https.rs` | Bounded certificate-verified public HTTPS, manual authorized redirects, asynchronous DNS and whole-request interruption |
 | `src/runtime_handoff.rs` | One-use authenticated descriptor lending, retained runtime starts, HTTP serving/watch composition and proxy cutover model |
 | `src/release_archive.rs` | Bounded in-memory single gzip/ustar member inspection, with no extraction or execution |
@@ -703,9 +704,9 @@ every-Review token expiry and literal `REMOVE SBXR` confirmation for Complete
 removal. Finish removal follows Go's menu-selection approval without another
 prompt. `StandardInstallation::into_host` releases its directory-writer guard
 before `StandardRemovalHost::new` takes over. The tests drive setup then actual
-injected Standard removal through the shared menu. Exact authenticated restoration
-of missing installed members after process death is still unavailable; same-process
-finalizer retry tests do not claim that capability or physical crash durability.
+injected Standard removal through the shared menu. The later exact-restoration increment implements missing-member recovery through
+a fresh injected adapter after interruption. Native installer dispatch remains
+unavailable; these tests do not claim physical crash durability.
 
 The Linux build inventory found QEMU 11.1.2 executables for amd64 and arm64, but no
 configured Docker/Podman/Colima/Lima runtime or workspace Linux guest image. No VM
@@ -815,3 +816,74 @@ regression passed. All 126 added lockfile nodes are new HTTPS/DNS dependencies;
 no previously locked package version was replaced. Temporary fixture roots were
 cleaned. Linux-only execution, native installation and deployment qualification
 remain unperformed.
+
+
+## Exact committed-finisher restoration increment
+
+`AuthenticatedArchive::acquire` authenticates an exact tag/commit/index against
+real native signatures, derives the canonical Installed Record from the signed
+index and inspected archive, and retains the executable bytes. It does not
+require an existing Installed Record or executable. It grants no filesystem or
+process permission. `AuthenticatedInstalled` remains a separate proof of supplied
+current/installed bytes; native callers must still authenticate the actual kernel
+process. No public signature-verification callback or unsigned success constructor
+was added. Unit fixture helpers remain private to `cfg(test)`.
+
+`RestorationHost::injected` reads committed current or finalizer authority under
+the retained whole-host lock, selects only its Finishing Release Identity, and
+retains the record-directory writer guard when that directory exists. Conflicting,
+staged, uncommitted or early finalizer authority refuses. The adapter rejects `/`
+and cannot run native commands. It never selects Latest, changes proxy resources,
+rewrites the journal or chooses a different recovery direction.
+
+Restoration requires protected existing parents, exact canonical bytes/modes and
+one-link files. Executable-only residue refuses even when its bytes match. Unknown
+state children and foreign targets remain untouched. Missing state directories
+may be recreated only under proved finalizer authority. Hash-named
+`.sbxr-restore-<executable-sha256>` stages admit only exact target prefixes in mode
+0600, or a complete executable in mode 0755. Unknown bytes, links, metadata and
+other staging identities refuse before publication. Each prefix resumes without
+truncating unknown data. Publication uses no-replace rename and fsync: the exact
+Installed Record and its parents are synchronized before the executable becomes
+visible, then both final files and parents are synchronized again.
+
+The returned `RestoredPair` proves restored files and exposes the exact Installed
+Record. It does not claim to be the current OS process. Native recovery must
+launch and independently authenticate that finisher; the temporary-root removal
+test supplies explicit simulated current observations. Recovery returns the exact
+Go success code `SOFTWARE-LIFECYCLE-INSTALL-REMOVAL-RESTORED` only after final checks.
+Interrupted work retains the original journal and its legal forward direction.
+
+Eleven focused restoration tests cover all five publication interruptions, empty/
+partial/complete prefixes, fresh adapter reopen, existing-pair retry, both retained
+locks, canonical record bytes, foreign resources, unsafe parents, cancellation and
+capability markers. The ten preserved Go removal journal shapes are exercised with
+test-bound finishers; the original fixture files remain unchanged. A recovered
+product-only finisher also completes actual injected removal/finalization without
+command mutations. These are local restart/failure tests, not physical power-loss
+or Linux deployment qualification.
+
+The repository-only public evidence example now runs the real authentication
+backend against the preserved v3.1.118/192 signatures/index/archive, then exercises
+restoration in a disposable protected root. It never executes fetched code and
+cleans that root. The genuine replay passes without a test-only signature boundary.
+No new dependencies, source uploads or live system effects are required by this
+implementation slice.
+
+Native restoration dispatch, auxiliary resource effects, concrete serving/process/
+sandbox/cutover adapters and pinned upstream key/DEB acquisition remain incomplete.
+The current metadata/Acceptance Record reader still authenticates only the current
+clean-install policy: reading historical journals does not imply acquisition of
+all historical qualification policies. Auxiliary publication cleanup also needs
+Go's exact canonical/staged two-link identity proof; ordinary unrelated hardlinks
+must continue to refuse. The native CLI remains closed while these paths and Linux
+qualification are incomplete. This increment does not enable Go-to-Rust migration.
+
+Local evidence is under `.scratch/acceptance/rust-restoration/`. The earlier
+committed snapshot and its validations remain separate from these newer changes.
+
+Validation passed 297 product tests, eight packaging tests, strict all-target
+Clippy, format and the Mac build. The genuine offline archive-to-restored-pair
+example passed through the real signature backend. Removing executable-only
+residue refusal made its adversarial test fail; exact source was restored and
+the test passed. No Linux, real-root or deployment qualification was performed.
