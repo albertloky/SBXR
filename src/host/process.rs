@@ -134,6 +134,9 @@ impl fmt::Debug for CommandOutput {
 /// Injection is explicit. Implementations must not treat command completion as
 /// resource ownership. NativeReadOnly never implements mutation effects.
 pub trait CommandRunner {
+    fn bind_configuration(&mut self, _sha256: &str) -> Result<(), HostError> {
+        Err(HostError::LiveUnavailable)
+    }
     fn query(&self, query: Query, stop: &Cancellation) -> Result<CommandOutput, HostError>;
     fn effect(&mut self, _operation: Operation, _stop: &Cancellation) -> Result<(), HostError> {
         Err(HostError::LiveUnavailable)

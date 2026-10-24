@@ -1136,6 +1136,22 @@ pub fn authorize_proxy_start(
     Ok(())
 }
 
+/// The Owner may start only this committed initial tunnel setup checkpoint.
+/// This does not relax ordinary private startup, grant an automatic restart, or
+/// select a cleanup direction. ServiceController retains the original Owner.
+pub fn setup_start_configuration(record: &OwnershipRecord) -> Result<String, Error> {
+    if record.schema() != 1
+        || record.phase() != SetupPhase::ServiceEnabled
+        || record.recovery_direction() != RecoveryDirection::FinishSetup
+        || record.tunnel_authority().is_none()
+        || record.pending_change().is_some()
+        || record.lock_provisioning_sha256().is_none()
+    {
+        return Err(Error::Refused);
+    }
+    Ok(record.configuration_sha256().into())
+}
+
 /// Selects only the currently recorded configuration. This grants no permission:
 /// gated starts still need the borrowed Owner lock and a consumed one-use token.
 pub fn cutover_configuration(record: &OwnershipRecord) -> Result<Option<String>, Error> {

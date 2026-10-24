@@ -9,6 +9,7 @@ pub enum Journey {
     Identity,
     Removal,
     Disclosure,
+    Tunnel,
 }
 impl Journey {
     fn accepts(self, action: Action) -> bool {
@@ -29,6 +30,13 @@ impl Journey {
                 Action::RotateClientIdentity | Action::FinishClientIdentityRotation
             ),
             Self::Removal => matches!(action, Action::CompleteRemoval | Action::FinishRemoval),
+            Self::Tunnel => matches!(
+                action,
+                Action::StartSetup
+                    | Action::FinishSetup
+                    | Action::FinishCleanup
+                    | Action::CheckVmessTunnel
+            ),
             Self::Disclosure => matches!(
                 action,
                 Action::ShowClientConfiguration | Action::MarkSubscriptionCompromised
@@ -118,6 +126,40 @@ impl<'a, S: OwnerSources<'a>> OwnerInstallation<'a, S> {
     }
 }
 impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
+    fn supports_tunnel(&self) -> bool {
+        self.sources
+            .journeys()
+            .is_ok_and(|j| j.contains(&Journey::Tunnel))
+    }
+    fn review_tunnel_setup(&self, hostname: &str) -> Review {
+        *self.owner.borrow_mut() = Rc::new(());
+        self.active.borrow_mut().take();
+        if !self
+            .sources
+            .journeys()
+            .is_ok_and(|j| j.contains(&Journey::Tunnel))
+        {
+            return self.refusal();
+        }
+        let Ok(module) = self.sources.open(Journey::Tunnel) else {
+            return self.refusal();
+        };
+        let mut reviewed = module.review_tunnel_setup(hostname);
+        reviewed.mode = self.sources.mode();
+        if let Some(inner) = reviewed.prepared.take() {
+            reviewed.prepared = Some(PreparedAction {
+                owner: self.owner.borrow().clone(),
+                action: Action::StartSetup,
+                basis: PreparedBasis::Owner(Box::new(OwnerPrepared {
+                    inner,
+                    journey: Journey::Tunnel,
+                })),
+            });
+            *self.active.borrow_mut() = Some((Journey::Tunnel, module));
+        }
+        reviewed
+    }
+
     fn review(&self, action: Action) -> Review {
         *self.owner.borrow_mut() = Rc::new(());
         self.active.borrow_mut().take();

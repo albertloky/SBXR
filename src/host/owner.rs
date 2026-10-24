@@ -15,6 +15,7 @@ type CachedPackage = std::sync::Arc<(Vec<u8>, Vec<u8>)>;
 pub struct NativeOwnerSources<'a> {
     proof: &'a AuthenticatedInstalled,
     package: std::cell::RefCell<Option<CachedPackage>>,
+    probe: std::cell::RefCell<Option<crate::package_acquisition::ProbeImage>>,
 }
 impl<'a> NativeOwnerSources<'a> {
     pub fn authenticated_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
@@ -23,7 +24,103 @@ impl<'a> NativeOwnerSources<'a> {
         Ok(Self {
             proof,
             package: std::cell::RefCell::new(None),
+            probe: std::cell::RefCell::new(None),
         })
+    }
+    fn ensure_package(&self) -> Result<(), HostError> {
+        use crate::{
+            artifact_trust::SelectionBudget,
+            package_acquisition::{self, PackageHttps},
+        };
+        if self.package.borrow().is_none() {
+            let package = package_acquisition::acquire(
+                &mut PackageHttps::new().map_err(|_| HostError::Foreign)?,
+                &SelectionBudget::new(),
+            )
+            .map_err(|_| HostError::Foreign)?;
+            *self.package.borrow_mut() = Some(std::sync::Arc::new(package.into_parts()));
+        }
+        Ok(())
+    }
+    fn probe_image(&self) -> Result<crate::package_acquisition::ProbeImage, HostError> {
+        self.ensure_package()?;
+        if self.probe.borrow().is_none() {
+            let cache = self.package.borrow();
+            let (key, deb) = cache.as_ref().ok_or(HostError::Foreign)?.as_ref();
+            let budget = crate::artifact_trust::SelectionBudget::new();
+            let package = crate::package_acquisition::VerifiedPackage::verify(
+                key.clone(),
+                deb.clone(),
+                &budget,
+            )
+            .map_err(|_| HostError::Foreign)?;
+            *self.probe.borrow_mut() = Some(
+                package
+                    .probe_image(&budget)
+                    .map_err(|_| HostError::Foreign)?,
+            );
+        }
+        self.probe.borrow().clone().ok_or(HostError::Foreign)
+    }
+    fn tunnel_module(&self) -> Result<Box<dyn Interface + 'a>, HostError> {
+        use super::linux::{LinuxHost, SetupMaterial, TunnelStandard};
+        let fs = ProtectedFs::native()?;
+        let record = super::linux::observation::read_ownership(&fs)?;
+        if fs.metadata("var/lib/.sbxr-removal.json")?.is_some() {
+            return Err(HostError::Foreign);
+        }
+        let (host, probe) = if let Some(r) = record {
+            if r.tunnel_authority().is_none() {
+                return Err(HostError::Foreign);
+            }
+            if r.recovery_direction() == RecoveryDirection::Cleanup {
+                (
+                    self.offline_host(SetupMaterial::tunnel_cleanup(&r)?, r.public_ipv4())?,
+                    None,
+                )
+            } else {
+                let probe = self.probe_image()?;
+                let cache = self.package.borrow();
+                let (key, deb) = cache.as_ref().ok_or(HostError::Foreign)?.as_ref();
+                let (config, _) = fs
+                    .raw(
+                        "etc/sing-box/config.json",
+                        rustix::fs::Mode::from_raw_mode(0o640),
+                        1 << 20,
+                    )?
+                    .ok_or(HostError::Foreign)?;
+                if crate::records::sha256_hex(&config) != r.configuration_sha256() {
+                    return Err(HostError::Foreign);
+                }
+                let material = SetupMaterial::recovered_tunnel(key.clone(), deb.clone(), &config)?;
+                let runner = super::system::SystemRunner::native(
+                    super::system::NativeTransport::new()?,
+                    &material.configuration_sha256(),
+                )?;
+                let network = super::network::NetworkAdmission::native(
+                    &super::process::Cancellation::new(),
+                    false,
+                )?;
+                (
+                    LinuxHost::native_authenticated_unreleased(
+                        runner, material, network, self.proof,
+                    )?,
+                    Some(probe),
+                )
+            }
+        } else {
+            (self.standard_host()?, Some(self.probe_image()?))
+        };
+        let runtime = super::owner_runtime::OwnerRuntime::native_unreleased(self.proof)?;
+        let bridge = TunnelStandard::new(host, runtime, probe)?;
+        let tunnel =
+            super::tunnel_native::ProtectedTunnelHost::native_unreleased(self.proof, bridge)?;
+        Ok(Box::new(
+            crate::proxyinstallation::TunnelOwnerInstallation::new(
+                tunnel,
+                ExecutionMode::NativeUnavailable,
+            ),
+        ))
     }
     fn standard_host(
         &self,
@@ -31,11 +128,7 @@ impl<'a> NativeOwnerSources<'a> {
         super::linux::LinuxHost<super::system::SystemRunner<super::system::NativeTransport>>,
         HostError,
     > {
-        use crate::{
-            artifact_trust::SelectionBudget,
-            identity_generation::OsEntropy,
-            package_acquisition::{self, PackageHttps},
-        };
+        use crate::identity_generation::OsEntropy;
         let fs = ProtectedFs::native()?;
         let record = super::linux::observation::read_ownership(&fs)?;
         if fs.metadata("var/lib/.sbxr-removal.json")?.is_some() {
@@ -60,14 +153,7 @@ impl<'a> NativeOwnerSources<'a> {
             &super::process::Cancellation::new(),
             require_bind,
         )?;
-        if self.package.borrow().is_none() {
-            let package = package_acquisition::acquire(
-                &mut PackageHttps::new().map_err(|_| HostError::Foreign)?,
-                &SelectionBudget::new(),
-            )
-            .map_err(|_| HostError::Foreign)?;
-            *self.package.borrow_mut() = Some(std::sync::Arc::new(package.into_parts()));
-        }
+        self.ensure_package()?;
         let cache = self.package.borrow();
         let (key, deb) = cache.as_ref().ok_or(HostError::Foreign)?.as_ref();
         let material = if let Some(r) = record {
@@ -181,7 +267,7 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             return Ok(vec![Journey::Removal]);
         }
         let Some(r) = r else {
-            return Ok(vec![Journey::Standard, Journey::Removal]);
+            return Ok(vec![Journey::Standard, Journey::Tunnel, Journey::Removal]);
         };
         if r.release_identity() != self.proof.record().release_identity() {
             return Err(HostError::Foreign);
@@ -190,7 +276,11 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             return Ok(vec![Journey::Removal]);
         }
         if r.phase() != SetupPhase::Running {
-            return Ok(vec![Journey::Standard, Journey::Removal]);
+            return Ok(if r.tunnel_authority().is_some() {
+                vec![Journey::Tunnel, Journey::Removal]
+            } else {
+                vec![Journey::Standard, Journey::Removal]
+            });
         }
         if r.serving_authority().is_some_and(|s| !s.is_http()) {
             // Read-only historical disclosure grants no HTTPS mutation/migration.
@@ -205,15 +295,20 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
         {
             return Ok(vec![Journey::Http, Journey::Disclosure, Journey::Removal]);
         }
-        Ok(vec![
+        let mut journeys = vec![
             Journey::Http,
             Journey::Identity,
             Journey::Disclosure,
             Journey::Removal,
-        ])
+        ];
+        if r.tunnel_authority().is_some() {
+            journeys.insert(0, Journey::Tunnel);
+        }
+        Ok(journeys)
     }
     fn open(&self, journey: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
         match journey {
+            Journey::Tunnel => self.tunnel_module(),
             Journey::Http => Ok(Box::new(HttpInstallation::native_unreleased(self.proof)?)),
             Journey::Identity => Ok(Box::new(ClientIdentityInstallation::new(
                 super::identity::ProtectedIdentityHost::native_unreleased(self.proof)?,

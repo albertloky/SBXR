@@ -2,6 +2,8 @@
 //! Native construction stays unreleased; injected roots are test infrastructure.
 mod effects;
 mod material;
+mod tunnel;
+pub use tunnel::{TunnelRuntime, TunnelRuntimeFacts, TunnelStandard};
 mod removal;
 pub use removal::{AuxiliaryFacts, AuxiliaryRuntime, NoAuxiliaryRuntime, StandardRemovalHost};
 pub(super) mod observation;

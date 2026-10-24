@@ -4,6 +4,7 @@
 //! Go authenticates the complete key/DEB by pinned SHA-256, rather than accepting
 //! an OpenPGP signature as a substitute. The mutable index only locates bytes;
 //! neither its digests nor caller-provided verification callbacks grant trust.
+mod probe;
 use crate::{
     artifact_trust::{SelectionBudget, TrustError},
     host::{
@@ -12,6 +13,7 @@ use crate::{
     },
     server_configuration::{PINNED_SING_BOX, PinnedPackage},
 };
+pub use probe::ProbeImage;
 use reqwest::{Client, Url, header};
 use sha2::{Digest, Sha256};
 use std::{

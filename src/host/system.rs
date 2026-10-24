@@ -344,6 +344,17 @@ impl<T: Transport> SystemRunner<T> {
     }
 }
 impl<T: Transport> CommandRunner for SystemRunner<T> {
+    fn bind_configuration(&mut self, hash: &str) -> Result<(), HostError> {
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(HostError::Foreign);
+        }
+        self.configuration_sha256 = hash.into();
+        Ok(())
+    }
     fn injected_effects(&self) -> bool {
         !self.transport.native()
     }

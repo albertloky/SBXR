@@ -555,8 +555,7 @@ impl<I: ConnectorIo> Connector<I> {
             running,
         })
     }
-    pub fn install(&mut self, g: &Arc<HostLock>, stop: &Cancellation) -> Result<(), t::Error> {
-        self.authorize(g)?;
+    fn install_scoped(&mut self, g: &Arc<HostLock>, stop: &Cancellation) -> Result<(), t::Error> {
         let before = self.inspect(true, stop)?;
         if !before.stopped && !before.running {
             return Err(t::Error::Authority);
@@ -578,8 +577,7 @@ impl<I: ConnectorIo> Connector<I> {
         }
         g.verify().map_err(refused)
     }
-    pub fn start(&mut self, g: &Arc<HostLock>, stop: &Cancellation) -> Result<(), t::Error> {
-        self.authorize(g)?;
+    fn start_scoped(&mut self, g: &Arc<HostLock>, stop: &Cancellation) -> Result<(), t::Error> {
         if !self.inspect(true, stop)?.installed {
             return Err(t::Error::Authority);
         }
@@ -591,13 +589,12 @@ impl<I: ConnectorIo> Connector<I> {
         }
         g.verify().map_err(refused)
     }
-    pub fn remove(
+    fn remove_scoped(
         &mut self,
         g: &Arc<HostLock>,
         authority: &crate::records::TunnelAuthority,
         stop: &Cancellation,
     ) -> Result<(), t::Error> {
-        self.authorize(g)?;
         let state = self.inspect_with_digest(true, Some(authority.binary_sha256()), stop)?;
         if state.empty {
             return Ok(());
@@ -628,6 +625,30 @@ impl<I: ConnectorIo> Connector<I> {
             return Err(t::Error::Authority);
         }
         g.verify().map_err(refused)
+    }
+    pub fn install(&mut self, g: &Arc<HostLock>, stop: &Cancellation) -> Result<(), t::Error> {
+        self.with_owner(g, |this| this.install_scoped(g, stop))
+    }
+    pub fn start(&mut self, g: &Arc<HostLock>, stop: &Cancellation) -> Result<(), t::Error> {
+        self.with_owner(g, |this| this.start_scoped(g, stop))
+    }
+    pub fn remove(
+        &mut self,
+        g: &Arc<HostLock>,
+        authority: &crate::records::TunnelAuthority,
+        stop: &Cancellation,
+    ) -> Result<(), t::Error> {
+        self.with_owner(g, |this| this.remove_scoped(g, authority, stop))
+    }
+    fn with_owner<T>(
+        &mut self,
+        g: &Arc<HostLock>,
+        effect: impl FnOnce(&mut Self) -> Result<T, t::Error>,
+    ) -> Result<T, t::Error> {
+        self.authorize(g)?;
+        let result = effect(self);
+        self.fs.authorize_native_writes(None).map_err(refused)?;
+        result
     }
     fn authorize(&mut self, g: &Arc<HostLock>) -> Result<(), t::Error> {
         if g.root() != self.fs.path() {
@@ -1437,6 +1458,9 @@ impl<O: ProbeObservations> ProbeSession for NativeProbeSession<O> {
 /// `probe_sha256` must authenticate the pinned package binary, not trust a hash
 /// obtained solely from the current filesystem or a version string.
 pub trait StandardHost {
+    fn effects_available(&self) -> bool {
+        false
+    }
     fn root(&self) -> &Path;
     fn verify_installed(&mut self, proof: &AuthenticatedInstalled) -> Result<(), HostError>;
     fn public_ipv4(&mut self, owner: &Arc<HostLock>) -> Result<String, HostError>;
@@ -1457,9 +1481,9 @@ pub trait StandardHost {
         config: Option<&ServerConfiguration>,
         stop: &Cancellation,
     ) -> Result<(), HostError>;
-    /// Fixture equivalent must exercise runtime_handoff/ServiceController with
-    /// the original guard. Native Host calls ServiceController directly.
-    fn start_proxy_injected(
+    /// Use the concrete shared ServiceController and independently checked
+    /// effective unit, retaining this exact Owner guard in native and fixtures.
+    fn start_proxy(
         &mut self,
         owner: &Arc<HostLock>,
         record: &OwnershipRecord,
@@ -1675,6 +1699,9 @@ impl<S: StandardHost, I: ConnectorIo> t::Host for ProtectedTunnelHost<'_, S, I> 
         next: &OwnershipRecord,
     ) -> Result<(), t::Error> {
         self.verify_guard(g)?;
+        if !self.standard.effects_available() {
+            return Err(t::Error::Authority);
+        }
         g.store
             .borrow_mut()
             .publish(expected, next)
@@ -1690,6 +1717,9 @@ impl<S: StandardHost, I: ConnectorIo> t::Host for ProtectedTunnelHost<'_, S, I> 
         stop: &Cancellation,
     ) -> Result<(), t::Error> {
         self.verify_guard(g)?;
+        if !self.standard.effects_available() {
+            return Err(t::Error::Authority);
+        }
         if stop.cancelled() {
             return Err(t::Error::Interrupted);
         }
@@ -1720,21 +1750,12 @@ impl<S: StandardHost, I: ConnectorIo> t::Host for ProtectedTunnelHost<'_, S, I> 
                 stop,
             ),
             t::Effect::Standard(Operation::StartService) => {
-                if self.connector.fs.path() == Path::new("/") {
-                    // The shared controller must admit the exact setup checkpoint
-                    // before this route can succeed; never fall back to plain start.
-                    let controller = super::runtime::ServiceController::native_unreleased(
-                        self.proof,
-                        g.owner.clone(),
-                    )
-                    .map_err(refused)?;
-                    retained_start(stop, |context| controller.start_proxy(false, context))
-                        .map_err(refused)
-                } else {
-                    self.standard
-                        .start_proxy_injected(&g.owner, r, stop)
-                        .map_err(host_error)
-                }
+                self.standard
+                    .probe_sha256(&g.owner, stop)
+                    .map_err(host_error)?;
+                self.standard
+                    .start_proxy(&g.owner, r, stop)
+                    .map_err(host_error)
             }
             t::Effect::Standard(op) => {
                 // APT/dpkg acquire their own POSIX locks. Retain flock/writer;
@@ -1767,6 +1788,9 @@ impl<S: StandardHost, I: ConnectorIo> t::Host for ProtectedTunnelHost<'_, S, I> 
         expected: &[u8],
     ) -> Result<(), t::Error> {
         self.verify_guard(g)?;
+        if !self.standard.effects_available() {
+            return Err(t::Error::Authority);
+        }
         g.store
             .borrow_mut()
             .remove_completed_cleanup(expected)
@@ -1815,7 +1839,7 @@ impl<S: StandardHost, I: ConnectorIo> t::Host for ProtectedTunnelHost<'_, S, I> 
     }
 }
 
-fn retained_start(
+pub(in crate::host) fn retained_start(
     stop: &Cancellation,
     start: impl FnOnce(&runtime_handoff::StartContext) -> Result<(), runtime_handoff::Error>,
 ) -> Result<(), runtime_handoff::Error> {

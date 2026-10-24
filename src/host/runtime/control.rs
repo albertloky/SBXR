@@ -232,6 +232,64 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
             context,
         )
     }
+    /// Initial VMess setup has the pinned package unit, without an identity
+    /// rotation drop-in. Authorize its one fixed start in the retained Owner
+    /// scope; ordinary private starts keep their existing Running-only rules.
+    pub fn start_setup_proxy(&self, context: &StartContext) -> Result<(), Error> {
+        context.check()?;
+        self.verify()?;
+        let body = self.files.ownership()?;
+        let record = OwnershipRecord::decode(&body).map_err(refused)?;
+        runtime_handoff::setup_start_configuration(&record)?;
+        if record.release_identity() != self.files.record.release_identity() {
+            return Err(Error::Refused);
+        }
+        let configuration = self.files.configuration()?;
+        if sha256_hex(&configuration) != record.configuration_sha256()
+            || crate::server_configuration::ServerConfiguration::decode_supported(&configuration)
+                .map_err(refused)?
+                .is_standard_only()
+        {
+            return Err(Error::Refused);
+        }
+        let unit = self
+            .files
+            .fs
+            .raw(
+                "usr/lib/systemd/system/sing-box.service",
+                Mode::from_raw_mode(0o644),
+                8192,
+            )
+            .map_err(refused)?
+            .ok_or(Error::Refused)?;
+        if unit.0 != include_bytes!("../owner_runtime/testdata/sing-box.service")
+            || unit.1.gid != self.files.fs.gid
+            || self
+                .files
+                .fs
+                .directory_entries(
+                    "etc/systemd/system/sing-box.service.d",
+                    Mode::from_raw_mode(0o755),
+                )
+                .map_err(refused)?
+                .is_some_and(|v| !v.is_empty())
+        {
+            return Err(Error::Refused);
+        }
+        let borrowed = self.owner.runtime_start_lock().map_err(refused)?;
+        borrowed.start_lock().verify()?;
+        if self.files.ownership()? != body {
+            return Err(Error::Refused);
+        }
+        context.check()?;
+        self.commands.execute(ServiceAction::StartProxy, context)?;
+        if self.files.ownership()? != body {
+            return Err(Error::Refused);
+        }
+        borrowed.start_lock().verify()?;
+        self.verify()?;
+        context.check()
+    }
     pub fn start_proxy(&self, restart: bool, context: &StartContext) -> Result<(), Error> {
         self.start(
             if restart {

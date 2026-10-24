@@ -213,7 +213,7 @@ impl<'a, B: HttpRuntime> ProtectedHttpHost<'a, B> {
             }
         }
 
-        crate::server_configuration::ServerConfiguration::decode_standard(&configuration)
+        crate::server_configuration::ServerConfiguration::decode_supported(&configuration)
             .map_err(|_| HostError::Foreign)?;
         record.http_operation().map_err(|_| HostError::Foreign)?;
         Ok(())

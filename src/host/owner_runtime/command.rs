@@ -61,6 +61,7 @@ pub enum Observation {
     ProxyProcesses,
     Listener443,
     Listener8443,
+    Listener10000,
     Package,
     Hold,
     UnitOwner,
@@ -85,6 +86,7 @@ impl Observation {
             }
             Self::Firewall => ("/usr/sbin/iptables-save", vec!["-t", "filter"]),
             Self::ProxyProcesses => ("/usr/bin/pgrep", vec!["-x", "sing-box"]),
+            Self::Listener10000 => ("/usr/bin/ss", vec!["-H", "-ltnp", "sport", "=", ":10000"]),
             Self::Listener443 => ("/usr/bin/ss", vec!["-H", "-ltnp", "sport", "=", ":443"]),
             Self::Listener8443 => ("/usr/bin/ss", vec!["-H", "-ltnp", "sport", "=", ":8443"]),
             Self::Package => (

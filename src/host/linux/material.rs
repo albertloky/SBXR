@@ -26,6 +26,27 @@ impl SetupMaterial {
         }
         Self::offline_bound(Some(record))
     }
+    pub(in crate::host) fn tunnel_cleanup(record: &OwnershipRecord) -> Result<Self, HostError> {
+        if record.schema() != 1
+            || record.tunnel_authority().is_none()
+            || record.recovery_direction() != crate::records::RecoveryDirection::Cleanup
+        {
+            return Err(HostError::Foreign);
+        }
+        Self::offline_bound(Some(record))
+    }
+    pub fn recovered_tunnel(
+        key: Vec<u8>,
+        package: Vec<u8>,
+        configuration: &[u8],
+    ) -> Result<Self, HostError> {
+        let config =
+            ServerConfiguration::decode_supported(configuration).map_err(|_| HostError::Foreign)?;
+        if config.is_standard_only() {
+            return Err(HostError::Foreign);
+        }
+        Self::verified_profile(key, package, config, true)
+    }
     /// Complete removal needs only public pins and committed local authority.
     /// It never downloads a package or regenerates an absent Client Identity.
     pub fn for_removal(record: Option<&OwnershipRecord>) -> Result<Self, HostError> {
@@ -118,8 +139,16 @@ impl SetupMaterial {
         package: Vec<u8>,
         configuration: ServerConfiguration,
     ) -> Result<Self, HostError> {
+        Self::verified_profile(key, package, configuration, false)
+    }
+    fn verified_profile(
+        key: Vec<u8>,
+        package: Vec<u8>,
+        configuration: ServerConfiguration,
+        tunnel: bool,
+    ) -> Result<Self, HostError> {
         if configuration.as_bytes().len() > 1 << 20
-            || !configuration.is_standard_only()
+            || configuration.is_standard_only() == tunnel
             || key.len() > 1 << 20
             || sha256_hex(&key) != PINNED_SING_BOX.signing_key_sha256
             || package.len() as u64 != PINNED_SING_BOX.size

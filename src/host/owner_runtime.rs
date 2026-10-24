@@ -7,6 +7,7 @@ mod effects;
 mod observation;
 mod probe;
 mod removal;
+mod tunnel;
 use super::{
     HostError,
     filesystem::ProtectedFs,

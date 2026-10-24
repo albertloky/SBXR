@@ -52,8 +52,15 @@ completed orchestration modules. Disclosure now uses the protected Host in
 `src/host/disclosure.rs`, independent runtime proofs in
 `src/host/owner_runtime/disclosure.rs`, and streaming Interface bridge in
 `src/proxyinstallation/disclosure.rs`. The terminal uses an explicit output sink;
-client secrets never enter Review details. Tunnel native host/frontend integration
-remains separate work.
+client secrets never enter Review details. Native tunnel composition is
+`src/host/linux/tunnel.rs`, with independent observations in
+`src/host/owner_runtime/tunnel.rs` and the shared frontend in
+`src/proxyinstallation/tunnel.rs`. `src/package_acquisition/probe.rs` derives the
+probe executable proof from the full pinned DEB without extraction/execution.
+The fixed initial setup start in `ServiceController` is separate from ordinary
+private startup. Native gates remain closed; the pinned package's 0644 default
+configuration still requires an exact-owned Standard replacement repair before
+native installation qualification.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

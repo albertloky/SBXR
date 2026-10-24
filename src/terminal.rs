@@ -102,6 +102,18 @@ pub fn run(
                 installation.write_details(output)?;
             }
             Action::StartSetup => setup(input, output, installation)?,
+            Action::CheckVmessTunnel => {
+                let review = installation.review(action);
+                if let Some(prepared) = review.prepared {
+                    let result = installation.execute(prepared, Confirmation::Approved);
+                    write_result(output, &result)?;
+                } else {
+                    writeln!(
+                        output,
+                        "VMess connection check is unavailable. Review details."
+                    )?;
+                }
+            }
             Action::FinishCleanup | Action::FinishSetup => {
                 let review = installation.review(action);
                 for line in review.plan {
@@ -188,17 +200,34 @@ fn setup(
     output: &mut impl Write,
     installation: &mut impl Interface,
 ) -> io::Result<()> {
-    loop {
+    'profile: loop {
         writeln!(
             output,
             "Setup 1 — Choose connection\nSet up a proxy on this server. No changes until Apply.\n1. Standard (default; no domain needed)"
         )?;
+        if installation.supports_tunnel() {
+            writeln!(
+                output,
+                "2. Standard + Cloudflare (your dedicated VMess tunnel)"
+            )?;
+        }
         loop {
             match prompt(input, output, "Connection [1] (h Help, c Cancel):")?.as_deref() {
                 Some("") | Some("1") => break,
+                Some("2") if installation.supports_tunnel() => {
+                    if tunnel_setup(input, output, installation)? {
+                        continue 'profile;
+                    }
+                    return Ok(());
+                }
                 Some("h") => writeln!(
                     output,
-                    "Standard uses VLESS REALITY Vision for a direct connection. It needs no domain. Only Standard is implemented in this Rust increment."
+                    "{}",
+                    if installation.supports_tunnel() {
+                        "Standard uses VLESS REALITY Vision for a direct connection and needs no domain. Optional Standard + Cloudflare requires your own dedicated tunnel and protected token preparation."
+                    } else {
+                        "Standard uses VLESS REALITY Vision for a direct connection. It needs no domain. Only Standard is implemented in this Rust increment."
+                    }
                 )?,
                 None | Some("c") => return cancelled(output),
                 _ => writeln!(
@@ -257,6 +286,104 @@ fn setup(
                     output,
                     "Enter y to apply, n to cancel, b to go back, or c to cancel."
                 )?,
+            }
+        }
+    }
+}
+
+fn tunnel_setup(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    installation: &mut impl Interface,
+) -> io::Result<bool> {
+    let mut hostname = String::new();
+    loop {
+        writeln!(
+            output,
+            "Setup 2 — Prepare Cloudflare\nUse a dedicated remotely managed tunnel in your own account. Route your hostname to http://127.0.0.1:10000 with no path. Keep official cloudflared >=2025.4.0 and the protected root-owned 0600 /etc/cloudflared/sbxr.token prepared in a separate trusted terminal. Never paste a token here or install a shared cloudflared service. See docs/setup-vmess-tunnel.md."
+        )?;
+        loop {
+            match prompt(input, output, "Ready? [y/N] (b Back, c Cancel):")?.as_deref() {
+                Some("y") => break,
+                Some("b") => return Ok(true),
+                Some("") | Some("n") | Some("c") | None => {
+                    cancelled(output)?;
+                    return Ok(false);
+                }
+                _ => writeln!(
+                    output,
+                    "Enter y to continue, n/c to cancel, or b to go back."
+                )?,
+            }
+        }
+        loop {
+            writeln!(
+                output,
+                "Setup 3 — Hostname\nEnter only a lowercase DNS hostname, with no scheme, port, path or token. Draft: {hostname}"
+            )?;
+            let Some(draft) = prompt(
+                input,
+                output,
+                "Hostname (Enter keeps draft, b Back, c Cancel):",
+            )?
+            else {
+                cancelled(output)?;
+                return Ok(false);
+            };
+            match draft.as_str() {
+                "c" => {
+                    cancelled(output)?;
+                    return Ok(false);
+                }
+                "b" => break,
+                _ => {}
+            }
+            let candidate = if draft.is_empty() {
+                hostname.as_str()
+            } else {
+                draft.as_str()
+            };
+            if !crate::subscription_artifact::valid_vmess_hostname(candidate) {
+                writeln!(
+                    output,
+                    "Enter a valid hostname only; never enter a credential."
+                )?;
+                continue;
+            }
+            hostname = candidate.into();
+            let review = installation.review_tunnel_setup(&hostname);
+            let Some(prepared) = review.prepared else {
+                writeln!(
+                    output,
+                    "Failed safety check: {}",
+                    review
+                        .refusal
+                        .unwrap_or("Review again after restoring prerequisites.")
+                )?;
+                continue;
+            };
+            writeln!(output, "Setup 4 — Review")?;
+            for line in review.plan {
+                writeln!(output, "{line}")?;
+            }
+            loop {
+                match prompt(input, output, "Apply setup? [y/N] (b Back, c Cancel):")?.as_deref() {
+                    Some("y") => {
+                        if review.mode == ExecutionMode::NativeUnavailable {
+                            writeln!(output, "Native setup is unavailable.")?;
+                            return Ok(false);
+                        }
+                        let result = installation.execute(prepared, Confirmation::Approved);
+                        write_result(output, &result)?;
+                        return Ok(false);
+                    }
+                    Some("b") => break,
+                    Some("") | Some("n") | Some("c") | None => {
+                        cancelled(output)?;
+                        return Ok(false);
+                    }
+                    _ => writeln!(output, "Only y applies. Enter n to cancel or b to go back.")?,
+                }
             }
         }
     }

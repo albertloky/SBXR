@@ -55,10 +55,32 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
         self.interruption == Some(phase)
     }
     fn inspect_setup(&self, release: &ReleaseIdentity) -> Result<SetupObservation, HostError> {
+        self.inspect_setup_profile(release, false)
+    }
+    fn apply_setup(
+        &mut self,
+        operation: Operation,
+        authority: &OwnershipRecord,
+    ) -> Result<(), HostError> {
+        self.apply_setup_profile(operation, authority, false)
+    }
+}
+impl<R: CommandRunner> LinuxHost<R> {
+    pub(super) fn inspect_setup_profile(
+        &self,
+        release: &ReleaseIdentity,
+        tunnel: bool,
+    ) -> Result<SetupObservation, HostError> {
         if self.stop.cancelled() {
             return Err(HostError::Cancelled);
         }
         let bound = observation::read_ownership(&self.fs)?;
+        if bound
+            .as_ref()
+            .is_some_and(|r| r.tunnel_authority().is_some() != tunnel)
+        {
+            return Err(HostError::Foreign);
+        }
         if self.material.offline
             && bound.as_ref().is_some_and(|r| {
                 r.recovery_direction() != crate::records::RecoveryDirection::Cleanup
@@ -277,21 +299,22 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                 && !facts.listener.contains("sing-box"),
         })
     }
-    fn apply_setup(
+    pub(super) fn apply_setup_profile(
         &mut self,
         operation: Operation,
         authority: &OwnershipRecord,
+        tunnel: bool,
     ) -> Result<(), HostError> {
         if !self.effects_available()
             || self.lock.as_ref().is_none_or(|lock| lock.verify().is_err())
             || authority.schema() != 1
-            || authority.tunnel_authority().is_some()
+            || authority.tunnel_authority().is_some() != tunnel
             || authority.configuration_sha256() != self.configuration_sha256()
             || authority.public_ipv4() != self.public_ipv4()
         {
             return Err(HostError::LiveUnavailable);
         }
-        let before = self.inspect_setup(&authority.release_identity())?;
+        let before = self.inspect_setup_profile(&authority.release_identity(), tunnel)?;
         if operation == Operation::EnableService {
             let facts = self.facts()?;
             // A succeeded enable effect may precede an interrupted checkpoint.

@@ -1385,3 +1385,81 @@ reviewing changed target side effects, one explicit retry with that evidence was
 admitted and passed. No denied operation was silently rerouted. These results do
 not qualify Linux native effects, descriptor exec, actual VMess traffic, an
 installed package, a VPS or a release candidate.
+
+## Native tunnel composition increment
+
+`host::linux::TunnelStandard<R, B>` now implements the tunnel adapter's
+`StandardHost` using the existing protected Standard observations and effects.
+It uses the original retained Owner guard, updates the command runner's exact
+configuration hash only from the current journal, and admits only schema-1 setup
+writers. Idle schema-2 tunnel profiles remain readable for connection checks;
+this adds no migration or historical writer. Cleanup uses digest-only material
+and does not require or recreate the Owner token or cloudflared binary.
+
+`VerifiedPackage::probe_image` derives an opaque executable proof by streaming
+`./usr/bin/sing-box` from the fully key/DEB-pinned package's gzip/tar payload.
+It bounds decompression/member count, checks the executable's exact type/mode,
+root UID/GID and unique name, honors cancellation, and checks gzip completion.
+It never extracts or executes a package member. The preserved genuine DEB's
+91,990,368-byte executable has SHA-256
+`33de1654134de582a3d23786fdba32e5461bfe3eefe3e11ddeef2a9635a9e91c`.
+The bridge checks protected installed bytes against this proof before config
+validation/start or probe launch. Neither a version string nor a hash sampled
+from the current filesystem creates a production proof.
+
+`ServiceController::start_setup_proxy` authorizes only the schema-1 dedicated
+setup's exact `Service enabled`/`Finish setup` checkpoint, matching installed
+Release Identity, private configuration and pinned package unit, with no
+unrecorded startup drop-in. It retains the original Owner and a CLOEXEC duplicate
+through the fixed start, rechecking unchanged journal authority afterward.
+The pinned package unit contains no SBXR ExecCondition, so this initial start is
+a direct Owner-scoped authorization; it does not wait for an absent private-role
+child. Ordinary private proxy-start authorization remains Running-only, and
+restart does not become an initial-setup route. Independent runtime observation
+binds TCP10000 specifically to 127.0.0.1, the same exact proxy PID/image/cgroup as
+TCP443, with no extra cgroup processes or control PID.
+
+`TunnelOwnerInstallation` connects the existing durable tunnel orchestration to
+the shared Interface. `NativeOwnerSources` composes this adapter, the authenticated
+probe proof and concrete runtime/connector. The Owner wizard offers optional
+Standard + Cloudflare where supported, retains Back/Cancel/default-No, validates
+hostname-only input before retaining or echoing a draft, and shows the selected
+tunnel ID before Apply. Later status/details expire prepared authority. Setup
+results and explicit repeatable VMess connection checks use the Go result codes;
+local Running and a fresh public check remain separate. HTTP serving accepts
+strict supported VMess configurations, and normal Owner routing retains HTTP,
+identity and disclosure journeys after tunnel setup.
+
+Connector native write authority is now released after every successful or
+failed scoped effect; it cannot keep an abandoned whole-host lock across later
+reviews. The existing native-effect and public-entry gates remain closed. No
+native systemd, APT, firewall, real probe, credential, VPS or release operation
+was executed during development.
+
+A separate existing Standard installation blocker is now reproduced with actual
+pinned package data: the DEB supplies `/etc/sing-box/config.json` as a public
+635-byte root-owned 0644 default. After `Package installed`, the existing Standard
+observer expects the final journal-bound root:sing-box 0640 private file and
+refuses before activation. The regression preserves those default bytes and
+keeps cleanup direction. An exact package-owned default replacement/cleanup
+repair is needed before native setup can be qualified. This increment does not
+silently adopt that file or weaken private configuration checks. The genuine
+public default fixture and digest are documented beside the tunnel fixtures.
+
+Remaining release boundaries include this package-default repair, native Linux
+systemd/proc/cgroup/exec and durability validation, remaining auxiliary removal
+and historical publication/certificate paths, retained Rust ELF/build metadata,
+dual-architecture musl/bootstrap/workflows, and exact packaged live/Karing
+qualification. No in-place Go-to-Rust migration or publication is enabled.
+
+Final validation of this composition passed **470 product tests**, **8 offline
+packaging tests**, format, strict all-target Clippy and a Mac debug build under
+umask 077. Five mutation checks were caught: omitted same-length probe digest
+verification, an extra admitted setup checkpoint, omitted fresh reviewed
+prerequisite verification, reversed recovery selection, and cleanup incorrectly
+requiring missing Owner prerequisites. Every mutated source was restored byte
+for byte and the final integrated suite passed afterward. Evidence is under
+`.scratch/acceptance/rust-tunnel-compose/`. The default-package configuration
+regression is an expected refusal, not successful native installation. Native
+Linux, systemd/cgroup/process, actual probe/traffic, installed-package and exact
+release qualification remain unperformed.

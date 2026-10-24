@@ -57,6 +57,7 @@ pub enum Action {
     FinishClientIdentityRotation,
     ShowClientConfiguration,
     MarkSubscriptionCompromised,
+    CheckVmessTunnel,
 }
 
 impl fmt::Display for Action {
@@ -77,6 +78,7 @@ impl fmt::Display for Action {
             Self::FinishClientIdentityRotation => "Finish Client Identity rotation",
             Self::ShowClientConfiguration => "Show client configuration",
             Self::MarkSubscriptionCompromised => "Mark subscription link compromised",
+            Self::CheckVmessTunnel => "Check VMess connection",
         })
     }
 }
@@ -122,6 +124,8 @@ pub enum Outcome {
     ClientIdentityRotationFailed,
     ClientConfigurationDisclosed,
     SubscriptionCompromised,
+    VmessConnectionVerified,
+    VmessConnectionPending,
 }
 
 impl Outcome {
@@ -168,6 +172,8 @@ impl Outcome {
                 "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
             }
             Self::SubscriptionCompromised => "PROXY-INSTALLATION-SUBSCRIPTION-COMPROMISED",
+            Self::VmessConnectionVerified => crate::tunnel_setup::CONNECTION_VERIFIED,
+            Self::VmessConnectionPending => crate::tunnel_setup::CONNECTION_PENDING,
         }
     }
 }

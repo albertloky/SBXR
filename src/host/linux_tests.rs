@@ -137,6 +137,13 @@ impl Fake {
     }
 }
 impl CommandRunner for Fake {
+    fn bind_configuration(&mut self, hash: &str) -> Result<(), HostError> {
+        if hash.len() == 64 {
+            Ok(())
+        } else {
+            Err(HostError::Foreign)
+        }
+    }
     fn query(&self, q: Query, stop: &Cancellation) -> Result<CommandOutput, HostError> {
         if self.queries_fail || stop.cancelled() {
             return Err(HostError::Unsafe);
@@ -2070,3 +2077,6 @@ fn offline_client_target_removal_uses_go_contract_without_restoring_revoked_sour
         }));
     }
 }
+
+#[path = "linux/tunnel_tests.rs"]
+mod tunnel_composition;

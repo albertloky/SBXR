@@ -1645,6 +1645,7 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
         let b = self.backend.lock().unwrap();
         let mut code = 0;
         let value = match o {
+            O::Listener10000 => String::new(),
             O::Architecture => "amd64".into(),
             O::Enabled => "enabled".into(),
             O::Package => "1.14.3 amd64 ii".into(),
@@ -2534,4 +2535,127 @@ fn native_removal_runtime_stops_and_joins_real_fixture_serving_without_network_p
     checkpoint = crate::removal::next_checkpoint(&checkpoint).unwrap();
     root.write(path, &checkpoint.encode().unwrap(), 0o600);
     runtime.observe(&checkpoint).unwrap();
+}
+
+struct VmessOwnerIo {
+    inner: Arc<OwnerIoFixture>,
+    listener: String,
+}
+impl PeerObservations for VmessOwnerIo {
+    fn current(&self) -> Result<ProcessIdentity, runtime_handoff::Error> {
+        self.inner.current()
+    }
+    fn peer(
+        &self,
+        s: &std::os::unix::net::UnixStream,
+    ) -> Result<ProcessIdentity, runtime_handoff::Error> {
+        self.inner.peer(s)
+    }
+}
+impl crate::host::owner_runtime::OwnerIo for VmessOwnerIo {
+    fn query(
+        &self,
+        o: crate::host::owner_runtime::Observation,
+        c: &StartContext,
+    ) -> Result<crate::host::process::CommandOutput, HostError> {
+        if o == crate::host::owner_runtime::Observation::Listener10000 {
+            return crate::host::process::CommandOutput::completed(
+                0,
+                self.listener.as_bytes().to_vec(),
+            );
+        }
+        self.inner.query(o, c)
+    }
+    fn service(
+        &self,
+        a: ServiceAction,
+        o: &Arc<HostLock>,
+        s: Option<&std::path::Path>,
+        c: &StartContext,
+    ) -> Result<(), HostError> {
+        self.inner.service(a, o, s, c)
+    }
+    fn port_available(&self, p: u16, c: &StartContext) -> Result<bool, HostError> {
+        self.inner.port_available(p, c)
+    }
+    fn process(&self, p: u32) -> Result<ProcessIdentity, HostError> {
+        self.inner.process(p)
+    }
+    fn public_ipv4(&self, _: &StartContext) -> Result<Ipv4Addr, HostError> {
+        panic!("local VMess observation must not request Internet state")
+    }
+    fn validate_configuration(
+        &self,
+        _: &Arc<HostLock>,
+        _: &str,
+        _: &StartContext,
+    ) -> Result<bool, HostError> {
+        panic!("process observation does not execute a checker")
+    }
+}
+#[test]
+fn native_tunnel_observation_binds_loopback_to_the_same_pinned_proxy_process() {
+    use crate::host::{linux::TunnelRuntime, owner_runtime::OwnerRuntime};
+    for listener in [
+        "LISTEN 0 128 127.0.0.1:10000 *:* users:((\"sing-box\",pid=200,fd=4))",
+        "LISTEN 0 128 *:10000 *:* users:((\"sing-box\",pid=200,fd=4))",
+        "LISTEN 0 128 127.0.0.1:10000 *:* users:((\"sing-box\",pid=999,fd=4))",
+        "",
+    ] {
+        let root = Root::new();
+        let archive = Arc::new(crate::release_acquisition::fixture_archive());
+        root.setup(&archive);
+        let proof = Arc::new(
+            archive
+                .bind_current(
+                    archive.executable(),
+                    archive.executable(),
+                    &crate::artifact_trust::SelectionBudget::new(),
+                )
+                .unwrap(),
+        );
+        let config = crate::server_configuration::ServerConfiguration::decode_standard(
+            &fs::read(root.0.join("etc/sing-box/config.json")).unwrap(),
+        )
+        .unwrap()
+        .with_vmess_websocket("fixture.example.com")
+        .unwrap();
+        let mut record = OwnershipRecord::new_tunnel_setup(
+            proof.record().release_identity(),
+            "8.8.8.8",
+            &config.sha256_hex(),
+            crate::records::TunnelAuthority::new(
+                "12345678-1234-1234-1234-123456789abc",
+                &"1".repeat(64),
+                &"2".repeat(64),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        while record.phase() != crate::records::SetupPhase::Running {
+            record = record.next_setup_checkpoint().unwrap();
+        }
+        root.write(
+            "var/lib/sbxr/proxy-ownership.json",
+            &record.encode().unwrap(),
+            0o600,
+        );
+        root.write("etc/sing-box/config.json", config.as_bytes(), 0o640);
+        let io = OwnerIoFixture::new(&root, archive, proof.clone());
+        let runtime = OwnerRuntime::injected(
+            &root.0,
+            &proof,
+            VmessOwnerIo {
+                inner: io.clone(),
+                listener: listener.into(),
+            },
+            io.address,
+        )
+        .unwrap();
+        let result = runtime.observe(Some(&record), &crate::host::process::Cancellation::new());
+        assert_eq!(
+            result.is_ok(),
+            listener.contains("127.0.0.1") && listener.contains("pid=200,")
+        );
+    }
 }

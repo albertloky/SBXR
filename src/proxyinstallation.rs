@@ -2,6 +2,8 @@
 //! Explicit simulation and filesystem-fixture adapters share Review/Execute.
 //! Public native setup remains unavailable. Native library adapters and private
 //! dispatch require their explicit installed/release prerequisites.
+mod tunnel;
+pub use tunnel::TunnelOwnerInstallation;
 mod disclosure;
 pub use disclosure::DisclosureInstallation;
 mod owner;
@@ -48,6 +50,7 @@ enum PreparedBasis {
     ClientIdentity(identity::ClientPrepared),
     Owner(Box<owner::OwnerPrepared>),
     Disclosure(Box<crate::disclosure::Prepared>),
+    Tunnel(Box<tunnel::TunnelPrepared>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +63,15 @@ pub enum ExecutionMode {
 
 /// The existing two-operation product boundary, shared by concrete adapters.
 pub trait Interface {
+    fn supports_tunnel(&self) -> bool {
+        false
+    }
+    fn review_tunnel_setup(&self, _hostname: &str) -> Review {
+        let mut review = self.review(Action::Status);
+        review.prepared = None;
+        review.refusal = Some("Optional VMess setup is unavailable for this adapter.");
+        review
+    }
     fn review(&self, action: Action) -> Review;
     fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result;
     fn execute_output(

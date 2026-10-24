@@ -2,7 +2,7 @@ use super::command::{Property as P, Unit as U};
 use super::*;
 use crate::host::subscription::{HttpRuntime, RuntimeFacts, SystemEffect};
 impl<I: OwnerIo> OwnerRuntime<'_, I> {
-    fn service(
+    pub(in crate::host) fn service(
         &self,
         a: ServiceAction,
         owner: &Arc<HostLock>,
@@ -55,6 +55,11 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
             ServiceAction::StartProxy | ServiceAction::RestartProxy => {
                 if let Some(gate) = gate {
                     controller.start_proxy_cutover(gate, a == ServiceAction::RestartProxy, c)
+                } else if runtime_handoff::setup_start_configuration(&self.record()?).is_ok() {
+                    if a != ServiceAction::StartProxy {
+                        return Err(HostError::Foreign);
+                    }
+                    controller.start_setup_proxy(c)
                 } else {
                     controller.start_proxy(a == ServiceAction::RestartProxy, c)
                 }

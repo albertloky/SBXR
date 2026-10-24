@@ -376,6 +376,38 @@ impl<H: Host> TunnelInstallation<H> {
     pub fn into_host(self) -> H {
         self.host
     }
+    /// Secret-free fresh state for the shared frontend. Every observation also
+    /// expires a previous prepared action, including status/details views.
+    pub fn status(&mut self, stop: &Cancellation) -> Result<(Snapshot, Inspection), Error> {
+        self.owner = Rc::new(());
+        active(stop)?;
+        let guard = self.host.acquire(stop)?;
+        let release = self.host.installed_release(&guard)?;
+        let snapshot = self.host.snapshot(&guard)?;
+        let record = if snapshot.current.is_some() {
+            Some(snapshot.recovery_record()?)
+        } else {
+            if snapshot.staged.is_some() {
+                return Err(Error::Publication);
+            }
+            None
+        };
+        if let Some(record) = &record {
+            if record.phase() == SetupPhase::Running
+                && record.recovery_direction() == RecoveryDirection::None
+                && record.tunnel_authority().is_some()
+                && record.pending_change().is_none()
+                && record.release_identity() == release
+            {
+            } else {
+                setup_authority(record, &release)?;
+            }
+        }
+        let inspected = self.host.inspect(&guard, record.as_ref(), stop)?;
+        self.host.verify_guard(&guard)?;
+        active(stop)?;
+        Ok((snapshot, inspected))
+    }
     pub fn review_setup(
         &mut self,
         hostname: &str,
