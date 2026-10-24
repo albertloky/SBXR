@@ -5,7 +5,7 @@ pub use simulation::{Facts, SimulatedHost, SimulationFault};
 
 use crate::configuration::STANDARD;
 use crate::domain::{Action, Availability, Confirmation, Outcome, Phase, Result, Status};
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 /// Opaque, instance-bound authority. Rust ownership makes execution single-use.
 /// It is deliberately neither Clone nor serializable.
@@ -34,7 +34,7 @@ pub struct Review {
 }
 
 pub struct Installation {
-    owner: Rc<()>,
+    owner: RefCell<Rc<()>>,
     host: SimulatedHost,
     revision: u64,
 }
@@ -42,7 +42,7 @@ pub struct Installation {
 impl Installation {
     pub fn simulation() -> Self {
         Self {
-            owner: Rc::new(()),
+            owner: RefCell::new(Rc::new(())),
             host: SimulatedHost::default(),
             revision: 0,
         }
@@ -76,6 +76,8 @@ impl Installation {
     }
 
     pub fn review(&self, action: Action) -> Review {
+        // Every fresh Review expires all earlier memory-only authority.
+        *self.owner.borrow_mut() = Rc::new(());
         let refusal = self.host.facts.refusal(self.phase());
         let mut legal_actions = vec![Action::ViewDetails];
         if refusal.is_none() {
@@ -83,7 +85,7 @@ impl Installation {
         }
         let prepared = if legal_actions.contains(&action) && action != Action::ViewDetails {
             Some(PreparedAction {
-                owner: Rc::clone(&self.owner),
+                owner: Rc::clone(&self.owner.borrow()),
                 action,
                 facts: self.host.facts,
                 phase: self.phase(),
@@ -116,7 +118,7 @@ impl Installation {
     }
 
     pub fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result {
-        if !Rc::ptr_eq(&self.owner, &prepared.owner)
+        if !Rc::ptr_eq(&self.owner.borrow(), &prepared.owner)
             || prepared.revision != self.revision
             || prepared.facts != self.host.facts
             || prepared.phase != self.phase()
