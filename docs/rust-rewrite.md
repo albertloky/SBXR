@@ -57,9 +57,12 @@ or Karing verification.
 | `src/main.rs` | Zero-argument dispatch, process exit and terminal error reporting |
 | `src/domain.rs` | Setup Action, Status, Confirmation, Availability, Phase and exact outcome codes |
 | `src/configuration.rs` | Fixed Standard host contract copied from Go: paths, port, sing-box 1.14.3 identity and REALITY destination |
-| `src/proxyinstallation.rs` | Read-only Review, opaque Prepared Action, fresh Execute admission and setup/recovery direction |
+| `src/proxyinstallation.rs` | Two-operation Interface, shared Review/Prepared Action types, explicit mode and simulation admission |
+| `src/proxyinstallation/fixture.rs` | Durable Standard setup, activation, forward completion and eight-step cleanup through the fixture adapter |
 | `src/proxyinstallation/simulation.rs` | Explicit in-memory fixture facts, phases and interruption injection; no operating-system adapter |
-| `src/terminal.rs` | Numbered menu, Standard setup wizard, bounded input and result presentation |
+| `src/terminal.rs` | Numbered menu and wizard through Review/Execute; explicit simulation/fixture labels |
+| `src/host.rs`, `src/host/` | Fixed command templates, marked fixture roots, read-only file evidence and bound filesystem effects; no process runner |
+| `src/subscription_artifact.rs` | Pure VLESS/VMess client encoding, HTTP link/token syntax and redacted secret-bearing types |
 | `src/records.rs`, `src/records/` | Strict validated Standard schema-1 and Installed Record codecs, canonical wire bytes and legal setup checkpoints |
 | `src/durable.rs` | Protected fixed-name record publication, directory locking, exact source/target comparison, fsync and recovery inspection |
 | `src/*_tests.rs` | Adjacent domain/orchestration and terminal boundary tests |
@@ -76,8 +79,8 @@ local development; it is not a release-toolchain qualification claim.
 Independent parity checks now live in `tests/parity.rs` and
 `tests/testdata/parity/`. Preserve their assertions and fixtures. They exposed
 and now guard expiration of earlier Prepared Actions after every later Review,
-including Status and View details. Configuration/secret encoding,
-Subscription Serving, Software Lifecycle and a real Ubuntu Host Adapter are
+including Status and View details. Server configuration/secret generation,
+Subscription Serving, Software Lifecycle and a real Ubuntu Host Adapter remain
 unimplemented scopes that can be assigned separately after their contracts are
 read. The integration owner should coordinate new `src/lib.rs` exports.
 
@@ -200,9 +203,11 @@ intent or prove runtime health; future orchestration must supply those checks.
 
 `next_setup_checkpoint()` advances exactly one setup phase;
 `next_cleanup_checkpoint()` advances one of eight cleanup checkpoints only before
-activation. The store intentionally has no delete API: authority removal still
-needs a real host proof that cleanup completed. No setup operation or new
-credential generation is connected to this filesystem adapter yet.
+activation. The store now has a crate-private completed-cleanup removal primitive. It refuses
+any authority before cleanup checkpoint eight or with incompatible staging. The
+fixture journey calls it only after a fresh exact empty-footprint observation;
+production removal still needs real host exclusion/proof. New credential
+generation and real setup operations remain unavailable.
 
 Offline tests reopen real fixture files after injected empty/partial writes,
 stage fsync, pre/post rename, and pre/post directory fsync interruptions. They
@@ -212,3 +217,88 @@ foreign entries. Test-only fault injection is not a CLI flag or runtime switch.
 Logs and the initial three stale-review parity failures are under
 `.scratch/acceptance/rust-durable/`; local tests are separate from deployment
 qualification and do not simulate an actual power failure.
+
+
+## Fixture host and integrated codec increment
+
+`host::FixtureHost::create(root, release)` requires an existing empty 0700
+non-symlink temporary directory. It writes an explicit fixture marker and a
+synthetic installed-software pair beneath that root. The bytes are visibly fake:
+the executable is inert text, the signing key/package are fixture sentinels and
+the configuration is `{"sbxr_fixture_only":true}`. They are not Ubuntu, upstream
+package, cryptographic identity or release-verification proofs. `open(root)`
+requires that exact marker. There is no fallback from a real host to this adapter.
+
+All fixture paths are relative to a pinned root descriptor. Each parent is
+opened without following symlinks and checked for safe ownership/permissions.
+Reads verify file type, owner, mode, one-link metadata, inode identity, bounded
+bytes and exact expected contents. Writes exclusively create missing targets or
+accept identical owned targets; removals verify exact bound contents and never
+recursively erase a directory. Known shared fixture parent directories are kept.
+An unknown child can block cleanup while remaining untouched. Installed software
+and unrelated entries are preserved by proxy cleanup.
+
+`FixtureHost::inspect(&release)` is read-only. Its immutable observations include
+file identity and digests, and refuse unknown or contradictory fixture facts.
+Package, account, service, validation and listener-like effects use explicitly
+named `.fixture-state/` sentinels. The mapped APT/configuration/unit paths model
+file ownership below the root. No systemd, APT, firewall, account, download or
+network operation executes. The adapter checks caller-owned fixture metadata;
+it does not claim the production root:sing-box ownership model is qualified.
+
+`planned_commands(Operation)` and `planned_observation_commands()` expose fixed
+argv templates copied from Go, including the pinned package download directory
+and packaged configuration check. They are **not an executable command plan**:
+conditional/dynamic UID/GID, process/package exclusion, repository/download trust,
+deadlines and real host observations still need porting before a live runner can
+exist. `require_live_adapter()` explicitly refuses real deployment. No process
+runner or live adapter is implemented.
+
+`proxyinstallation::FixtureInstallation::new(host, release)` connects the
+fixture adapter to the strict records and protected Ownership Store. It shares
+the exact `Interface::review/execute` boundary and opaque non-cloneable Prepared
+Action with the simulation. Prepared authority is bound to the concrete adapter,
+instance, reviewed source/staged bytes and file evidence. Every later Review
+expires it. Wrong release, unsupported authority, changed facts and unknown
+resources grant no mutation; View details remains read-only and available.
+
+The journey follows the Go order: nine pre-activation effects with durable
+checkpoints, fresh stopped/owned checks before Activation committed, then service
+enablement/start and a fresh fixture Running check. Precommit effect failure
+enters the eight-step cleanup sequence. Committed activation permits only forward
+completion. Cleanup resumes its recorded checkpoint, proves the entire fixture
+proxy footprint absent, then removes only the completed record. A visible target
+after uncertain publication is accepted only after an exact reread and successful
+file/directory synchronization. Unknown staging is retained and refused.
+
+The numbered terminal now consumes that same two-operation Interface. Its banner,
+status suffixes and completion messages explicitly distinguish in-memory
+simulation from filesystem fixtures. Tests run the ordinary Standard wizard
+against the durable fixture journey, close/reopen the model after interruptions,
+resume cleanup and forward completion, and preserve foreign files. The installed
+executable still constructs only the simulation; there is no fixture CLI flag,
+hidden environment switch, real installer or deployment path.
+
+The completed subscription worker's `subscription_artifact` module is exported
+through `lib.rs`. It adds no dependency and runs no network/host operation.
+`ConnectionFacts` validates supplied Client Access Values and encodes the exact
+VLESS node plus optional VMess v2 node, and official outside-client JSON.
+`SubscriptionCredential` validates canonical supplied tokens and hashes their
+encoded text. `HttpSubscriptionLink` validates only the fixed HTTP link shape
+and retains the HTTP exposure warning. It does not generate or install a
+credential, serve requests, rotate access or approve disclosure.
+
+All secret-bearing codec fields are private. Debug/Display are redacted and no
+public Serde implementation serializes them; explicit byte/string accessors
+remain subject to future product disclosure/serving authority. The independent
+fixtures contain only fixed synthetic values: 76 Go-generated acceptance/output
+cases and six golden files preserve exact order, escaping, padding, node types
+and newlines. Tests also check the 4 KiB subscription bound, canonical tokens,
+HTTP rejection cases and ordinary diagnostic redaction. See
+`tests/testdata/subscription_artifact/README.md` for the API and provenance.
+
+Current local evidence is retained under `.scratch/acceptance/rust-host/`, with a
+task-specific Cargo target directory. These are macOS filesystem/codec tests,
+not Ubuntu/systemd/package verification, traffic, Karing, native Linux durability,
+physical power-loss or packaged deployment qualification. No original Go checkout
+or live resource is changed by this increment.

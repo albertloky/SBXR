@@ -1,26 +1,47 @@
 //! Numbered terminal presentation; all effects go through Review and Execute.
 use crate::domain::{Action, Confirmation, Outcome, Result};
-use crate::proxyinstallation::Installation;
+use crate::proxyinstallation::{ExecutionMode, Interface};
 use std::io::{self, BufRead, Write};
 
 pub fn run(
     input: &mut impl BufRead,
     output: &mut impl Write,
-    installation: &mut Installation,
+    installation: &mut impl Interface,
 ) -> io::Result<()> {
-    writeln!(output, "SBXR Rust — local simulation only")?;
-    writeln!(
-        output,
-        "All host facts and setup effects are in memory. No live installation is available."
-    )?;
+    match installation.review(Action::Status).mode {
+        ExecutionMode::Simulation => {
+            writeln!(output, "SBXR Rust — local simulation only")?;
+            writeln!(
+                output,
+                "All host facts and setup effects are in memory. No live installation is available."
+            )?;
+        }
+        ExecutionMode::Fixture => {
+            writeln!(output, "SBXR Rust — filesystem fixture only")?;
+            writeln!(
+                output,
+                "Effects stay under a marked temporary root. No Ubuntu command or real deployment is available."
+            )?;
+        }
+    }
     loop {
         let current = installation.review(Action::Status);
-        writeln!(output, "Proxy status: {} (simulated)", current.status)?;
-        writeln!(output, "Subscription status: Not enabled (simulated)")?;
-        writeln!(
-            output,
-            "Software Lifecycle status: Not inspected (simulation)"
-        )?;
+        let qualifier = match current.mode {
+            ExecutionMode::Simulation => "simulated",
+            ExecutionMode::Fixture => "fixture",
+        };
+        writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
+        writeln!(output, "Subscription status: Not enabled ({qualifier})")?;
+        match current.mode {
+            ExecutionMode::Simulation => writeln!(
+                output,
+                "Software Lifecycle status: Not inspected (simulation)"
+            )?,
+            ExecutionMode::Fixture => writeln!(
+                output,
+                "Software Lifecycle status: Fixture pair only (not release authenticated)"
+            )?,
+        }
         writeln!(output, "Proxy traffic: cannot be verified")?;
         if let Some(refusal) = current.refusal {
             writeln!(output, "Failed safety check: {refusal}")?;
@@ -50,11 +71,9 @@ pub fn run(
                     output,
                     "Standard uses VLESS REALITY Vision. No domain is needed."
                 )?;
-                writeln!(
-                    output,
-                    "Simulation phase: {:?}. No credential or real runtime is present.",
-                    installation.phase()
-                )?;
+                for line in installation.review(Action::ViewDetails).details {
+                    writeln!(output, "{line}")?;
+                }
             }
             Action::StartSetup => setup(input, output, installation)?,
             Action::FinishCleanup | Action::FinishSetup => {
@@ -79,7 +98,7 @@ pub fn run(
 fn setup(
     input: &mut impl BufRead,
     output: &mut impl Write,
-    installation: &mut Installation,
+    installation: &mut impl Interface,
 ) -> io::Result<()> {
     loop {
         writeln!(
@@ -125,7 +144,14 @@ fn setup(
         loop {
             match prompt(input, output, "Apply setup? [y/N]")?.as_deref() {
                 Some("y") => {
-                    writeln!(output, "Setup 3 — Simulate install and check")?;
+                    match review.mode {
+                        ExecutionMode::Simulation => {
+                            writeln!(output, "Setup 3 — Simulate install and check")?
+                        }
+                        ExecutionMode::Fixture => {
+                            writeln!(output, "Setup 3 — Apply fixture install and check")?
+                        }
+                    }
                     let result = installation.execute(prepared, Confirmation::Approved);
                     write_result(output, &result)?;
                     return Ok(());

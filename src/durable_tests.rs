@@ -341,3 +341,38 @@ fn changed_directory_identity_and_writable_ancestors_are_refused() {
     assert!(OwnershipStore::open(&nested, fixture.uid).is_err());
     fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o700)).unwrap();
 }
+
+#[test]
+fn cleanup_authority_removal_requires_all_checkpoints_and_preserves_conflicts() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    let mut record = standard();
+    store.publish(None, &record).unwrap();
+    assert!(
+        store
+            .remove_completed_cleanup(&record.encode().unwrap())
+            .is_err()
+    );
+    while record.cleanup_checkpoint() < 8 {
+        let next = record.next_cleanup_checkpoint().unwrap();
+        store
+            .publish(Some(&record.encode().unwrap()), &next)
+            .unwrap();
+        record = next;
+    }
+    let foreign = standard().encode().unwrap();
+    write_owned(&fixture.path.join(STAGED_FILE), &foreign);
+    assert!(
+        store
+            .remove_completed_cleanup(&record.encode().unwrap())
+            .is_err()
+    );
+    assert_eq!(fs::read(fixture.path.join(STAGED_FILE)).unwrap(), foreign);
+    fs::remove_file(fixture.path.join(STAGED_FILE)).unwrap();
+    fs::write(fixture.path.join("foreign"), b"keep me").unwrap();
+    store
+        .remove_completed_cleanup(&record.encode().unwrap())
+        .unwrap();
+    assert_eq!(store.load().unwrap().recovery(), Recovery::Absent);
+    assert_eq!(fs::read(fixture.path.join("foreign")).unwrap(), b"keep me");
+}

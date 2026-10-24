@@ -208,6 +208,16 @@ fn installed_record_codec_is_strict_but_does_not_authenticate_an_executable() {
     );
     let record = InstalledRecord::decode(bytes.as_bytes()).unwrap();
     assert_eq!(record.sequence(), 192);
+    let identity = ReleaseIdentity::new("v3.1.118", &"a".repeat(40), &"b".repeat(64)).unwrap();
+    assert_eq!(
+        InstalledRecord::new(identity.clone(), 192, "amd64", &"c".repeat(64))
+            .unwrap()
+            .encode()
+            .unwrap(),
+        bytes.as_bytes()
+    );
+    assert!(InstalledRecord::new(identity.clone(), 0, "amd64", &"c".repeat(64)).is_err());
+    assert!(InstalledRecord::new(identity, 192, "x86", &"c".repeat(64)).is_err());
     assert_eq!(record.release_identity().tag(), "v3.1.118");
     let zero = bytes.replace("v3.1.118", "v0.0.1");
     assert_eq!(

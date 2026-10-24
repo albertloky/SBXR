@@ -98,6 +98,24 @@ struct WireInstalledRecord {
 #[derive(Clone, PartialEq, Eq)]
 pub struct InstalledRecord(WireInstalledRecord);
 impl InstalledRecord {
+    pub fn new(
+        release: ReleaseIdentity,
+        sequence: u64,
+        architecture: &str,
+        executable_sha256: &str,
+    ) -> Result<Self, RecordError> {
+        let wire = WireInstalledRecord {
+            schema: 1,
+            repository: release.repository().into(),
+            tag: release.tag().into(),
+            commit: release.commit().into(),
+            release_index_sha256: release.index_sha256().into(),
+            sequence,
+            architecture: architecture.into(),
+            executable_sha256: executable_sha256.into(),
+        };
+        Self::decode(&encode(&wire)?)
+    }
     pub fn decode(bytes: &[u8]) -> Result<Self, RecordError> {
         if bytes.len() > 4 * 1024 {
             return Err(RecordError);

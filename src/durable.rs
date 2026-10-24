@@ -323,6 +323,49 @@ impl OwnershipStore {
             ..e
         })
     }
+    /// The journey must freshly prove all proxy resources absent first. This
+    /// crate-private primitive cannot delete a partial/committed authority.
+    pub(crate) fn remove_completed_cleanup(&mut self, expected: &[u8]) -> Result<(), StoreError> {
+        let record = OwnershipRecord::decode(expected)
+            .map_err(|_| error(StoreErrorKind::InvalidAuthority))?;
+        if record.recovery_direction() != RecoveryDirection::Cleanup
+            || record.cleanup_checkpoint() != 8
+            || record
+                .encode()
+                .map_err(|_| error(StoreErrorKind::InvalidAuthority))?
+                != expected
+        {
+            return Err(error(StoreErrorKind::Conflict));
+        }
+        self.synchronize(expected)?;
+        let staged = self.read_file(STAGED_FILE)?;
+        if staged.as_ref().is_some_and(|(_, bytes)| bytes != expected) {
+            return Err(error(StoreErrorKind::Conflict));
+        }
+        self.expect_current(Some(expected))?;
+        fs::unlinkat(&self.directory, OWNERSHIP_FILE, AtFlags::empty()).map_err(|_| {
+            StoreError {
+                kind: StoreErrorKind::Io,
+                publication: Publication::Uncertain,
+            }
+        })?;
+        if staged.is_some() {
+            fs::unlinkat(&self.directory, STAGED_FILE, AtFlags::empty()).map_err(|_| {
+                StoreError {
+                    kind: StoreErrorKind::Io,
+                    publication: Publication::Uncertain,
+                }
+            })?;
+        }
+        fs::fsync(&self.directory).map_err(|_| StoreError {
+            kind: StoreErrorKind::Io,
+            publication: Publication::Uncertain,
+        })?;
+        self.expect_current(None).map_err(|e| StoreError {
+            publication: Publication::Uncertain,
+            ..e
+        })
+    }
     fn boundary(&self, _point: FaultPoint, _publication: Publication) -> Result<(), StoreError> {
         #[cfg(test)]
         if self.fault == Some(_point) {
@@ -345,7 +388,7 @@ fn safe_file(stat: &Stat, uid: u32) -> bool {
         && stat.st_size > 0
         && stat.st_size <= MAX_RECORD_BYTES as i64
 }
-fn open_directory(path: &Path, owner_uid: u32) -> Result<OwnedFd, StoreError> {
+pub(crate) fn open_directory(path: &Path, owner_uid: u32) -> Result<OwnedFd, StoreError> {
     if !path.is_absolute() {
         return Err(error(StoreErrorKind::Unsafe));
     }

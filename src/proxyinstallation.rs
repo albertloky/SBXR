@@ -1,5 +1,8 @@
 //! Proxy Installation owns review, confirmation, setup direction, and recovery.
-//! This first increment has an in-memory simulator and no live host adapter.
+//! Explicit simulation and filesystem-fixture adapters share Review/Execute.
+//! No live host adapter or deployment capability is implemented.
+mod fixture;
+pub use fixture::FixtureInstallation;
 mod simulation;
 pub use simulation::{Facts, SimulatedHost, SimulationFault};
 
@@ -20,12 +23,32 @@ use std::{cell::RefCell, rc::Rc};
 pub struct PreparedAction {
     owner: Rc<()>,
     action: Action,
-    facts: Facts,
-    phase: Phase,
-    revision: u64,
+    basis: PreparedBasis,
+}
+enum PreparedBasis {
+    Simulation {
+        facts: Facts,
+        phase: Phase,
+        revision: u64,
+    },
+    Fixture(fixture::FixturePrepared),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Simulation,
+    Fixture,
+}
+
+/// The existing two-operation product boundary, shared by concrete adapters.
+pub trait Interface {
+    fn review(&self, action: Action) -> Review;
+    fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result;
 }
 
 pub struct Review {
+    pub mode: ExecutionMode,
+    pub details: Vec<String>,
     pub status: Status,
     pub legal_actions: Vec<Action>,
     pub plan: Vec<String>,
@@ -87,9 +110,11 @@ impl Installation {
             Some(PreparedAction {
                 owner: Rc::clone(&self.owner.borrow()),
                 action,
-                facts: self.host.facts,
-                phase: self.phase(),
-                revision: self.revision,
+                basis: PreparedBasis::Simulation {
+                    facts: self.host.facts,
+                    phase: self.phase(),
+                    revision: self.revision,
+                },
             })
         } else {
             None
@@ -109,6 +134,11 @@ impl Installation {
             _ => vec![],
         };
         Review {
+            mode: ExecutionMode::Simulation,
+            details: vec![format!(
+                "Simulation phase: {:?}. No credential or real runtime is present.",
+                self.phase()
+            )],
             status: self.status(),
             legal_actions,
             plan,
@@ -118,10 +148,21 @@ impl Installation {
     }
 
     pub fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result {
+        let PreparedBasis::Simulation {
+            facts,
+            phase,
+            revision,
+        } = prepared.basis
+        else {
+            return self.result(
+                Outcome::Refused,
+                "Prepared authority belongs to a different adapter.",
+            );
+        };
         if !Rc::ptr_eq(&self.owner.borrow(), &prepared.owner)
-            || prepared.revision != self.revision
-            || prepared.facts != self.host.facts
-            || prepared.phase != self.phase()
+            || revision != self.revision
+            || facts != self.host.facts
+            || phase != self.phase()
             || self.host.facts.refusal(self.phase()).is_some()
             || self.mutation_action() != Some(prepared.action)
         {
@@ -168,5 +209,14 @@ impl Installation {
             proxy_traffic: Availability::CannotBeVerified,
             message,
         }
+    }
+}
+
+impl Interface for Installation {
+    fn review(&self, action: Action) -> Review {
+        Installation::review(self, action)
+    }
+    fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result {
+        Installation::execute(self, prepared, confirmation)
     }
 }

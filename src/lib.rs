@@ -1,6 +1,7 @@
 pub mod configuration;
 pub mod domain;
 pub mod durable;
+pub mod host;
 pub mod proxyinstallation;
 pub mod records;
 pub mod subscription_artifact;
