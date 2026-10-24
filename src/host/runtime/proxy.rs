@@ -83,7 +83,7 @@ impl<'a, P: PeerObservations, R: CommandRunner> ProxyRuntimeHost<'a, P, R> {
         if sha256_hex(&configuration) != record.configuration_sha256() {
             return Err(Error::Refused);
         }
-        crate::server_configuration::ServerConfiguration::decode_standard(&configuration)
+        crate::server_configuration::ServerConfiguration::decode_supported(&configuration)
             .map_err(refused)?;
         let gate = super::CutoverGate::prepare(&self.files, &record, owner, context)?;
         if self.files.ownership()? != body {

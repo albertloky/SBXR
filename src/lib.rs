@@ -1,4 +1,5 @@
 pub mod artifact_trust;
+pub mod client_identity;
 pub mod configuration;
 pub mod domain;
 pub mod durable;

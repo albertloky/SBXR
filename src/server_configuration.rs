@@ -55,6 +55,15 @@ impl ServerConfiguration {
     /// Decode the exact Standard shape without changing its hash subject. Unknown
     /// or duplicate fields, extra inbounds and unsupported configurations refuse.
     pub fn decode_standard(bytes: &[u8]) -> Result<Self, ConfigurationError> {
+        let result = Self::decode_supported(bytes)?;
+        if !result.is_standard_only() {
+            return Err(ConfigurationError);
+        }
+        Ok(result)
+    }
+    /// Exact current Standard or Standard+dedicated VMess WebSocket shape. The
+    /// original validated bytes remain the hash subject; no plug-in protocols.
+    pub fn decode_supported(bytes: &[u8]) -> Result<Self, ConfigurationError> {
         let value =
             crate::artifact_trust::json_object(bytes, 1 << 20).map_err(|_| ConfigurationError)?;
         let inbound = &value["inbounds"][0];
@@ -69,10 +78,21 @@ impl ServerConfiguration {
                 .as_str()
                 .ok_or(ConfigurationError)?,
         )?;
-        let expected = Self::standard(&identity)?;
-        let parsed: Value =
-            serde_json::from_slice(expected.as_bytes()).map_err(|_| ConfigurationError)?;
-        if value != parsed {
+        let mut expected = Self::standard(&identity)?;
+        match value["inbounds"].as_array().map(Vec::len) {
+            Some(1) => {}
+            Some(2) => {
+                let host = value["inbounds"][1]["tag"]
+                    .as_str()
+                    .and_then(|tag| tag.strip_prefix("vmess-ws@"))
+                    .ok_or(ConfigurationError)?;
+                expected = expected.with_vmess_websocket(host)?;
+            }
+            _ => return Err(ConfigurationError),
+        }
+        if serde_json::from_slice::<Value>(expected.as_bytes()).map_err(|_| ConfigurationError)?
+            != value
+        {
             return Err(ConfigurationError);
         }
         Ok(Self(bytes.to_vec()))
@@ -81,7 +101,7 @@ impl ServerConfiguration {
         &self,
         public_ipv4: &str,
     ) -> Result<crate::subscription_artifact::ConnectionFacts, ConfigurationError> {
-        let checked = Self::decode_standard(self.as_bytes())?;
+        let checked = Self::decode_supported(self.as_bytes())?;
         let value: Value =
             serde_json::from_slice(checked.as_bytes()).map_err(|_| ConfigurationError)?;
         let inbound = &value["inbounds"][0];
@@ -103,7 +123,9 @@ impl ServerConfiguration {
             STANDARD.server_name,
             identity.public_key(),
             identity.short_id(),
-            None,
+            value["inbounds"][1]["tag"]
+                .as_str()
+                .and_then(|tag| tag.strip_prefix("vmess-ws@")),
         )
         .map_err(|_| ConfigurationError)
     }

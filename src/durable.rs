@@ -147,6 +147,7 @@ impl Snapshot {
             if crosses_barrier
                 || enablement_commit
                 || !(current.record.permits_successor(&staged.record)
+                    || crate::client_identity::permits_successor(&current.record, &staged.record)
                     || current.record.recovery_direction() == RecoveryDirection::Removal
                         && permits_removal(Some(&current.record), &staged.record))
             {
@@ -307,7 +308,9 @@ impl OwnershipStore {
                 .encode()
                 .map_err(|_| error(StoreErrorKind::InvalidAuthority))?
                 != expected
-                || !(source.permits_successor(next) || permits_removal(Some(&source), next))
+                || !(source.permits_successor(next)
+                    || crate::client_identity::permits_successor(&source, next)
+                    || permits_removal(Some(&source), next))
             {
                 return Err(error(StoreErrorKind::Conflict));
             }

@@ -224,3 +224,46 @@ fn cloudflared_version_gate_requires_token_file_support() {
     assert_eq!(TUNNEL_BINARY_PATH, "/usr/bin/cloudflared");
     assert_eq!(TUNNEL_TOKEN_PATH, "/etc/cloudflared/sbxr.token");
 }
+
+#[test]
+fn runtime_decoder_accepts_exact_standard_and_vmess_without_changing_hash_subject() {
+    let standard = include_bytes!("testdata/server_configuration/standard.json");
+    let vmess = include_bytes!("testdata/server_configuration/vless-vmess.json");
+    for bytes in [standard.as_slice(), vmess.as_slice()] {
+        let original = [b" \n".as_slice(), bytes, b"\n".as_slice()].concat();
+        let decoded = ServerConfiguration::decode_supported(&original).unwrap();
+        assert_eq!(decoded.as_bytes(), original);
+        let client = decoded
+            .connection_facts("8.8.8.8")
+            .unwrap()
+            .subscription_artifact()
+            .unwrap();
+        assert!(!client.as_bytes().is_empty());
+    }
+    assert!(ServerConfiguration::decode_standard(vmess).is_err());
+}
+#[test]
+fn runtime_vmess_decoder_refuses_duplicates_unknown_fields_and_identity_mismatch() {
+    let source = include_bytes!("testdata/server_configuration/vless-vmess.json");
+    for mutate in 0..5 {
+        let mut v: Value = serde_json::from_slice(source).unwrap();
+        match mutate {
+            0 => {
+                v["inbounds"][1]["users"][0]["uuid"] = "22345678-1234-4234-8234-123456789abc".into()
+            }
+            1 => v["inbounds"][1]["listen"] = "0.0.0.0".into(),
+            2 => v["inbounds"][1]["transport"]["path"] = "/foreign".into(),
+            3 => v["inbounds"][1]["foreign"] = true.into(),
+            _ => v["outbounds"][0]["type"] = "block".into(),
+        }
+        assert!(
+            ServerConfiguration::decode_supported(&serde_json::to_vec(&v).unwrap()).is_err(),
+            "case {mutate}"
+        );
+    }
+    let duplicated =
+        String::from_utf8(source.to_vec())
+            .unwrap()
+            .replacen("{", "{\"inbounds\":[],", 1);
+    assert!(ServerConfiguration::decode_supported(duplicated.as_bytes()).is_err());
+}

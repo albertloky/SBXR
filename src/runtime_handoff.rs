@@ -890,7 +890,7 @@ fn prepare(
     {
         return Err(Error::Refused);
     }
-    let configuration = ServerConfiguration::decode_standard(&configuration).map_err(refused)?;
+    let configuration = ServerConfiguration::decode_supported(&configuration).map_err(refused)?;
     // The loopback fixture is explicit and only admitted with an injected root;
     // its synthetic artifact names loopback. It can never select a live listener.
     let bind = if fixture {
@@ -1120,7 +1120,7 @@ pub fn authorize_proxy_start(
     {
         return Err(Error::Refused);
     }
-    ServerConfiguration::decode_standard(&configuration).map_err(refused)?;
+    ServerConfiguration::decode_supported(&configuration).map_err(refused)?;
     if host.ownership()? != body {
         return Err(Error::Refused);
     }
