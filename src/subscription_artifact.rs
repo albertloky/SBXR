@@ -30,6 +30,10 @@ pub struct ConnectionFacts {
 }
 
 impl ConnectionFacts {
+    pub fn public_ipv4(&self) -> Ipv4Addr {
+        self.public_ipv4
+    }
+
     pub fn new(
         public_ipv4: &str,
         uuid: &str,

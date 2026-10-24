@@ -6,6 +6,7 @@ pub mod proxyinstallation;
 pub mod records;
 pub mod server_configuration;
 pub mod subscription_artifact;
+pub mod subscription_serving;
 pub mod terminal;
 
 #[cfg(test)]

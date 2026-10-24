@@ -1,0 +1,329 @@
+[
+  {
+    "name": "exact",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "content length zero",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "duplicate identical zero length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\ncontent-length: 0\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "decimal zero length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 00\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "host case and tabs",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nhOsT:\tlocalhost\t\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "IPv6 host syntax",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: [::1]:8443\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "LF delimiters retained from Go",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\nHost: localhost\n\n",
+    "status": 200
+  },
+  {
+    "name": "root",
+    "request": "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "short token",
+    "request": "GET /s/short HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "missing token",
+    "request": "GET /s/ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "trailing slash",
+    "request": "GET /s/@TOKEN@/ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "trailing segment",
+    "request": "GET /s/@TOKEN@/extra HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "uppercase prefix",
+    "request": "GET /S/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "double slash",
+    "request": "GET //s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "dot segment",
+    "request": "GET /a/../s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "dot prefix",
+    "request": "GET /./s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "escaped slash",
+    "request": "GET /%73/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "escaped token",
+    "request": "GET /s/%41AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "escaped entire path",
+    "request": "GET %2Fs%2F@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "empty query",
+    "request": "GET /s/@TOKEN@? HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "query",
+    "request": "GET /s/@TOKEN@?x=1 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "fragment",
+    "request": "GET /s/@TOKEN@#x HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "absolute target",
+    "request": "GET http://localhost/s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "asterisk",
+    "request": "GET * HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "padded token",
+    "request": "GET /s/@TOKEN@= HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "overlong token",
+    "request": "GET /s/@TOKEN@A HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "noncanonical unused bits",
+    "request": "GET /s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "different canonical token",
+    "request": "GET /s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "base64 plus",
+    "request": "GET /s/+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "base64 slash",
+    "request": "GET /s//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "unicode token",
+    "request": "GET /s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\u00e9 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "NUL path",
+    "request": "GET /s/@TOKEN@\u0000 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "backslash path",
+    "request": "GET /s\\@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method POST",
+    "request": "POST /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method HEAD",
+    "request": "HEAD /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method OPTIONS",
+    "request": "OPTIONS /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method PUT",
+    "request": "PUT /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method DELETE",
+    "request": "DELETE /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method get",
+    "request": "get /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "method CONNECT",
+    "request": "CONNECT /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "protocol HTTP/1.0",
+    "request": "GET /s/@TOKEN@ HTTP/1.0\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "protocol HTTP/2.0",
+    "request": "GET /s/@TOKEN@ HTTP/2.0\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "protocol HTTP/1.2",
+    "request": "GET /s/@TOKEN@ HTTP/1.2\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "missing host",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "empty host",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: \r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "duplicate host",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nHost: localhost\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "host space",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: local host\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "host slash",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: local/host\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "host userinfo",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: name@localhost\r\n\r\n",
+    "status": 200
+  },
+  {
+    "name": "bad header name",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nBad Header: value\r\n\r\n",
+    "status": 404,
+    "go_status": 200
+  },
+  {
+    "name": "obsolete folded header",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\n continuation\r\n\r\n",
+    "status": 404,
+    "go_status": 200
+  },
+  {
+    "name": "NUL header",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nX-Test: \u0000\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "ambiguous duplicate length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 00\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "negative length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: -0\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "signed length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: +0\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "comma length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0, 0\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "empty length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: \r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "huge length",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999999999999999999\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "chunked body",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "empty transfer encoding",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: \r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "identity encoding",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: identity\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "length plus transfer encoding",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "declared body",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1\r\n\r\nx",
+    "status": 404
+  },
+  {
+    "name": "declared absent body",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1\r\n\r\n",
+    "status": 404
+  },
+  {
+    "name": "no body draining or continue",
+    "request": "GET /s/@TOKEN@ HTTP/1.1\r\nHost: localhost\r\nContent-Length: 999999999\r\nExpect: 100-continue\r\n\r\n",
+    "status": 404
+  }
+]
