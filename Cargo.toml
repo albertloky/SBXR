@@ -12,6 +12,10 @@ sha2 = "=0.10.9"
 rustix = { version = "=1.1.5", features = ["fs"] }
 httparse = "=1.10.1"
 subtle = "=2.6.1"
+x25519-dalek = { version = "=2.0.1", features = ["static_secrets"] }
+getrandom = "=0.3.4"
+base64 = "=0.22.1"
+zeroize = "=1.8.2"
 
 [lints.rust]
 unsafe_code = "forbid"

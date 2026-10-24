@@ -2,6 +2,7 @@ pub mod configuration;
 pub mod domain;
 pub mod durable;
 pub mod host;
+pub mod identity_generation;
 pub mod proxyinstallation;
 pub mod records;
 pub mod server_configuration;
