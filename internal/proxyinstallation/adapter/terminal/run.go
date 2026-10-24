@@ -49,44 +49,33 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 		if line == "0" {
 			return 0
 		}
+		visibleActions := menuActions(current.LegalActions)
 		number, parseErr := strconv.Atoi(line)
-		if parseErr != nil || strconv.Itoa(number) != line || number < 1 || number > len(current.LegalActions)+lifecycleChoiceCount(lifecycle) {
+		if parseErr != nil || strconv.Itoa(number) != line || number < 1 || number > len(visibleActions)+lifecycleChoiceCount(lifecycle) {
 			if _, err := io.WriteString(output, "Enter one of the displayed numbers.\n"); err != nil {
 				return 1
 			}
 			continue
 		}
-		if number > len(current.LegalActions) {
-			if !runLifecycle(ctx, reader, output, lifecycle, number-len(current.LegalActions)) {
+		if number > len(visibleActions) {
+			if !runLifecycle(ctx, reader, output, lifecycle, number-len(visibleActions)) {
 				return 1
 			}
 			current = installation.Review(ctx, proxyinstallation.StatusAction)
 			latest = current.Result
 			continue
 		}
-		action := current.LegalActions[number-1]
-		var review proxyinstallation.Review
-		if action == proxyinstallation.StartVMessSetupAction {
-			reviewer, ok := installation.(interface {
-				ReviewVMessSetup(context.Context, string) proxyinstallation.Review
-			})
+		action := visibleActions[number-1]
+		if action == proxyinstallation.StartSetupAction {
+			var ok bool
+			latest, ok = runSetup(ctx, reader, output, installation, current)
 			if !ok {
 				return 1
 			}
-			if _, err := io.WriteString(output, "VMess Tunnel setup — use your own Cloudflare domain and a dedicated remotely managed tunnel.\n1. In Cloudflare Networking > Tunnels, create a tunnel or select a dedicated unused tunnel. Never reuse a shared tunnel.\n2. Add a Published application route: your hostname -> http://127.0.0.1:10000; leave route path blank.\n3. Install official cloudflared >=2025.4.0 at /usr/bin/cloudflared. Save only this tunnel's token in /etc/cloudflared/sbxr.token, root-owned 0600; never paste it here.\nSBXR will manage only sbxr-tunnel.service. Full instructions: https://github.com/albertloky/SBXR/blob/main/docs/setup-vmess-tunnel.md\nNamed tunnel hostname (lowercase DNS name; no credentials; blank cancels): "); err != nil {
-				return 1
-			}
-			hostname, err := readLine(reader)
-			if err != nil {
-				return 1
-			}
-			if hostname == "" {
-				continue
-			}
-			review = reviewer.ReviewVMessSetup(ctx, hostname)
-		} else {
-			review = installation.Review(ctx, action)
+			current = installation.Review(ctx, proxyinstallation.StatusAction)
+			continue
 		}
+		review := installation.Review(ctx, action)
 		switch action {
 		case proxyinstallation.ShowClientConfigurationAction:
 			if review.Prepared == nil {
@@ -128,7 +117,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 			} else if writeRefusal(output, latest) != nil {
 				return 1
 			}
-		case proxyinstallation.StartSetupAction, proxyinstallation.StartVMessSetupAction, proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.ReplaceSubscriptionCertificateAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
+		case proxyinstallation.FinishCleanupAction, proxyinstallation.FinishSetupAction, proxyinstallation.EnableSubscriptionAction, proxyinstallation.RotateSubscriptionLinkAction, proxyinstallation.ReplaceSubscriptionCertificateAction, proxyinstallation.RepairSubscriptionAction, proxyinstallation.FinishSubscriptionChangeAction, proxyinstallation.RotateClientIdentityAction, proxyinstallation.FinishClientIdentityAction:
 			if review.Prepared == nil {
 				latest = review.Result
 				if writeRefusal(output, latest) != nil {
@@ -142,7 +131,7 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					return 1
 				}
 			}
-			prompt := "Start proxy setup? [y/N]"
+			prompt := "Finish proxy cleanup? [y/N]"
 			if action == proxyinstallation.FinishCleanupAction {
 				prompt = "Finish proxy cleanup? [y/N]"
 			} else if action == proxyinstallation.FinishSetupAction {
@@ -210,6 +199,10 @@ func Run(ctx context.Context, arguments []string, input io.Reader, output, error
 					return 1
 				}
 			}
+			if action == proxyinstallation.FinishSetupAction && writeSetupCompletion(output, latest) != nil {
+				return 1
+			}
+
 		case proxyinstallation.CompleteRemovalAction:
 			if review.Prepared == nil {
 				latest = review.Result
@@ -336,7 +329,8 @@ func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyi
 	if _, err := fmt.Fprintf(output, "SBXR V3\nVersion: %s\nProxy status: %s\nSubscription status: %s\nLocal proxy runtime: %s\nLocal subscription serving: %s\nOutside connectivity: not established by these local checks (including Karing).\nResult: %s\nCode: %s\n\n", review.Version, review.Status, review.SubscriptionStatus, review.ProxyTraffic, review.SubscriptionServing, result.Message, result.Code); err != nil {
 		return err
 	}
-	for index, action := range review.LegalActions {
+	visibleActions := menuActions(review.LegalActions)
+	for index, action := range visibleActions {
 		if _, err := fmt.Fprintf(output, "%d. %s\n", index+1, action); err != nil {
 			return err
 		}
@@ -351,7 +345,7 @@ func writeFrame(output io.Writer, review proxyinstallation.Review, result proxyi
 			return err
 		}
 		for index, label := range []string{"Check", "Recover"} {
-			if _, err := fmt.Fprintf(output, "%d. %s\n", len(review.LegalActions)+index+1, label); err != nil {
+			if _, err := fmt.Fprintf(output, "%d. %s\n", len(visibleActions)+index+1, label); err != nil {
 				return err
 			}
 		}

@@ -51,15 +51,23 @@ The same menu lists legal Proxy Installation Actions plus `Check` and `Recover`.
 New software updates are unsupported and Update is absent from the menu.
 Recover retains proved transaction recovery; it does not
 start legacy transport migration. Only `y` approves a supported action's effects.
-Empty input or `n` cancels. Changed facts require a fresh review.
+At an action confirmation, empty input or `n` cancels. Changed facts require a
+fresh review.
+
+**Start setup** opens a short numbered wizard. Press Enter for **Standard**
+(no domain needed), or choose **Standard + Cloudflare** for your own hostname
+and dedicated tunnel. `h` explains the connection types. `b` goes Back while
+preserving the current draft; `c` cancels before Apply without installing anything.
+At **Apply setup? [y/N]**, Enter means No. Only `y` starts installation.
 
 ## Optional VMess over a named Cloudflare Tunnel
 
 Follow the [VMess Tunnel setup guide](docs/setup-vmess-tunnel.md) first. You need
 your own Cloudflare domain, an unused hostname and a dedicated remotely managed
 tunnel. The menu explains how to create/select that tunnel and checks its
-protected local prerequisites before confirmation. The usual **Start setup**
-keeps its existing VLESS REALITY Vision behavior and needs no hostname.
+protected local prerequisites before confirmation. **Standard** keeps the
+existing VLESS REALITY Vision behavior and needs no hostname. **Standard +
+Cloudflare** adds VMess without changing that default connection.
 
 The optional setup adds VMess on `127.0.0.1:10000`, WebSocket path
 `/sbxr-vmess`. SBXR manages only a dedicated `sbxr-tunnel.service`, using an

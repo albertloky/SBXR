@@ -81,13 +81,32 @@ with os.fdopen(fd, "w") as f:
 Never put the token in chat, a hostname field, a shell command, an environment
 variable, a screenshot or a client profile. Clear any clipboard copy after use.
 If this file already exists, inspect which tunnel it belongs to through your
-secure administrative workflow; SBXR will not overwrite or adopt another service.
+secure administrative workflow. For the same dedicated tunnel, keep the existing
+protected file and continue the wizard; do not run the creation command again.
+SBXR reads and validates that file without overwriting it or adopting another
+service. A missing or unsafe file produces a correction and a Retry option;
+do not weaken its permissions to make setup continue.
 
 ## 3. Review and start SBXR setup
 
-Run `sudo sbxr`, choose **Start setup with VMess WebSocket**, and enter only your
-lowercase hostname, such as `proxy.example.com`. Blank input cancels. Review the
-displayed tunnel ID against the dedicated tunnel in your dashboard before `y`.
+Run `sudo sbxr` and choose **Start setup**:
+
+1. **Choose connection:** Enter selects Standard, with no domain needed. Choose
+   `2` for **Standard + Cloudflare**; `h` explains VLESS/VMess in plain language.
+2. **Prepare Cloudflare:** follow the dedicated tunnel, route and protected
+   token-file instructions above, then press Enter when ready.
+3. **Hostname:** enter only your lowercase hostname, such as `proxy.example.com`.
+   Invalid input shows a correction in place. Enter keeps an existing draft.
+4. **Review:** check the hostname, intended local changes and selected tunnel ID
+   against your dashboard. `b` goes Back without losing the draft, and the wizard
+   reviews the prerequisites again when you return. `c` cancels. At **Apply setup?
+   [y/N]**, Enter or `n` cancels; only `y` applies the reviewed changes.
+5. **Install and check:** read installation and fresh connection-test results
+   separately. Follow the displayed import, retry or recovery guidance.
+
+Cancel before Apply performs no installation or Cloudflare account changes.
+The wizard never accepts a token or other credential; prepare the protected file
+in your trusted terminal using the existing workflow above.
 The token identifies the selected tunnel; it cannot prove that you own the domain
 or configured the route correctly.
 

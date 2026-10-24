@@ -43,6 +43,9 @@ if spec["kind"] in ("hang","leader-exit"):
     while not (root/"descendant.pid").exists() and time.monotonic()<deadline: time.sleep(.01)
     if spec["kind"] == "leader-exit": os._exit(0)
     while True: time.sleep(10)
+if spec.get("wizard"):
+    print(spec.get("choice_prompt", "Connection [1] (h Help, c Cancel):"), flush=True)
+    event({"connection":sys.stdin.readline().rstrip("\n")})
 for code in spec.get("review_codes", []): print("Code: "+code,flush=True)
 if spec.get("prompt_delay"): time.sleep(spec["prompt_delay"])
 if spec.get("prompt"):
@@ -359,10 +362,66 @@ class MenuSessionDriverTest(unittest.TestCase):
             return result,events
 
     def test_setup_requires_exact_prompt_then_exits_returned_frame(self):
-        spec={"label":"Start setup","prompt":"Start proxy setup? [y/N]","kind":"action","expected":"PROXY-INSTALLATION-SETUP-COMPLETE"}
+        spec={"label":"Start setup","wizard":True,"prompt":"Apply setup? [y/N]","kind":"action","expected":"PROXY-INSTALLATION-SETUP-COMPLETE"}
         result,events=self.invoke(spec,"action","Start setup",spec["expected"],"--confirmation","yes")
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(events,[{"selected":"7"},{"answer":"y"},{"exit":"0"}])
+        self.assertEqual(events,[{"selected":"7"},{"connection":"1"},{"answer":"y"},{"exit":"0"}])
+
+    def test_setup_never_confirms_a_missing_or_changed_wizard_prompt(self):
+        for change in ({"wizard":False}, {"choice_prompt":"Connection [2] (h Help, c Cancel):"},
+                       {"prompt":"Start proxy setup? [y/N]"}):
+            with self.subTest(change=change):
+                spec={"label":"Start setup","wizard":True,"prompt":"Apply setup? [y/N]",
+                      "kind":"action","expected":"PROXY-INSTALLATION-SETUP-COMPLETE", **change}
+                result,events=self.invoke(spec,"action","Start setup",spec["expected"],"--confirmation","yes",timeout=1)
+                self.assertNotEqual(result.returncode,0)
+                self.assertNotIn({"answer":"y"},events)
+                if "choice_prompt" in change:
+                    self.assertNotIn({"connection":"1"},events)
+
+    def test_setup_refusal_after_connection_choice_never_gets_approval(self):
+        spec={"label":"Start setup","wizard":True,"prompt":"Apply setup? [y/N]","kind":"action",
+              "review_codes":["PROXY-INSTALLATION-ACTION-REFUSED"],"expected":"PROXY-INSTALLATION-SETUP-COMPLETE"}
+        result,events=self.invoke(spec,"action","Start setup",spec["expected"],"--confirmation","yes")
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("phase=action-refused",result.stderr)
+        self.assertEqual(events,[{"selected":"7"},{"connection":"1"}])
+
+    def test_expected_setup_refusal_cancels_and_exits_before_deadline(self):
+        spec={"label":"Start setup","wizard":True,"kind":"action",
+              "review_codes":["PROXY-INSTALLATION-ACTION-REFUSED"],
+              "prompt":"Setup is not ready. r Retry checks, b Back, c Cancel:",
+              "expected":"PROXY-INSTALLATION-ACTION-REFUSED",
+              "actual":"PROXY-INSTALLATION-ACTION-CANCELLED"}
+        result,events=self.invoke(spec,"action","Start setup",spec["expected"],timeout=2)
+        # A zero exit requires returning through the menu before the driver's
+        # original deadline; c is cancellation and never authorizes setup.
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(events,[{"selected":"7"},{"connection":"1"},{"answer":"c"},{"exit":"0"}])
+        self.assertEqual(result.stdout.count("Code: PROXY-INSTALLATION-ACTION-REFUSED"),1)
+        self.assertEqual(result.stdout.count("Code: PROXY-INSTALLATION-ACTION-CANCELLED"),1)
+
+    def test_expected_setup_refusal_requires_exact_review_and_cancel_prompt(self):
+        refused="PROXY-INSTALLATION-ACTION-REFUSED"
+        for change in ({"review_codes":[]}, {"review_codes":["PROXY-INSTALLATION-SETUP-COMPLETE"]},
+                       {"review_codes":[refused,refused]}, {"prompt":"Apply setup? [y/N]"}):
+            with self.subTest(change=change):
+                spec={"label":"Start setup","wizard":True,"kind":"action","review_codes":[refused],
+                      "prompt":"Setup is not ready. r Retry checks, b Back, c Cancel:",
+                      "expected":refused,"actual":"PROXY-INSTALLATION-ACTION-CANCELLED",**change}
+                result,events=self.invoke(spec,"action","Start setup",refused,timeout=2)
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(events,[{"selected":"7"},{"connection":"1"}])
+
+    def test_expected_setup_refusal_requires_proved_cancellation(self):
+        spec={"label":"Start setup","wizard":True,"kind":"action",
+              "review_codes":["PROXY-INSTALLATION-ACTION-REFUSED"],
+              "prompt":"Setup is not ready. r Retry checks, b Back, c Cancel:",
+              "expected":"PROXY-INSTALLATION-ACTION-REFUSED","actual":"PROXY-INSTALLATION-SETUP-COMPLETE"}
+        result,events=self.invoke(spec,"action","Start setup",spec["expected"],timeout=2)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("phase=result-mismatch",result.stderr)
+        self.assertEqual(events,[{"selected":"7"},{"connection":"1"},{"answer":"c"}])
 
     def test_certificate_replacement_requires_its_prompt_and_exact_result(self):
         spec={"label":"Replace subscription certificate","prompt":"Replace subscription certificate? [y/N]","kind":"action","expected":"PROXY-INSTALLATION-SUBSCRIPTION-CERTIFICATE-REPLACED"}
@@ -457,12 +516,12 @@ class MenuSessionDriverTest(unittest.TestCase):
                     self.assertEqual(events,[{"selected":"7"}])
 
     def test_review_code_is_not_allowed_for_unrelated_confirmation(self):
-        spec={"label":"Start setup", "prompt":"Start proxy setup? [y/N]", "kind":"action",
+        spec={"label":"Start setup", "wizard":True, "prompt":"Apply setup? [y/N]", "kind":"action",
               "review_codes":["SOFTWARE-LIFECYCLE-CHECK-UPDATE-AVAILABLE"], "expected":"PROXY-INSTALLATION-SETUP-COMPLETE"}
         result,events=self.invoke(spec,"action",spec["label"],spec["expected"],"--confirmation","yes")
         self.assertNotEqual(result.returncode,0)
         self.assertIn("phase=action-refused",result.stderr)
-        self.assertEqual(events,[{"selected":"7"}])
+        self.assertEqual(events,[{"selected":"7"},{"connection":"1"}])
 
     def test_enable_subscription_consumes_exact_link_pause(self):
         spec={"label":"Enable subscription","prompt":"Enable subscription? [y/N]","kind":"link","expected":"PROXY-INSTALLATION-SUBSCRIPTION-ENABLED"}

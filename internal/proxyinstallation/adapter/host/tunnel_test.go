@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"os"
@@ -53,9 +54,24 @@ func tunnelSystemdProperty(property string) string {
 
 func TestTunnelPrerequisitesAndDedicatedLifecycle(t *testing.T) {
 	a := tunnelFixture(t)
+	tokenBefore, err := os.ReadFile(a.path(TunnelTokenPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoBefore, err := os.Stat(a.path(TunnelTokenPath))
+	if err != nil {
+		t.Fatal(err)
+	}
 	authority, problem := a.PreflightTunnel(t.Context())
 	if problem != "" || !authority.Valid() {
 		t.Fatal("prerequisite refused", problem)
+	}
+	// Back/retry must safely reuse the protected prerequisite without replacing it.
+	again, problem := a.PreflightTunnel(t.Context())
+	tokenAfter, err := os.ReadFile(a.path(TunnelTokenPath))
+	infoAfter, statErr := os.Stat(a.path(TunnelTokenPath))
+	if problem != "" || again != authority || err != nil || statErr != nil || !bytes.Equal(tokenBefore, tokenAfter) || !os.SameFile(infoBefore, infoAfter) || infoBefore.Mode() != infoAfter.Mode() || infoBefore.ModTime() != infoAfter.ModTime() {
+		t.Fatal("repeated review changed the existing protected token")
 	}
 	if !a.InstallTunnel(t.Context(), authority) || !a.StartTunnel(t.Context(), authority) {
 		t.Fatal("dedicated connector did not start")

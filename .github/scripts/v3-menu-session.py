@@ -17,7 +17,7 @@ import time
 
 MAX_OUTPUT = 8 * 1024 * 1024
 PROMPTS = {
-    "Start setup": "Start proxy setup? [y/N]",
+    "Start setup": "Apply setup? [y/N]",
     "Finish cleanup": "Finish proxy cleanup? [y/N]",
     "Finish setup": "Finish proxy setup? [y/N]",
     "Enable subscription": "Enable subscription? [y/N]",
@@ -47,6 +47,8 @@ LINK_RESULTS = {
     "Enable subscription": "PROXY-INSTALLATION-SUBSCRIPTION-ENABLED",
     "Rotate subscription link": "PROXY-INSTALLATION-SUBSCRIPTION-LINK-ROTATED",
 }
+SETUP_CHOICE_PROMPT = "Connection [1] (h Help, c Cancel):"
+SETUP_REFUSAL_PROMPT = "Setup is not ready. r Retry checks, b Back, c Cancel:"
 
 
 class ProtocolError(Exception):
@@ -487,6 +489,11 @@ def drive(args, cancelled=None):
                           protected_wrapper=args.protected_wrapper)
     try:
         session.choose(args.label)
+        if args.mode == "action" and args.label == "Start setup":
+            # The qualification journey uses Standard. Never skip the exact
+            # wizard prompt or treat another profile/prompt as permission.
+            session.expect_prompt(SETUP_CHOICE_PROMPT)
+            session.write("1\n")
         if args.mode == "details":
             session.wait_unconfirmed_marker(DETAILS_PROMPT)
             session.write("\n")
@@ -502,7 +509,13 @@ def drive(args, cancelled=None):
             session.wait_code(args.expected)
         else:
             result_consumed = False
-            if args.confirmation == "yes":
+            if (args.label == "Start setup" and args.confirmation == "none" and
+                    args.expected == "PROXY-INSTALLATION-ACTION-REFUSED"):
+                session.expect_prompt(SETUP_REFUSAL_PROMPT, review_code=args.expected)
+                session.write("c\n")
+                session.wait_code("PROXY-INSTALLATION-ACTION-CANCELLED")
+                result_consumed = True
+            elif args.confirmation == "yes":
                 prompt = PROMPTS.get(args.label)
                 if prompt is None:
                     raise ProtocolError("confirmation-unsupported")

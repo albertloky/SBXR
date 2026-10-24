@@ -43,9 +43,10 @@ listeners or prove proxy traffic. Local artifacts are in
 
 ## Configuration and deployment inputs
 
-For fresh setup, select **Start setup with VMess WebSocket**, supply a lowercase
-hostname such as `tunnel.example.com`, review the plan, and confirm. Ordinary
-**Start setup** has no new prompt. The optional setup checks that TCP 10000 is
+For fresh setup, select **Start setup**, then **Standard + Cloudflare**. Follow
+the preparation steps, supply a lowercase hostname such as `tunnel.example.com`,
+review the plan and tunnel ID, then Apply. The default **Standard** choice needs
+no domain or token. The optional setup checks that TCP 10000 is
 unused at review and execution, and adds:
 
 | Boundary | Configuration |

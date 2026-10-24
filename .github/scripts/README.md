@@ -200,6 +200,17 @@ and when consuming output, including buffered lines and transcript writes.
 Failure cleanup retains its separate bounded quiescence budget; it does not
 extend the journey or permit late confirmation.
 
+`Start setup` now enters the numbered setup wizard. The qualification driver
+requires its exact default connection prompt, selects **Standard**, then requires
+**Apply setup? [y/N]** before sending `y`. It refuses a missing/changed wizard
+prompt or a prerequisite refusal without approving anything. The Go terminal
+tests also run this Python driver against the real terminal adapter over pipes;
+the adjacent Python tests retain deadline, refusal and descendant-cleanup checks.
+When explicitly observing an expected setup refusal without confirmation, the
+driver requires that exact refusal and Retry/Back/Cancel prompt, sends only `c`,
+then verifies cancellation and exits the returned menu within the original
+deadline. Unexpected review codes or confirmation prompts still refuse.
+
 The menu driver and packaged helpers share descendant cleanup.
 They prefer Linux's optional task `children` list and fall back to parent IDs in
 `/proc/PID/stat` when that interface is absent. Each signal uses a process handle
