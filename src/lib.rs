@@ -4,6 +4,7 @@ pub mod domain;
 pub mod durable;
 pub mod host;
 pub mod identity_generation;
+pub mod package_acquisition;
 pub mod private_roles;
 pub mod proxyinstallation;
 pub mod records;

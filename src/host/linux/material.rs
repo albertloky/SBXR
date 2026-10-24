@@ -9,6 +9,24 @@ pub struct SetupMaterial {
     pub(super) package_sha256: String,
 }
 impl SetupMaterial {
+    /// Acquired pinned material is consumed without exposing host mutation
+    /// authority. Identity generation still follows verified-input admission.
+    pub fn from_acquired_package(
+        package: crate::package_acquisition::VerifiedPackage,
+        entropy: &mut dyn crate::identity_generation::Entropy,
+    ) -> Result<Self, HostError> {
+        let (key, deb) = package.into_parts();
+        Self::generated_standard(key, deb, entropy)
+    }
+    /// Recovery keeps the existing exact configuration and Client Identity.
+    pub fn recover_acquired_package(
+        package: crate::package_acquisition::VerifiedPackage,
+        configuration: &[u8],
+    ) -> Result<Self, HostError> {
+        let (key, deb) = package.into_parts();
+        Self::recovered_standard(key, deb, configuration)
+    }
+
     /// Invalid pinned inputs fail before allocating any new Client Identity.
     pub fn generated_standard(
         key: Vec<u8>,
