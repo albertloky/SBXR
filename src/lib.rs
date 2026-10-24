@@ -5,6 +5,7 @@ pub mod host;
 pub mod identity_generation;
 pub mod proxyinstallation;
 pub mod records;
+pub mod release_identity;
 pub mod server_configuration;
 pub mod subscription_artifact;
 pub mod subscription_serving;
