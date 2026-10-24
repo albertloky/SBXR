@@ -23,3 +23,6 @@ pub mod terminal;
 #[cfg(test)]
 #[path = "proxyinstallation_tests.rs"]
 mod proxyinstallation_tests;
+
+pub mod disclosure;
+pub mod tunnel_setup;
