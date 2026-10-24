@@ -9,6 +9,10 @@ pub struct SetupMaterial {
     pub(super) package_sha256: String,
 }
 impl SetupMaterial {
+    pub fn configuration_sha256(&self) -> String {
+        sha256_hex(self.configuration.as_bytes())
+    }
+
     /// Acquired pinned material is consumed without exposing host mutation
     /// authority. Identity generation still follows verified-input admission.
     pub fn from_acquired_package(

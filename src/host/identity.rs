@@ -26,7 +26,11 @@ pub const STARTUP: &str = "etc/systemd/system/sing-box.service.d/sbxr-client-ide
 pub const STARTUP_DIR: &str = "etc/systemd/system/sing-box.service.d";
 pub const ARTIFACT: &str = "var/lib/sbxr/subscription-staging/client-artifact";
 pub trait IdentityRuntime: CommandRunner + PeerObservations + Sync {
-    fn reload_identity(&mut self, context: &StartContext) -> Result<(), HostError>;
+    fn reload_identity(
+        &mut self,
+        owner: &Arc<HostLock>,
+        context: &StartContext,
+    ) -> Result<(), HostError>;
     fn admit_identity(&self, record: &OwnershipRecord) -> Result<(), HostError>;
     fn subscription_route(&self, record: &OwnershipRecord) -> Result<bool, HostError>;
     fn identity_quiescence(&self, record: &OwnershipRecord) -> Result<ci::Quiescence, HostError>;
@@ -87,6 +91,27 @@ impl<B: PeerObservations> PeerObservations for View<'_, B> {
 impl<B: CommandRunner> CommandRunner for View<'_, B> {
     fn query(&self, q: Query, c: &CommandCancellation) -> Result<CommandOutput, HostError> {
         self.0.query(q, c)
+    }
+}
+impl<'a>
+    ProtectedIdentityHost<
+        'a,
+        super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>,
+    >
+{
+    pub fn native_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+        super::linux::require_native_environment()?;
+        let host = Self {
+            fs: ProtectedFs::native()?,
+            proof,
+            backend: super::owner_runtime::OwnerRuntime::native_unreleased(proof)?,
+            #[cfg(test)]
+            fault: None,
+        };
+        host.installed()
+            .map_err(refused)
+            .map_err(|_| HostError::Foreign)?;
+        Ok(host)
     }
 }
 impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
@@ -341,6 +366,9 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
 }
 impl<B: IdentityRuntime> ci::Host for ProtectedIdentityHost<'_, B> {
     type Guard = IdentityGuard;
+    fn native_host(&self) -> bool {
+        self.fs.path() == Path::new("/")
+    }
     fn acquire(&mut self) -> Result<IdentityGuard, ci::Error> {
         let owner = Arc::new(HostLock::existing(self.fs.path(), self.fs.uid).map_err(refused)?);
         let packages = owner.retain_packages().map_err(refused)?;
@@ -504,7 +532,17 @@ impl<B: IdentityRuntime> ci::Host for ProtectedIdentityHost<'_, B> {
         if self.fault == Some(IdentityFault::Before(effect)) {
             return Err(ci::Error::Effect);
         }
-        self.apply(g, effect, record, material)?;
+        let native = self.fs.path() == Path::new("/");
+        if native {
+            self.fs
+                .authorize_native_writes(Some(g.owner.clone()))
+                .map_err(refused)?;
+        }
+        let applied = self.apply(g, effect, record, material);
+        if native {
+            self.fs.authorize_native_writes(None).map_err(refused)?;
+        }
+        applied?;
         #[cfg(test)]
         if self.fault == Some(IdentityFault::After(effect)) {
             return Err(ci::Error::Effect);

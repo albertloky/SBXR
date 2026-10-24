@@ -66,7 +66,7 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
             }
             ci::Effect::Reload => self
                 .backend
-                .reload_identity(&Self::context())
+                .reload_identity(&g.owner, &Self::context())
                 .map_err(refused)?,
             ci::Effect::StopSource => {
                 let gate = self.gate(g)?;
@@ -239,7 +239,7 @@ impl<B: IdentityRuntime> ProtectedIdentityHost<'_, B> {
                         .map_err(refused)?;
                 }
                 self.backend
-                    .reload_identity(&Self::context())
+                    .reload_identity(&g.owner, &Self::context())
                     .map_err(refused)?;
             }
         }

@@ -1003,7 +1003,12 @@ impl crate::host::process::CommandRunner for ConditionRunner {
     }
 }
 impl crate::host::identity::IdentityRuntime for Backend {
-    fn reload_identity(&mut self, ctx: &StartContext) -> Result<(), HostError> {
+    fn reload_identity(
+        &mut self,
+        owner: &Arc<HostLock>,
+        ctx: &StartContext,
+    ) -> Result<(), HostError> {
+        owner.verify()?;
         ctx.check().map_err(|_| HostError::Cancelled)
     }
     fn admit_identity(&self, record: &OwnershipRecord) -> Result<(), HostError> {
@@ -1447,4 +1452,652 @@ fn concrete_identity_uncommitted_configuration_candidate_has_no_replacement_auth
         sha256_hex(&fs::read(root.0.join(CONFIG)).unwrap()),
         initial.configuration_sha256()
     );
+}
+
+// Native runtime logic is exercised through fixed command/process observations.
+// Commands are never executed; real files, lending, gates and TCP responses are.
+struct OwnerIoFixture {
+    backend: Mutex<Backend>,
+    role: AtomicUsize,
+    address: SocketAddr,
+    bad: AtomicUsize,
+}
+impl OwnerIoFixture {
+    fn new(
+        root: &Root,
+        a: Arc<AuthenticatedArchive>,
+        proof: Arc<AuthenticatedInstalled>,
+    ) -> Arc<Self> {
+        root.write(
+            "usr/bin/sing-box",
+            b"inert fixture package executable\n",
+            0o755,
+        );
+        root.write(
+            "usr/lib/systemd/system/sing-box.service",
+            include_bytes!("../host/owner_runtime/testdata/sing-box.service"),
+            0o644,
+        );
+        fs::create_dir_all(root.0.join("sys/fs/cgroup/system.slice")).unwrap();
+        fs::set_permissions(
+            root.0.join("sys/fs/cgroup/system.slice"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let socket = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = socket.local_addr().unwrap();
+        drop(socket);
+        let io = Arc::new(Self {
+            backend: Mutex::new(Backend::new(root, a, proof)),
+            role: AtomicUsize::new(0),
+            address,
+            bad: AtomicUsize::new(0),
+        });
+        io.cgroup(crate::host::owner_runtime::Unit::Proxy, true);
+        io.cgroup(crate::host::owner_runtime::Unit::Subscription, false);
+        io
+    }
+    fn cgroup(&self, u: crate::host::owner_runtime::Unit, running: bool) {
+        let b = self.backend.lock().unwrap();
+        let path = b.root.join(format!("sys/fs/cgroup{}", u.cgroup()));
+        fs::create_dir_all(&path).unwrap();
+        for (name, data) in [
+            (
+                "cgroup.events",
+                if running {
+                    b"populated 1\n".as_slice()
+                } else {
+                    b"populated 0\n".as_slice()
+                },
+            ),
+            (
+                "cgroup.procs",
+                if !running {
+                    b"".as_slice()
+                } else if u == crate::host::owner_runtime::Unit::Proxy {
+                    b"200\n".as_slice()
+                } else {
+                    b"123\n".as_slice()
+                },
+            ),
+        ] {
+            let p = path.join(name);
+            if p.exists() {
+                fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            fs::write(&p, data).unwrap();
+            fs::set_permissions(
+                p,
+                fs::Permissions::from_mode(if name == "cgroup.events" {
+                    0o444
+                } else {
+                    0o644
+                }),
+            )
+            .unwrap();
+        }
+    }
+    fn start_http(&self, channel: &std::path::Path, c: &StartContext) -> Result<(), HostError> {
+        let (root, proof) = {
+            let b = self.backend.lock().unwrap();
+            (b.root.clone(), b.proof.clone())
+        };
+        let uid = fs::metadata(&root).unwrap().uid();
+        let hash = proof.record().executable_sha256();
+        let owner = ProcessIdentity::new(100, 1, 1, uid, hash, "/owner.scope").unwrap();
+        let peers = ProxyPeers {
+            current: ProcessIdentity::new(
+                123,
+                100,
+                2,
+                uid,
+                hash,
+                runtime_handoff::SUBSCRIPTION_CGROUP,
+            )
+            .unwrap(),
+            other: owner.clone(),
+        };
+        let lock = runtime_handoff::acquire_runtime_start(
+            &root,
+            uid,
+            crate::private_roles::Role::SubscriptionServing,
+            &peers,
+            c,
+            || {
+                Ok((
+                    crate::host::runtime_io::connect_fixture(&root, channel, c)?,
+                    owner.clone(),
+                ))
+            },
+        )
+        .map_err(|_| HostError::Foreign)?;
+        drop(lock);
+        let r = OwnershipRecord::decode(
+            &fs::read(root.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        )
+        .unwrap();
+        let config = crate::server_configuration::ServerConfiguration::decode_supported(
+            &fs::read(root.join("etc/sing-box/config.json")).unwrap(),
+        )
+        .unwrap();
+        let authority = runtime_handoff::select_http_authority(&r, true).unwrap();
+        let token = fs::read_to_string(root.join(TOKEN)).unwrap();
+        let credential = SubscriptionCredential::parse(token.trim_end()).unwrap();
+        let state = crate::subscription_serving::State::prepare_http_loopback_fixture(
+            &root,
+            &config.connection_facts(r.public_ipv4()).unwrap(),
+            crate::subscription_serving::Generation::new(authority.link_id(), credential.sha256())
+                .unwrap(),
+        )
+        .unwrap();
+        let listener = TcpListener::bind(self.address).map_err(|_| HostError::Io)?;
+        let stop = Cancellation::new();
+        let shutdown = stop.clone();
+        let join = thread::spawn(move || Module::new().serve(Arc::new(state), listener, &shutdown));
+        self.backend.lock().unwrap().active = Some(Active {
+            stop,
+            join,
+            address: self.address,
+        });
+        self.cgroup(crate::host::owner_runtime::Unit::Subscription, true);
+        Ok(())
+    }
+}
+impl PeerObservations for OwnerIoFixture {
+    fn current(&self) -> Result<ProcessIdentity, runtime_handoff::Error> {
+        self.backend.lock().unwrap().current()
+    }
+    fn peer(&self, _: &UnixStream) -> Result<ProcessIdentity, runtime_handoff::Error> {
+        let b = self.backend.lock().unwrap();
+        let role = if self.role.load(Ordering::SeqCst) == 1 {
+            runtime_handoff::PROXY_CGROUP
+        } else {
+            runtime_handoff::SUBSCRIPTION_CGROUP
+        };
+        ProcessIdentity::new(
+            if role == runtime_handoff::PROXY_CGROUP {
+                124
+            } else {
+                123
+            },
+            100,
+            if role == runtime_handoff::PROXY_CGROUP {
+                3
+            } else {
+                2
+            },
+            fs::metadata(&b.root).unwrap().uid(),
+            b.proof.record().executable_sha256(),
+            role,
+        )
+    }
+}
+impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
+    fn query(
+        &self,
+        o: crate::host::owner_runtime::Observation,
+        c: &StartContext,
+    ) -> Result<crate::host::process::CommandOutput, HostError> {
+        use crate::host::owner_runtime::{Observation as O, Property as P, Unit as U};
+        c.check().map_err(|_| HostError::Cancelled)?;
+        let b = self.backend.lock().unwrap();
+        let mut code = 0;
+        let value = match o {
+            O::Package => "1.14.3 amd64 ii".into(),
+            O::Hold => "sing-box".into(),
+            O::UnitOwner => "sing-box: /usr/lib/systemd/system/sing-box.service".into(),
+            O::User => format!(
+                "sing-box:x:2000:{}::/var/lib/sing-box:/usr/sbin/nologin",
+                fs::metadata(&b.root).unwrap().gid()
+            ),
+            O::Group => format!("sing-box:x:{}:", fs::metadata(&b.root).unwrap().gid()),
+            O::Firewall => b.rules.clone(),
+            O::ProxyProcesses => {
+                if b.proxy {
+                    "200".into()
+                } else {
+                    code = 1;
+                    String::new()
+                }
+            }
+            O::Listener443 => {
+                if b.proxy {
+                    "LISTEN 0 4096 [::]:443 *:* users:((\"sing-box\",pid=200,fd=3))".into()
+                } else {
+                    String::new()
+                }
+            }
+            O::Listener8443 => {
+                if b.active.is_some() {
+                    "LISTEN 0 4096 8.8.8.8:8443 *:* users:((\"sbxr\",pid=123,fd=3))".into()
+                } else {
+                    String::new()
+                }
+            }
+            O::Property(u, p) => match p {
+                P::ActiveState => if if u == U::Proxy {
+                    b.proxy
+                } else if u == U::Subscription {
+                    b.active.is_some()
+                } else {
+                    b.rules.contains("sbxr-subscription")
+                } {
+                    "active"
+                } else {
+                    "inactive"
+                }
+                .into(),
+                P::MainPid => if u == U::Proxy && b.proxy {
+                    "200"
+                } else if u == U::Subscription && b.active.is_some() {
+                    "123"
+                } else {
+                    "0"
+                }
+                .into(),
+                P::ControlPid => "0".into(),
+                P::ControlGroup => u.cgroup().into(),
+                P::KillMode => if self.bad.load(Ordering::SeqCst) == 1 {
+                    "process"
+                } else {
+                    "control-group"
+                }
+                .into(),
+                P::FragmentPath => if u == U::Proxy {
+                    "/usr/lib/systemd/system/sing-box.service"
+                } else if u == U::Subscription {
+                    "/etc/systemd/system/sbxr-subscription.service"
+                } else {
+                    "/etc/systemd/system/sbxr-subscription-firewall.service"
+                }
+                .into(),
+                P::DropInPaths => {
+                    if u == U::Proxy && b.root.join(crate::host::identity::STARTUP).exists() {
+                        format!("/{}", crate::host::identity::STARTUP)
+                    } else {
+                        String::new()
+                    }
+                }
+                P::LoadState => "loaded".into(),
+                P::ExecCondition => CONDITION.into(),
+                P::ExecStart | P::ExecStop => {
+                    if u == U::Proxy {
+                        "{ path=/usr/bin/sing-box ; argv[]=/usr/bin/sing-box -D /var/lib/sing-box -C /etc/sing-box run ; ignore_errors=no }".into()
+                    } else if u == U::Subscription {
+                        "{ path=/usr/local/bin/sbxr ; argv[]=/usr/local/bin/sbxr --subscription-serving ; ignore_errors=no }".to_owned()
+                    } else {
+                        let body =
+                            crate::host::subscription::http_firewall_unit("8.8.8.8").unwrap();
+                        let body = std::str::from_utf8(&body).unwrap();
+                        let command = body
+                            .lines()
+                            .find_map(|l| {
+                                l.strip_prefix(if p == P::ExecStart {
+                                    "ExecStart="
+                                } else {
+                                    "ExecStop="
+                                })
+                            })
+                            .unwrap()
+                            .replacen("/bin/sh -ec '", "/bin/sh -ec ", 1);
+                        format!(
+                            "{{ path=/bin/sh ; argv[]={} ; ignore_errors=no }}",
+                            command.trim_end_matches('\'')
+                        )
+                    }
+                }
+            },
+        };
+        crate::host::process::CommandOutput::completed(code, value.into_bytes())
+    }
+    fn service(
+        &self,
+        a: ServiceAction,
+        owner: &Arc<HostLock>,
+        channel: Option<&std::path::Path>,
+        c: &StartContext,
+    ) -> Result<(), HostError> {
+        owner.verify()?;
+        c.check().map_err(|_| HostError::Cancelled)?;
+        match a {
+            ServiceAction::EnableSubscription
+            | ServiceAction::StartSubscription
+            | ServiceAction::RestartSubscription => {
+                self.backend.lock().unwrap().stop();
+                self.role.store(0, Ordering::SeqCst);
+                self.start_http(channel.ok_or(HostError::Unsafe)?, c)?;
+            }
+            ServiceAction::StartProxy | ServiceAction::RestartProxy => {
+                self.role.store(1, Ordering::SeqCst);
+                let b = self.backend.lock().unwrap();
+                let launch = ProxyLaunch {
+                    root: b.root.clone(),
+                    proof: b.proof.clone(),
+                    socket: channel.ok_or(HostError::Unsafe)?.into(),
+                };
+                drop(b);
+                launch
+                    .execute(ServiceAction::StartProxy, c)
+                    .map_err(|_| HostError::Foreign)?;
+                self.backend.lock().unwrap().proxy = true;
+                self.cgroup(crate::host::owner_runtime::Unit::Proxy, true);
+            }
+            ServiceAction::StopSubscription | ServiceAction::DisableSubscription => {
+                self.backend.lock().unwrap().stop();
+                self.cgroup(crate::host::owner_runtime::Unit::Subscription, false);
+            }
+            ServiceAction::StopProxy => {
+                self.backend.lock().unwrap().proxy = false;
+                self.cgroup(crate::host::owner_runtime::Unit::Proxy, false);
+            }
+            ServiceAction::EnableFirewall => {
+                let mut b = self.backend.lock().unwrap();
+                b.rules=b.rules.replace("COMMIT\n","-A INPUT -d 8.8.8.8/32 -p tcp -m tcp --dport 8443 -m comment --comment sbxr-subscription -j ACCEPT\nCOMMIT\n");
+            }
+            ServiceAction::DisableFirewall => {
+                let mut b = self.backend.lock().unwrap();
+                b.rules = b
+                    .rules
+                    .lines()
+                    .filter(|l| !l.contains("sbxr-subscription"))
+                    .map(|l| format!("{l}\n"))
+                    .collect();
+            }
+            ServiceAction::Reload => {}
+        }
+        owner.verify()
+    }
+    fn public_ipv4(&self, c: &StartContext) -> Result<Ipv4Addr, HostError> {
+        c.check().map_err(|_| HostError::Cancelled)?;
+        self.backend
+            .lock()
+            .unwrap()
+            .ip
+            .parse()
+            .map_err(|_| HostError::Foreign)
+    }
+    fn port_available(&self, p: u16, _: &StartContext) -> Result<bool, HostError> {
+        assert_eq!(p, 8443);
+        Ok(TcpListener::bind(self.address).is_ok())
+    }
+    fn process(&self, p: u32) -> Result<ProcessIdentity, HostError> {
+        let b = self.backend.lock().unwrap();
+        let mut hash = if p == 200 {
+            sha256_hex(&fs::read(b.root.join("usr/bin/sing-box")).unwrap())
+        } else {
+            b.proof.record().executable_sha256().into()
+        };
+        let bad = self.bad.load(Ordering::SeqCst);
+        if bad == 3 {
+            hash = "0".repeat(64);
+        }
+        ProcessIdentity::new(
+            p,
+            100,
+            if p == 200 { 4 } else { 2 },
+            if bad == 2 {
+                0
+            } else if p == 200 {
+                2000
+            } else {
+                fs::metadata(&b.root).unwrap().uid()
+            },
+            &hash,
+            if bad == 4 {
+                "/foreign.scope"
+            } else if p == 200 {
+                runtime_handoff::PROXY_CGROUP
+            } else {
+                runtime_handoff::SUBSCRIPTION_CGROUP
+            },
+        )
+        .map_err(|_| HostError::Foreign)
+    }
+}
+struct ComposedSources<'a> {
+    root: &'a Root,
+    proof: &'a AuthenticatedInstalled,
+    io: Arc<OwnerIoFixture>,
+}
+impl<'a> OwnerSources<'a> for ComposedSources<'a> {
+    fn journeys(&self) -> Result<Vec<Journey>, HostError> {
+        let r = OwnershipRecord::decode(
+            &fs::read(self.root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        )
+        .unwrap();
+        Ok(if crate::client_identity::rotation(&r).is_ok() {
+            vec![Journey::Identity]
+        } else {
+            vec![Journey::Http, Journey::Identity]
+        })
+    }
+    fn open(&self, j: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
+        let runtime = crate::host::owner_runtime::OwnerRuntime::injected(
+            &self.root.0,
+            self.proof,
+            self.io.clone(),
+            self.io.address,
+        )?;
+        match j {
+            Journey::Http => Ok(Box::new(HttpInstallation::with_entropy(
+                ProtectedHttpHost::injected(&self.root.0, self.proof, runtime)?,
+                self.proof.record().release_identity(),
+                Box::new(crate::identity_generation::OsEntropy),
+            )?)),
+            Journey::Identity => Ok(Box::new(ClientIdentityInstallation::with_entropy(
+                crate::host::identity::ProtectedIdentityHost::injected(
+                    &self.root.0,
+                    self.proof,
+                    runtime,
+                )?,
+                Box::new(crate::identity_generation::OsEntropy),
+            ))),
+            _ => Err(HostError::LiveUnavailable),
+        }
+    }
+    fn mode(&self) -> ExecutionMode {
+        ExecutionMode::InjectedHost
+    }
+}
+#[test]
+fn composed_owner_uses_native_runtime_logic_and_switches_writers_without_stale_authority() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let status = owner.review(Action::Status);
+    assert!(status.legal_actions.contains(&Action::EnableSubscription));
+    assert!(status.legal_actions.contains(&Action::RotateClientIdentity));
+    let stale = owner.review(Action::EnableSubscription).prepared.unwrap();
+    owner.review(Action::ViewDetails);
+    assert_eq!(
+        owner.execute(stale, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    let selected = owner.review(Action::EnableSubscription).prepared.unwrap();
+    assert_eq!(
+        owner.execute(selected, Confirmation::Approved).outcome,
+        Outcome::SubscriptionEnabled,
+        "{:?}",
+        OwnershipRecord::decode(
+            &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap()
+        )
+        .unwrap()
+        .http_operation()
+    );
+    let link = owner.take_subscription_link().unwrap();
+    let token = fs::read(root.0.join(TOKEN)).unwrap();
+    let selected = owner.review(Action::RotateClientIdentity).prepared.unwrap();
+    assert_eq!(
+        owner.execute(selected, Confirmation::Approved).outcome,
+        Outcome::ClientIdentityRotated
+    );
+    assert_eq!(fs::read(root.0.join(TOKEN)).unwrap(), token);
+    assert_eq!(owner.subscription_status(), "Available");
+    assert!(
+        io.backend
+            .lock()
+            .unwrap()
+            .request(link.as_str().split("/s/").nth(1).unwrap())
+            .starts_with(b"HTTP/1.1 200")
+    );
+    let selected = owner
+        .review(Action::RotateSubscriptionLink)
+        .prepared
+        .unwrap();
+    assert_eq!(
+        owner.execute(selected, Confirmation::Approved).outcome,
+        Outcome::SubscriptionLinkRotated
+    );
+}
+#[test]
+fn unowned_busy_serving_runtime_never_becomes_enablement_authority() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = archive
+        .bind_current(
+            archive.executable(),
+            archive.executable(),
+            &crate::artifact_trust::SelectionBudget::new(),
+        )
+        .unwrap();
+    let mut m = module(&root, &proof, archive);
+    m.host_mut().backend_mut().quiescence_blocked = true;
+    assert!(m.review(Action::EnableSubscription).prepared.is_none());
+    assert!(m.host().backend().trace.is_empty());
+}
+
+#[test]
+fn composed_identity_rotation_repairs_independent_serving_fault_without_changing_link() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let r = owner.review(Action::EnableSubscription);
+    assert_eq!(
+        owner
+            .execute(r.prepared.unwrap(), Confirmation::Approved)
+            .outcome,
+        Outcome::SubscriptionEnabled
+    );
+    let credential = fs::read(root.0.join(TOKEN)).unwrap();
+    io.backend.lock().unwrap().stop();
+    io.cgroup(crate::host::owner_runtime::Unit::Subscription, false);
+    let r = owner.review(Action::RotateClientIdentity);
+    assert!(r.prepared.is_some());
+    assert_eq!(
+        owner
+            .execute(r.prepared.unwrap(), Confirmation::Approved)
+            .outcome,
+        Outcome::ClientIdentityRotated
+    );
+    assert_eq!(fs::read(root.0.join(TOKEN)).unwrap(), credential);
+    assert_eq!(owner.subscription_status(), "Available");
+}
+
+#[test]
+fn native_runtime_rejects_wrong_process_uid_image_and_cgroup_before_owner_effects() {
+    for bad in [2, 3, 4] {
+        let root = Root::new();
+        let archive = Arc::new(crate::release_acquisition::fixture_archive());
+        let original = root.setup(&archive).encode().unwrap();
+        let proof = Arc::new(
+            archive
+                .bind_current(
+                    archive.executable(),
+                    archive.executable(),
+                    &crate::artifact_trust::SelectionBudget::new(),
+                )
+                .unwrap(),
+        );
+        let io = OwnerIoFixture::new(&root, archive, proof.clone());
+        io.bad.store(bad, Ordering::SeqCst);
+        let owner = OwnerInstallation::new(ComposedSources {
+            root: &root,
+            proof: &proof,
+            io,
+        });
+        assert!(
+            owner.review(Action::EnableSubscription).prepared.is_none(),
+            "bad proof {bad}"
+        );
+        assert_eq!(
+            fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+            original
+        );
+    }
+}
+#[test]
+fn native_identity_stop_refuses_foreign_kill_mode_without_revoking_source() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    let original = root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let r = owner.review(Action::RotateClientIdentity);
+    assert!(r.prepared.is_some());
+    io.bad.store(1, Ordering::SeqCst);
+    assert_eq!(
+        owner
+            .execute(r.prepared.unwrap(), Confirmation::Approved)
+            .outcome,
+        Outcome::ClientIdentityRotationIncomplete
+    );
+    let record = OwnershipRecord::decode(
+        &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        crate::client_identity::rotation(&record)
+            .unwrap()
+            .checkpoint,
+        crate::client_identity::Checkpoint::Gated
+    );
+    assert_eq!(
+        record.configuration_sha256(),
+        original.configuration_sha256()
+    );
+    assert!(io.backend.lock().unwrap().proxy);
 }

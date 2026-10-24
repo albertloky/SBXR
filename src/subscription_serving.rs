@@ -80,6 +80,19 @@ pub struct State {
 }
 
 impl State {
+    #[cfg(test)]
+    pub(crate) fn prepare_http_loopback_fixture(
+        root: &std::path::Path,
+        facts: &ConnectionFacts,
+        generation: Generation,
+    ) -> Result<Self, Code> {
+        if !root.is_absolute() || root == std::path::Path::new("/") {
+            return Err(Code::Refused);
+        }
+        let mut state = Self::prepare_http(facts, generation)?;
+        state.ipv4 = Ipv4Addr::LOCALHOST;
+        Ok(state)
+    }
     pub fn prepare_http(facts: &ConnectionFacts, generation: Generation) -> Result<Self, Code> {
         let artifact = facts.subscription_artifact().map_err(|_| Code::Refused)?;
         Ok(Self {

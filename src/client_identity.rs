@@ -513,6 +513,9 @@ impl Quiescence {
 /// exclusion. An implementation must verify that guard before and after effects.
 /// Errors carry no command output, filenames, credentials or supplied text.
 pub trait Host {
+    fn native_host(&self) -> bool {
+        false
+    }
     type Guard;
     fn acquire(&mut self) -> Result<Self::Guard, Error>;
     fn verify_guard(&mut self, guard: &Self::Guard) -> Result<(), Error>;

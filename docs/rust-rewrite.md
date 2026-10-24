@@ -149,11 +149,11 @@ without enabling in-place Go-to-Rust migration.
 
 | Path | Implemented now | Concrete remaining completion |
 |---|---|---|
-| Native public entry and Standard setup/recovery | Shared Review/Execute, wizard/default-No, durable setup and direction, real protected file/system adapters, identity generation and pinned acquisition; fixture end-to-end checks | Wire installed native zero-argument frontend and acquired/generated/recovered inputs to StandardInstallation, including product progress/errors and actual sing-box validation. Public entry remains explicitly simulated. |
+| Native public entry and Standard setup/recovery | Shared Review/Execute and composed Owner routing; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Connect the qualified public entry and remaining owners. Early native setup cleanup with no saved canonical configuration still refuses instead of regenerating it. Native effects and new Linux branches remain unvalidated; public entry stays simulated. |
 | Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
-| HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Implement native HTTP runtime observations/effects (loaded units/firewall, readiness and quiescence), compose into the native Owner frontend and qualify on Linux. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
-| Client Identity and client disclosure | Sequential durable rotation/recovery, shared Interface/menu, protected target/configuration/startup files, exact one-use proxy cutover, HTTP artifact refresh with unchanged link, strict Standard+VMess runtime decoding | Supply qualified native identity runtime effects/observations and compromise flow; complete client configuration/link redisclosure, details/status and display-incomplete journeys. Explicit staged-record retry and historical HTTPS certificate selection are absent. |
-| Optional VMess/tunnel | Rendering, client artifacts, identity generation and strict tunnel authority records | Dedicated owner-installed cloudflared prerequisite/ownership inspection, setup/recovery effects, bounded connection probe and product journey. No general protocol plug-in architecture. |
+| HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Connect the qualified public entry and validate actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
+| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | Qualify native runtime and wire the disclosure protected Host/output/terminal path. Explicit staged-record retry and historical HTTPS certificate selection remain absent. |
+| Optional VMess/tunnel | Rendering, client artifacts, identity generation, strict authority plus setup/recovery/check orchestration and probe session contracts | Connect guarded native connector and real local/public WS plus authenticated VMess-only egress probes to the Owner frontend; qualify the optional profile. No general protocol plug-in architecture. |
 | Removal and Software Lifecycle | Standard removal/finalizer model and injected effects; signed exact-release acquisition and missing-member restoration in injected roots | Auxiliary removal and native restored-finisher launch/authentication; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
 | Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
 | Deployment qualification | Local tests and parent Linux evidence for its named earlier snapshot | All five current live journeys for the exact packaged Rust candidate, followed by any separately authorized signing/publication. No local test result is deployment qualification. |
@@ -1142,3 +1142,81 @@ exactly and affected tests passed. Evidence is
 `.scratch/acceptance/rust-runtime/http-owner-outcome.json`; committed Go source
 remains byte-identical to the provenance commit. No new Linux or live pass is
 claimed.
+
+
+## Native Owner runtime and composed frontend increment
+
+`OwnerRuntime<I: OwnerIo>` implements the HTTP and Client Identity runtime
+contracts with one closed native command vocabulary. `NativeIo` runs only fixed
+systemd/package/listener/process queries and fixed service actions, with verified
+executable identity, sanitized environment, bounded output/deadlines, cancellation
+and process-group cleanup. Firewall executable proof supports only the protected
+Ubuntu nft/legacy alternatives chain. No arbitrary shell command or caller argv
+is accepted. Native constructors require the supported Linux/root environment
+and authenticated installed/executing bytes; injected constructors remain
+separate and cannot select `/`.
+
+The runtime checks the pinned package/hold, exact package unit, loaded fragments,
+drop-ins/ExecStart, separately resolved service UID/GID, actual process image and
+cgroup, MainPID and PID-bound listener. Readiness uses bounded real HTTP, exact
+headers/artifact bytes and stable process identity after the response. Shutdown
+checks inactive/zero PID, process/listener absence and fresh cgroup population;
+stop completion alone never proves quiescence. Service actions compose the
+existing controller, retained Owner descriptor lending and exact one-use cutover
+gate. Independent serving health failure does not disable Client Identity review;
+its known start route is proved before cutover and the selected artifact is
+proved afterward.
+
+Ordinary file readers retain one-link, exact mode and size stability checks.
+Fixed cgroup virtual files have a separate bounded reader because their reported
+size can be zero while reads return data; it retains protected parents,
+owner/group/type/link/inode checks. The private serving/sandbox and shutdown
+observers now use that reader. Native protected writes are scoped to the retained
+Owner; identity effects clear the filesystem write lease even on error, so a
+later review cannot retain abandoned exclusion.
+
+`OwnerInstallation<S: OwnerSources>` composes the existing concrete Interfaces.
+A later Review discards the previous selected module before opening another
+writer. Only the selected module and its opaque prepared action survive until
+Execute; source modules still perform their own fresh admission/CAS checks.
+`NativeOwnerSources` opens typed native HTTP/identity adapters and prepares
+Standard inputs from pinned package acquisition and exact saved configuration.
+It caches only the public key/DEB bytes and revalidates their compiled pins when
+forming material. Early setup recovery without saved exact configuration refuses.
+Native removal remains unavailable: removing an installation must not acquire a
+package or probe external destinations just to build its adapter. Public
+zero-argument dispatch remains the explicitly labeled simulator until the missing
+owners, build identity and qualification are complete.
+
+The disclosure and tunnel modules are exported normally. Their 20 and 19 tests
+pass in the shared suite. They remain orchestration implementations, not native
+Owner flows: disclosure still needs its independently proved protected Host and
+terminal output sink; tunnel still needs connector effects and a real probe
+session that proves trusted public WS and authenticated VMess-only egress, stable
+probe process and cleanup. A service-running observation never substitutes for
+connection verification.
+
+The native/composed fixture uses real protected files, locks, descriptor lending,
+cutover consumption, the actual HTTP module and its default production rate
+limiter; only command/process/public-IP observations and effects are injected.
+Its test-only state constructor changes the loopback bind address while retaining
+production artifact bytes, and is absent from production builds. Enable -> Client
+Identity rotation -> link rotation works across writer lifetimes. An independent
+serving fault is recovered without changing the link. UID/image/cgroup and kill
+mode refusals preserve source authority. The process UID is a separate synthetic
+service identity, so these fixture tests also support a root test runner without
+pretending the proxy runs as root.
+
+Validation passed the full 428-test offline suite, then all 14 affected native
+tests after two provenance cases were added (430 distinct product cases). A
+skipped service-UID check was caught by the new regression; exact source was
+restored and affected tests passed. The actual-module composed journey passed
+three repeated runs. Native systemd/firewall/cgroup execution and the latest
+Linux build remain unvalidated. Evidence is under
+`.scratch/acceptance/rust-owner/`; there were no live effects, transfers or
+publication actions.
+
+The property-query behavior is checked against the
+[systemd v255 show implementation](https://raw.githubusercontent.com/systemd/systemd/v255/src/systemctl/systemctl-show.c):
+property mode is distinct from status/help handling for an inactive missing unit.
+This source check does not substitute for executing the native adapter on Linux.

@@ -24,12 +24,8 @@ impl ServingEnvironment for NativeServingEnvironment {
             super::super::linux::require_native_environment().map_err(refused)?;
             let pid = std::process::id();
             let fs = ProtectedFs::native().map_err(refused)?;
-            let (procs, _) = fs
-                .raw(
-                    "sys/fs/cgroup/system.slice/sbxr-subscription.service/cgroup.procs",
-                    Mode::from_raw_mode(0o644),
-                    4096,
-                )
+            let procs = fs
+                .cgroup_bytes(crate::host::owner_runtime::Unit::Subscription, false)
                 .map_err(refused)?
                 .ok_or(Error::Refused)?;
             if procs.len() >= 4096
@@ -92,14 +88,9 @@ impl ServingEnvironment for NativeServingEnvironment {
             .map(access);
             let cgroup_procs = ProtectedFs::native()
                 .map_err(refused)?
-                .raw(
-                    "sys/fs/cgroup/system.slice/sbxr-subscription.service/cgroup.procs",
-                    Mode::from_raw_mode(0o644),
-                    4096,
-                )
+                .cgroup_bytes(crate::host::owner_runtime::Unit::Subscription, false)
                 .map_err(refused)?
-                .ok_or(Error::Refused)?
-                .0;
+                .ok_or(Error::Refused)?;
             let proof = ServingSandbox {
                 effective_uid: process.uid,
                 process,

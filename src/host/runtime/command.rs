@@ -2,7 +2,7 @@
 use super::super::process::Cancellation as CommandCancellation;
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
-pub(super) fn run<T>(
+pub(in crate::host) fn run<T>(
     context: &StartContext,
     effect: impl FnOnce(&CommandCancellation) -> Result<T, HostError>,
 ) -> Result<T, Error> {

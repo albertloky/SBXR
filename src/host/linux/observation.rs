@@ -153,7 +153,9 @@ impl NativeObserver {
         read_configuration(&self.fs, &self.runner, expected_sha256, stop)
     }
 }
-pub(super) fn read_ownership(fs: &ProtectedFs) -> Result<Option<OwnershipRecord>, HostError> {
+pub(in crate::host) fn read_ownership(
+    fs: &ProtectedFs,
+) -> Result<Option<OwnershipRecord>, HostError> {
     if fs.metadata("var/lib/sbxr")?.is_none() {
         return Ok(None);
     }

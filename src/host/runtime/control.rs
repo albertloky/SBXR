@@ -12,6 +12,10 @@ pub enum ServiceAction {
     StartProxy,
     RestartProxy,
     Reload,
+    EnableFirewall,
+    DisableFirewall,
+    DisableSubscription,
+    StopProxy,
 }
 impl ServiceAction {
     pub fn arguments(self) -> &'static [&'static str] {
@@ -23,6 +27,10 @@ impl ServiceAction {
             Self::StartProxy => &["start", "sing-box.service"],
             Self::RestartProxy => &["restart", "sing-box.service"],
             Self::Reload => &["daemon-reload"],
+            Self::EnableFirewall => &["enable", "--now", "sbxr-subscription-firewall.service"],
+            Self::DisableFirewall => &["disable", "--now", "sbxr-subscription-firewall.service"],
+            Self::DisableSubscription => &["disable", "--now", "sbxr-subscription.service"],
+            Self::StopProxy => &["stop", "sing-box.service"],
         }
     }
     fn role(self) -> Result<Role, Error> {
@@ -126,6 +134,24 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
             peers,
             commands,
             socket: Some(socket),
+        };
+        controller.verify().map_err(|_| HostError::Foreign)?;
+        Ok(controller)
+    }
+    pub(in crate::host) fn native_with_commands(
+        authenticated: &'a AuthenticatedInstalled,
+        owner: Arc<HostLock>,
+        peers: P,
+        commands: C,
+    ) -> Result<Self, HostError> {
+        super::super::linux::require_native_environment()?;
+        let controller = Self {
+            files: RuntimeFiles::native(authenticated)?,
+            authenticated,
+            owner,
+            peers,
+            commands,
+            socket: None,
         };
         controller.verify().map_err(|_| HostError::Foreign)?;
         Ok(controller)
@@ -296,16 +322,9 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
         let events = self
             .files
             .fs
-            .raw(
-                "sys/fs/cgroup/system.slice/sbxr-subscription.service/cgroup.events",
-                Mode::from_raw_mode(0o444),
-                4096,
-            )
+            .cgroup_bytes(crate::host::owner_runtime::Unit::Subscription, true)
             .map_err(refused)?;
-        if events
-            .as_ref()
-            .is_some_and(|(bytes, _)| !quiet_events(bytes))
-        {
+        if events.as_ref().is_some_and(|bytes| !quiet_events(bytes)) {
             return Ok(false);
         }
         let Ok(listener) = std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 8443))
@@ -315,18 +334,12 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
         let current = self
             .files
             .fs
-            .raw(
-                "sys/fs/cgroup/system.slice/sbxr-subscription.service/cgroup.events",
-                Mode::from_raw_mode(0o444),
-                4096,
-            )
+            .cgroup_bytes(crate::host::owner_runtime::Unit::Subscription, true)
             .map_err(refused)?;
         self.verify()?;
         context.check()?;
         drop(listener);
-        Ok(current
-            .as_ref()
-            .is_none_or(|(bytes, _)| quiet_events(bytes)))
+        Ok(current.as_ref().is_none_or(|bytes| quiet_events(bytes)))
     }
 }
 

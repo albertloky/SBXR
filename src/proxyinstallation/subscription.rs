@@ -46,7 +46,15 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
         release: ReleaseIdentity,
         entropy: Box<dyn Entropy>,
     ) -> HostResult<Self, HostError> {
-        if host.root() == std::path::Path::new("/") {
+        Self::open(host, release, entropy, false)
+    }
+    fn open(
+        host: H,
+        release: ReleaseIdentity,
+        entropy: Box<dyn Entropy>,
+        native: bool,
+    ) -> HostResult<Self, HostError> {
+        if host.root() == std::path::Path::new("/") && !native {
             return Err(HostError::LiveUnavailable);
         }
         let store = OwnershipStore::open(&host.root().join("var/lib/sbxr"), host.uid())
@@ -71,6 +79,13 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
     }
     pub fn into_host(self) -> H {
         self.host
+    }
+    fn mode(&self) -> ExecutionMode {
+        if self.host.root() == std::path::Path::new("/") {
+            ExecutionMode::NativeUnavailable
+        } else {
+            ExecutionMode::InjectedHost
+        }
     }
     pub fn cancellation(&self) -> Cancellation {
         self.stop.clone()
@@ -385,12 +400,31 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
         }
     }
 }
+impl<'a>
+    HttpInstallation<
+        crate::host::subscription::ProtectedHttpHost<
+            'a,
+            crate::host::owner_runtime::OwnerRuntime<'a, crate::host::owner_runtime::NativeIo>,
+        >,
+    >
+{
+    pub fn native_unreleased(
+        proof: &'a crate::release_acquisition::AuthenticatedInstalled,
+    ) -> HostResult<Self, HostError> {
+        Self::open(
+            crate::host::subscription::ProtectedHttpHost::native_unreleased(proof)?,
+            proof.record().release_identity(),
+            Box::new(OsEntropy),
+            true,
+        )
+    }
+}
 impl<H: SubscriptionHost> Interface for HttpInstallation<H> {
     fn review(&self, action: Action) -> Review {
         *self.owner.borrow_mut() = Rc::new(());
         let state = self.state();
         let Ok(state) = state else {
-            return Review{mode:ExecutionMode::InjectedHost,status:Status::ProblemDetected,details:vec!["HTTP authority or protected host facts could not be verified; preserve unknown resources.".into()],legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("HTTP subscription authority cannot be verified."),prepared:None};
+            return Review{mode:self.mode(),status:Status::ProblemDetected,details:vec!["HTTP authority or protected host facts could not be verified; preserve unknown resources.".into()],legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("HTTP subscription authority cannot be verified."),prepared:None};
         };
         let subscription_status = Self::status_for(&state);
         let prepared = if state.actions.contains(&action) && action != Action::ViewDetails {
@@ -413,7 +447,7 @@ impl<H: SubscriptionHost> Interface for HttpInstallation<H> {
             _=>vec![],
         };
         Review {
-            mode: ExecutionMode::InjectedHost,
+            mode: self.mode(),
             status: Status::Running,
             details: vec![format!(
                 "HTTP subscription: {}. Proxy configuration remains bound to its Ownership Record.",

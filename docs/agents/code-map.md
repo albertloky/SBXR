@@ -41,7 +41,15 @@ Client Identity orchestration is `src/client_identity.rs`, shared Owner bridge
 `src/host/filesystem/subscription.rs`; ordinary protected reads still reject all
 hardlinks. The Owner tests in `src/proxyinstallation/subscription_tests.rs` compose
 real local HTTP, locks and cutover consumption with injected system effects.
-These hosts reject `/`; native public Owner dispatch remains closed.
+The injected constructors reject `/`; typed native constructors now use
+`src/host/owner_runtime.rs` and its command/observation/probe/effect submodules.
+The composed Interface is `src/proxyinstallation/owner.rs`; native authenticated
+sources are `src/host/owner.rs`. Only one selected journey retains its writer and
+prepared authority. Native public Owner dispatch remains closed. Fixed cgroup
+virtual reads use `src/host/filesystem/runtime.rs` without changing ordinary
+record/file validation. `src/disclosure.rs` and `src/tunnel_setup.rs` hold the
+completed orchestration modules; their native host/frontend integration remains
+separate work.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

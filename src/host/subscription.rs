@@ -110,6 +110,22 @@ pub struct ProtectedHttpHost<'a, B> {
     owner: Option<Arc<HostLock>>,
     fault: Option<HttpFault>,
 }
+impl<'a>
+    ProtectedHttpHost<'a, super::owner_runtime::OwnerRuntime<'a, super::owner_runtime::NativeIo>>
+{
+    pub fn native_unreleased(authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+        super::linux::require_native_environment()?;
+        let host = Self {
+            fs: ProtectedFs::native()?,
+            authenticated,
+            backend: super::owner_runtime::OwnerRuntime::native_unreleased(authenticated)?,
+            owner: None,
+            fault: None,
+        };
+        host.installed()?;
+        Ok(host)
+    }
+}
 impl<'a, B: HttpRuntime> ProtectedHttpHost<'a, B> {
     pub fn injected(
         root: &Path,

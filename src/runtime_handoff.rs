@@ -223,7 +223,7 @@ fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Error> {
     }
 }
 #[cfg(target_os = "linux")]
-fn linux_process(pid: u32) -> Result<ProcessIdentity, Error> {
+pub(crate) fn linux_process(pid: u32) -> Result<ProcessIdentity, Error> {
     let directory = PathBuf::from(format!("/proc/{pid}"));
     let before = read_bounded(&directory.join("stat"), 8192)?;
     let (parent, ticks) = parse_process_stat(&before, pid)?;
@@ -263,7 +263,7 @@ fn linux_process(pid: u32) -> Result<ProcessIdentity, Error> {
     Ok(result)
 }
 #[cfg(not(target_os = "linux"))]
-fn linux_process(_: u32) -> Result<ProcessIdentity, Error> {
+pub(crate) fn linux_process(_: u32) -> Result<ProcessIdentity, Error> {
     Err(Error::Refused)
 }
 

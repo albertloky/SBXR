@@ -165,7 +165,18 @@ impl<R: CommandRunner> LinuxHost<R> {
         network: super::network::NetworkAdmission,
     ) -> Result<Self, HostError> {
         require_native_environment()?;
-        if !runner.native_effects() || !network.bind_proved() || !network.destination().compatible()
+        let direction =
+            observation::read_ownership(&ProtectedFs::native()?)?.map(|r| r.recovery_direction());
+        let require_bind = !matches!(
+            direction,
+            Some(
+                crate::records::RecoveryDirection::FinishSetup
+                    | crate::records::RecoveryDirection::None
+            )
+        );
+        if !runner.native_effects()
+            || require_bind && !network.bind_proved()
+            || !network.destination().compatible()
         {
             return Err(HostError::LiveUnavailable);
         }

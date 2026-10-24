@@ -1,5 +1,5 @@
 //! Private-role protected-file integration. Injected roots remain explicit fixtures.
-mod command;
+pub(in crate::host) mod command;
 mod native_dispatch;
 mod shutdown;
 pub use native_dispatch::NativePrivateRuntime;

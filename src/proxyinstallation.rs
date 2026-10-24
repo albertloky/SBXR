@@ -2,6 +2,8 @@
 //! Explicit simulation and filesystem-fixture adapters share Review/Execute.
 //! Public native setup remains unavailable. Native library adapters and private
 //! dispatch require their explicit installed/release prerequisites.
+mod owner;
+pub use owner::{Journey, OwnerInstallation, OwnerSources};
 mod fixture;
 pub use fixture::{FixtureInstallation, StandardInstallation};
 mod identity;
@@ -42,6 +44,7 @@ enum PreparedBasis {
     Removal(crate::removal::PreparedRemoval),
     Subscription(subscription::HttpPrepared),
     ClientIdentity(identity::ClientPrepared),
+    Owner(Box<owner::OwnerPrepared>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

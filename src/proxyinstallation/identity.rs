@@ -39,6 +39,13 @@ impl<H: ci::Host> ClientIdentityInstallation<H> {
     pub fn cancellation(&self) -> Cancellation {
         self.stop.clone()
     }
+    fn mode(&self) -> ExecutionMode {
+        if self.host.borrow().native_host() {
+            ExecutionMode::NativeUnavailable
+        } else {
+            ExecutionMode::InjectedHost
+        }
+    }
     fn state(&self) -> HostResult<OwnershipRecord, ci::Error> {
         let mut host = self.host.borrow_mut();
         let guard = host.acquire()?;
@@ -83,7 +90,7 @@ impl<H: ci::Host> Interface for ClientIdentityInstallation<H> {
         *self.owner.borrow_mut() = Rc::new(());
         let Ok(record) = self.state() else {
             return Review {
-                mode: ExecutionMode::InjectedHost,
+                mode: self.mode(),
                 status: Status::ProblemDetected,
                 details: vec![
                     "Client Identity host or durable authority could not be verified.".into(),
@@ -117,7 +124,7 @@ impl<H: ci::Host> Interface for ClientIdentityInstallation<H> {
                 });
             }
         }
-        Review{mode:ExecutionMode::InjectedHost,status:if pending{Status::ChangeIncomplete}else{Status::Running},details:vec!["Client Identity material stays redacted. A newer Review expires all earlier prepared authority.".into()],legal_actions:vec![Action::ViewDetails,selected],plan:vec![if pending{"Finish only the durably selected cleanup/forward direction; never regenerate or restore a revoked identity.".into()}else{"Change both protocol UUIDs sequentially with no overlap. Preserve REALITY keys and independent Subscription Link credential. Stop descendants and accepted work before revocation.".into()}],refusal:if action==selected&&prepared.is_none(){Some("Fresh Client Identity admission failed.")}else{None},prepared}
+        Review{mode:self.mode(),status:if pending{Status::ChangeIncomplete}else{Status::Running},details:vec!["Client Identity material stays redacted. A newer Review expires all earlier prepared authority.".into()],legal_actions:vec![Action::ViewDetails,selected],plan:vec![if pending{"Finish only the durably selected cleanup/forward direction; never regenerate or restore a revoked identity.".into()}else{"Change both protocol UUIDs sequentially with no overlap. Preserve REALITY keys and independent Subscription Link credential. Stop descendants and accepted work before revocation.".into()}],refusal:if action==selected&&prepared.is_none(){Some("Fresh Client Identity admission failed.")}else{None},prepared}
     }
     fn execute(
         &mut self,

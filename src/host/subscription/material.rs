@@ -341,7 +341,10 @@ impl<B: HttpRuntime> SubscriptionHost for ProtectedHttpHost<'_, B> {
             });
         Ok(HttpObservation {
             fingerprint: sha256_hex(fingerprint.as_bytes()),
-            absent: absent && firewall(&facts.firewall_rules, record.public_ipv4(), false),
+            absent: absent
+                && facts.quiescent
+                && !facts.serving_running
+                && firewall(&facts.firewall_rules, record.public_ipv4(), false),
             material: material && firewall(&facts.firewall_rules, record.public_ipv4(), true),
             serving,
             proxy: facts.proxy_running,
@@ -352,10 +355,17 @@ impl<B: HttpRuntime> SubscriptionHost for ProtectedHttpHost<'_, B> {
         if self.owner.is_some() {
             return Err(HostError::Busy);
         }
-        self.owner = Some(Arc::new(HostLock::existing(self.fs.path(), self.fs.uid)?));
+        let owner = Arc::new(HostLock::existing(self.fs.path(), self.fs.uid)?);
+        if self.fs.path() == Path::new("/") {
+            self.fs.authorize_native_writes(Some(owner.clone()))?;
+        }
+        self.owner = Some(owner);
         Ok(())
     }
     fn end_change(&mut self) {
+        if self.fs.path() == Path::new("/") {
+            let _ = self.fs.authorize_native_writes(None);
+        }
         self.owner = None;
     }
     fn effect(
