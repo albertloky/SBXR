@@ -1,0 +1,1 @@
+{"add":"tunnel.example.com","aid":"0","host":"tunnel.example.com","id":"12345678-1234-4234-8234-123456789abc","net":"ws","path":"/sbxr-vmess","port":"443","ps":"SBXR VMess (tunnel.example.com)","scy":"auto","sni":"tunnel.example.com","tls":"tls","type":"none","v":"2"}

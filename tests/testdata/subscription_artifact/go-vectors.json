@@ -1,0 +1,990 @@
+[
+  {
+    "name": "standard",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "ip-a",
+    "facts": {
+      "PublicIPv4": "127.0.0.1",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@127.0.0.1:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28127.0.0.1%29\n",
+    "accepted": true
+  },
+  {
+    "name": "ip-b",
+    "facts": {
+      "PublicIPv4": "0.0.0.0",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@0.0.0.0:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%280.0.0.0%29\n",
+    "accepted": true
+  },
+  {
+    "name": "ip-c",
+    "facts": {
+      "PublicIPv4": "255.255.255.255",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@255.255.255.255:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28255.255.255.255%29\n",
+    "accepted": true
+  },
+  {
+    "name": "ip-d",
+    "facts": {
+      "PublicIPv4": "192.168.1.1",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@192.168.1.1:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28192.168.1.1%29\n",
+    "accepted": true
+  },
+  {
+    "name": "ip-e",
+    "facts": {
+      "PublicIPv4": "::1",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "ip-f",
+    "facts": {
+      "PublicIPv4": "::ffff:198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "ip-g",
+    "facts": {
+      "PublicIPv4": "198.051.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "ip-h",
+    "facts": {
+      "PublicIPv4": "198.51.100.42 ",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "ip-i",
+    "facts": {
+      "PublicIPv4": "198.51.100.42:443",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "ip-j",
+    "facts": {
+      "PublicIPv4": "",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "ip-k",
+    "facts": {
+      "PublicIPv4": "example.com",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-a",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "key-b",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q=",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-c",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3R",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-d",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-e",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3QA",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-f",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "+-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-g",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "/-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-h",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": " L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-i",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "\tL-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "key-j",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "\r\nL-V9o0fN\nYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\r",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=%0D%0AL-V9o0fN%0AYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q%0D\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "key-k",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-a",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "A",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=A\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "server-b",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "EXAMPLE.COM",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=EXAMPLE.COM\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "server-c",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a..b",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=a..b\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "server-d",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a.-.b",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=a.-.b\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "server-e",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a_b",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-f",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "-a",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-g",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a-",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-h",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a.",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-i",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a b",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-j",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a\u0026x=y",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-k",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "é.example",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-l",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "a\nnode",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-m",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "server-n",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "server-o",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "short-a",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "00000000",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=00000000\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "short-b",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "ffffffff",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=ffffffff\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "short-c",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "ABCDEF01",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "short-d",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "010203",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "short-e",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "0102030405",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "short-f",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "0102030g",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "short-g",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304\n",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "short-h",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "uuid-a",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-9234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-9234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "uuid-b",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-a234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-a234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "uuid-c",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-b234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-b234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "uuid-d",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789ABC",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "uuid-e",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-5234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "uuid-f",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-7234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "uuid-g",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc\n",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "uuid-h",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-a",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "tunnel.example.com"
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\nvmess://eyJhZGQiOiJ0dW5uZWwuZXhhbXBsZS5jb20iLCJhaWQiOiIwIiwiaG9zdCI6InR1bm5lbC5leGFtcGxlLmNvbSIsImlkIjoiMTIzNDU2NzgtMTIzNC00MjM0LTgyMzQtMTIzNDU2Nzg5YWJjIiwibmV0Ijoid3MiLCJwYXRoIjoiL3NieHItdm1lc3MiLCJwb3J0IjoiNDQzIiwicHMiOiJTQlhSIFZNZXNzICh0dW5uZWwuZXhhbXBsZS5jb20pIiwic2N5IjoiYXV0byIsInNuaSI6InR1bm5lbC5leGFtcGxlLmNvbSIsInRscyI6InRscyIsInR5cGUiOiJub25lIiwidiI6IjIifQ==\n",
+    "accepted": true
+  },
+  {
+    "name": "vmess-b",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "a.b"
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\nvmess://eyJhZGQiOiJhLmIiLCJhaWQiOiIwIiwiaG9zdCI6ImEuYiIsImlkIjoiMTIzNDU2NzgtMTIzNC00MjM0LTgyMzQtMTIzNDU2Nzg5YWJjIiwibmV0Ijoid3MiLCJwYXRoIjoiL3NieHItdm1lc3MiLCJwb3J0IjoiNDQzIiwicHMiOiJTQlhSIFZNZXNzIChhLmIpIiwic2N5IjoiYXV0byIsInNuaSI6ImEuYiIsInRscyI6InRscyIsInR5cGUiOiJub25lIiwidiI6IjIifQ==\n",
+    "accepted": true
+  },
+  {
+    "name": "vmess-c",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "1.2"
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\nvmess://eyJhZGQiOiIxLjIiLCJhaWQiOiIwIiwiaG9zdCI6IjEuMiIsImlkIjoiMTIzNDU2NzgtMTIzNC00MjM0LTgyMzQtMTIzNDU2Nzg5YWJjIiwibmV0Ijoid3MiLCJwYXRoIjoiL3NieHItdm1lc3MiLCJwb3J0IjoiNDQzIiwicHMiOiJTQlhSIFZNZXNzICgxLjIpIiwic2N5IjoiYXV0byIsInNuaSI6IjEuMiIsInRscyI6InRscyIsInR5cGUiOiJub25lIiwidiI6IjIifQ==\n",
+    "accepted": true
+  },
+  {
+    "name": "vmess-d",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "127.000.0.1"
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\nvmess://eyJhZGQiOiIxMjcuMDAwLjAuMSIsImFpZCI6IjAiLCJob3N0IjoiMTI3LjAwMC4wLjEiLCJpZCI6IjEyMzQ1Njc4LTEyMzQtNDIzNC04MjM0LTEyMzQ1Njc4OWFiYyIsIm5ldCI6IndzIiwicGF0aCI6Ii9zYnhyLXZtZXNzIiwicG9ydCI6IjQ0MyIsInBzIjoiU0JYUiBWTWVzcyAoMTI3LjAwMC4wLjEpIiwic2N5IjoiYXV0byIsInNuaSI6IjEyNy4wMDAuMC4xIiwidGxzIjoidGxzIiwidHlwZSI6Im5vbmUiLCJ2IjoiMiJ9\n",
+    "accepted": true
+  },
+  {
+    "name": "vmess-e",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "TUNNEL.example.com"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-f",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "https://tunnel.example.com"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-g",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "127.0.0.1"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-h",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "localhost"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-i",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "a..b"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-j",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "a.b."
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-k",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "-a.b"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-l",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "a-.b"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-m",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "a_b.c"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-n",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "a.b:443"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-o",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "é.example"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-p",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com"
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\nvmess://eyJhZGQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEuZXhhbXBsZS5jb20iLCJhaWQiOiIwIiwiaG9zdCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYS5leGFtcGxlLmNvbSIsImlkIjoiMTIzNDU2NzgtMTIzNC00MjM0LTgyMzQtMTIzNDU2Nzg5YWJjIiwibmV0Ijoid3MiLCJwYXRoIjoiL3NieHItdm1lc3MiLCJwb3J0IjoiNDQzIiwicHMiOiJTQlhSIFZNZXNzIChhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEuZXhhbXBsZS5jb20pIiwic2N5IjoiYXV0byIsInNuaSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYS5leGFtcGxlLmNvbSIsInRscyI6InRscyIsInR5cGUiOiJub25lIiwidiI6IjIifQ==\n",
+    "accepted": true
+  },
+  {
+    "name": "vmess-q",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "vmess-r",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\nvmess://eyJhZGQiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEuYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiLmNjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYy5kZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkIiwiYWlkIjoiMCIsImhvc3QiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEuYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiLmNjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYy5kZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkIiwiaWQiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODlhYmMiLCJuZXQiOiJ3cyIsInBhdGgiOiIvc2J4ci12bWVzcyIsInBvcnQiOiI0NDMiLCJwcyI6IlNCWFIgVk1lc3MgKGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYS5iYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIuY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjLmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQpIiwic2N5IjoiYXV0byIsInNuaSI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYS5iYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIuY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjLmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQiLCJ0bHMiOiJ0bHMiLCJ0eXBlIjoibm9uZSIsInYiOiIyIn0=\n",
+    "accepted": true
+  },
+  {
+    "name": "vmess-s",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "ShortID": "01020304",
+      "VMessHostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "artifact": "",
+    "accepted": false
+  },
+  {
+    "name": "artifact-limit-a",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.comxx",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.comxx\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "artifact-limit-b",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.com",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none\u0026flow=xtls-rprx-vision\u0026security=reality\u0026sni=www.example.com\u0026fp=chrome\u0026pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A%0A\u0026sid=01020304\u0026type=tcp#SBXR%20Proxy%20%28198.51.100.42%29\n",
+    "accepted": true
+  },
+  {
+    "name": "artifact-limit-c",
+    "facts": {
+      "PublicIPv4": "198.51.100.42",
+      "UUID": "12345678-1234-4234-8234-123456789abc",
+      "ServerName": "www.example.comx",
+      "PublicKey": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+      "ShortID": "01020304",
+      "VMessHostname": ""
+    },
+    "artifact": "",
+    "accepted": false
+  }
+]

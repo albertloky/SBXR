@@ -1,0 +1,1 @@
+vless://12345678-1234-4234-8234-123456789abc@198.51.100.42:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.example.com&fp=chrome&pbk=L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q&sid=01020304&type=tcp#SBXR%20Proxy%20%28198.51.100.42%29
