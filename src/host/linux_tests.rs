@@ -117,6 +117,8 @@ struct Fake {
     fail: Option<Operation>,
     fail_after: bool,
     queries_fail: bool,
+    configuration_owner: bool,
+    install_default: bool,
     effects: Vec<Operation>,
 }
 impl Fake {
@@ -132,6 +134,8 @@ impl Fake {
             fail: None,
             fail_after: false,
             queries_fail: false,
+            configuration_owner: true,
+            install_default: false,
             effects: vec![],
         }
     }
@@ -228,6 +232,13 @@ impl CommandRunner for Fake {
                 }
                 .into(),
             ),
+            Query::ConfigurationOwner => {
+                if self.package && self.configuration_owner {
+                    (0, "sing-box: /etc/sing-box/config.json".into())
+                } else {
+                    (1, String::new())
+                }
+            }
             Query::UnitOwner => {
                 if self.package {
                     (
@@ -257,6 +268,13 @@ impl CommandRunner for Fake {
             Operation::InstallPackage => {
                 self.package = true;
                 self.identity = true;
+                if self.install_default {
+                    let default = crate::package_acquisition::DEFAULT_CONFIGURATION;
+                    let config = self.root.join(CONFIG);
+                    fs::create_dir_all(config.parent().unwrap()).unwrap();
+                    fs::write(&config, default).unwrap();
+                    fs::set_permissions(config, fs::Permissions::from_mode(0o644)).unwrap();
+                }
                 fs::create_dir_all(self.root.join("etc/sing-box")).unwrap();
                 fs::set_permissions(
                     self.root.join("etc/sing-box"),
@@ -306,7 +324,8 @@ fn execute<R: CommandRunner>(
 #[test]
 fn injected_linux_setup_uses_actual_configuration_and_durable_core() {
     let root = Root::new();
-    let host = root.host();
+    let mut host = root.host();
+    host.runner.install_default = true;
     let expected = host.material.configuration_bytes().unwrap().to_vec();
     let mut installation = StandardInstallation::new(host, release()).unwrap();
     assert_eq!(installation.review(Action::Status).status, Status::NotSetUp);
@@ -656,6 +675,7 @@ impl super::super::system::Transport for SystemFixtureTransport {
             Query::LoadState,
             Query::Listener,
             Query::UnitOwner,
+            Query::ConfigurationOwner,
             Query::Clock,
             Query::ValidateConfiguration,
         ] {
@@ -2080,3 +2100,6 @@ fn offline_client_target_removal_uses_go_contract_without_restoring_revoked_sour
 
 #[path = "linux/tunnel_tests.rs"]
 mod tunnel_composition;
+
+#[path = "linux/package_default_tests.rs"]
+mod package_defaults;

@@ -64,6 +64,7 @@ fn inspect_image(compressed: &[u8], budget: &SelectionBudget) -> Result<ProbeIma
     let mut decoder = flate2::bufread::GzDecoder::new(compressed);
     let mut total = 0usize;
     let mut image = None;
+    let mut configuration = false;
     let mut buffer = [0u8; 8192];
     for _ in 0..256 {
         let mut header = [0u8; 512];
@@ -87,6 +88,9 @@ fn inspect_image(compressed: &[u8], budget: &SelectionBudget) -> Result<ProbeIma
                 }
             }
             if !decoder.into_inner().is_empty() {
+                return Err(TrustError::Refused);
+            }
+            if !configuration {
                 return Err(TrustError::Refused);
             }
             return image.ok_or(TrustError::Refused);
@@ -132,11 +136,28 @@ fn inspect_image(compressed: &[u8], budget: &SelectionBudget) -> Result<ProbeIma
         {
             return Err(TrustError::Refused);
         }
+        let default = name == "./etc/sing-box/config.json";
+        if default
+            && (configuration
+                || !matches!(header[156], b'0' | 0)
+                || number(&header[100..108], 8)? != 0o644
+                || number(&header[108..116], 8)? != 0
+                || number(&header[116..124], 8)? != 0
+                || size != DEFAULT_CONFIGURATION.len())
+        {
+            return Err(TrustError::Refused);
+        }
         let mut digest = Sha256::new();
         let mut remaining = size;
         while remaining > 0 {
             let count = remaining.min(buffer.len());
             exact(&mut decoder, &mut buffer[..count], budget)?;
+            if default
+                && buffer[..count]
+                    != DEFAULT_CONFIGURATION[size - remaining..size - remaining + count]
+            {
+                return Err(TrustError::Refused);
+            }
             if selected {
                 digest.update(&buffer[..count]);
             }
@@ -148,6 +169,7 @@ fn inspect_image(compressed: &[u8], budget: &SelectionBudget) -> Result<ProbeIma
                 size,
             });
         }
+        configuration |= default;
         let padding = (512 - size % 512) % 512;
         exact(&mut decoder, &mut buffer[..padding], budget)?;
         if buffer[..padding].iter().any(|b| *b != 0) {
@@ -168,6 +190,11 @@ mod tests {
             &SelectionBudget::new(),
         )
         .unwrap();
+        assert_eq!(DEFAULT_CONFIGURATION.len(), 635);
+        assert_eq!(
+            crate::records::sha256_hex(DEFAULT_CONFIGURATION),
+            "4da8152e6cc1b50b1eaa4ff5606510aeb6d3f6a6a5c91614d4b2c0ea9a2b1bde"
+        );
         let image = package.probe_image(&SelectionBudget::new()).unwrap();
         // Independent Python hashlib/tarfile observation of the authenticated DEB.
         assert_eq!(

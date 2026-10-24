@@ -149,7 +149,7 @@ without enabling in-place Go-to-Rust migration.
 
 | Path | Implemented now | Concrete remaining completion |
 |---|---|---|
-| Native public entry and Standard setup/recovery | Shared Review/Execute and composed Owner routing; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Connect the qualified public entry and remaining owners. Early native setup cleanup with no saved canonical configuration still refuses instead of regenerating it. Native effects and new Linux branches remain unvalidated; public entry stays simulated. |
+| Native public entry and Standard setup/recovery | Shared Review/Execute and composed Owner routing; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Connect the qualified public entry and remaining owners. Digest-only early cleanup and exact authenticated package-default replacement/cleanup are implemented in fixtures. Native effects and new Linux branches remain unvalidated; public entry stays simulated. |
 | Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
 | HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Connect the qualified public entry and validate actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
 | Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and complete public entry/details composition. Explicit staged-record retry and historical HTTPS certificate selection remain absent. |
@@ -1463,3 +1463,60 @@ for byte and the final integrated suite passed afterward. Evidence is under
 regression is an expected refusal, not successful native installation. Native
 Linux, systemd/cgroup/process, actual probe/traffic, installed-package and exact
 release qualification remain unperformed.
+
+
+## Pinned package-default configuration repair
+
+The genuine pinned amd64 DEB carries a public 635-byte root:root 0644 conffile.
+The old Standard observer refused it immediately after package installation,
+before it could publish the journal-bound private configuration. A regression
+using those exact bytes failed with `Refused` before this repair and now reaches
+`SetupComplete` with the exact intended root:sing-box 0640 file. The tunnel fixture
+also reaches local Running while correctly reporting public VMess connection
+pending; its loopback fixture supplies no working public route.
+
+`package_acquisition/default-config.json` contains only that public package data,
+SHA-256 `4da8152e6cc1b50b1eaa4ff5606510aeb6d3f6a6a5c91614d4b2c0ea9a2b1bde`.
+The existing full pinned-DEB streaming check now also proves the unique member's
+exact bytes, root UID/GID, regular type and 0644 mode. Recognition requires the
+protected current schema-1 journal with the exact package identity, configuration
+hash, public IP and lock provision; only Service masked through State directory
+created is eligible. A currently installed package must independently claim the
+fixed conffile path through dpkg-query and retain the existing package/account/unit
+proofs. An absent package is allowed only at the already-authorized purge/config
+cleanup interval, including purge success before checkpoint synchronization.
+No default is adopted before an authorized package attempt or after private
+configuration publication/activation, including an already-staged private
+publication checkpoint. Incomplete staged bytes remain unproven and are
+preserved/refused; digest-only offline recovery cannot authenticate a partial
+secret file.
+
+Replacement uses a fixed descriptor-relative helper: prove the default and its
+one-link inode/group, create or prove the exact private staged bytes/group/mode,
+sync the stage, recheck both identities, rename over that exact known default,
+and sync the file and parent. A visible target before journal synchronization is
+synced on retry. Cleanup recognizes only this exact default or the recorded
+private target/stage and never recreates the public source. Foreign, changed,
+symlinked, hardlinked, wrong-mode/group, unclaimed or stale-journal files remain
+untouched. Ordinary protected reads and private configuration requirements were
+not relaxed. This repair does not add default adoption to Complete removal;
+pre-configuration residue uses Finish cleanup. Completed private installations
+retain their existing Complete removal behavior.
+
+Fixture tests cover before/after-rename interruption, exact-stage retry,
+digest-only offline cleanup, before/after-purge interruption, missing checkpoint,
+stale authority and foreign-file preservation. Test package runners explicitly
+select absent-conffile or genuine-default profiles; no real package or service is
+executed. Native public/effect gates remain closed. Native Ubuntu/systemd/proc/
+cgroup/durability checks, remaining auxiliary/historical paths, retained Rust
+build metadata, dual-architecture packaging/bootstrap/workflows and exact live
+release/Karing qualification remain separate work.
+
+Final repair checks passed **481 product tests**, **8 offline packaging tests**,
+format, strict all-target Clippy and the Mac debug build under umask 077. Five
+mutation checks caught omitted exact bytes, phase restriction, package ownership,
+current journal and staged-publication checks; mutated source was restored
+byte-for-byte before final integrated validation. Evidence is under
+`.scratch/acceptance/rust-package-default/`. Go reference source remains unchanged.
+These results do not establish native Linux, real package/systemd, actual VMess
+traffic, power-loss durability or exact candidate release qualification.

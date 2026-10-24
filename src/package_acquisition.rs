@@ -5,6 +5,9 @@
 //! an OpenPGP signature as a substitute. The mutable index only locates bytes;
 //! neither its digests nor caller-provided verification callbacks grant trust.
 mod probe;
+// Exact public conffile inside the fully pinned amd64 DEB; not a client secret.
+pub(crate) const DEFAULT_CONFIGURATION: &[u8] =
+    include_bytes!("package_acquisition/default-config.json");
 use crate::{
     artifact_trust::{SelectionBudget, TrustError},
     host::{

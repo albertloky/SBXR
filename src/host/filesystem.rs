@@ -1,3 +1,4 @@
+mod package_default;
 mod restoration;
 mod runtime;
 mod subscription;
@@ -45,6 +46,8 @@ pub(super) struct ProtectedFs {
     pub uid: u32,
     pub gid: u32,
     native_write_lock: Option<std::sync::Arc<super::locks::HostLock>>,
+    #[cfg(test)]
+    pub(super) package_replacement_fault: std::sync::atomic::AtomicU8,
 }
 fn failure(_: impl std::fmt::Debug) -> HostError {
     HostError::Io
@@ -60,6 +63,8 @@ impl ProtectedFs {
             uid,
             gid,
             native_write_lock: None,
+            #[cfg(test)]
+            package_replacement_fault: std::sync::atomic::AtomicU8::new(0),
         })
     }
     pub fn path(&self) -> &Path {
@@ -83,6 +88,8 @@ impl ProtectedFs {
             uid: 0,
             gid: stat.st_gid,
             native_write_lock: None,
+            #[cfg(test)]
+            package_replacement_fault: std::sync::atomic::AtomicU8::new(0),
         })
     }
     pub(super) fn authorize_native_writes(

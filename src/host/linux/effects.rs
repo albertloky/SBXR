@@ -129,12 +129,21 @@ impl<R: CommandRunner> LinuxHost<R> {
         );
         let key = self.hashed_file(KEY, &self.material.key_sha256, 0o644, &mut fingerprint)?;
         let source = self.file(SOURCE, APT_SOURCE, 0o644, &mut fingerprint)?;
-        let configuration = self.hashed_file(
-            CONFIG,
-            &self.material.configuration_digest,
-            0o640,
-            &mut fingerprint,
-        )?;
+        let package_default = self.package_default(bound.as_ref(), &facts, &mut fingerprint)?;
+        if package_default
+            && bound
+                .as_ref()
+                .is_none_or(|r| r.release_identity() != *release)
+        {
+            return Err(HostError::Foreign);
+        }
+        let configuration = !package_default
+            && self.hashed_file(
+                CONFIG,
+                &self.material.configuration_digest,
+                0o640,
+                &mut fingerprint,
+            )?;
         let artifact = self.hashed_file(
             ARTIFACT,
             &self.material.package_sha256,
@@ -265,6 +274,7 @@ impl<R: CommandRunner> LinuxHost<R> {
         let empty = !key
             && !source
             && !configuration
+            && !package_default
             && !artifact
             && !lock
             && link.is_none()
@@ -366,12 +376,27 @@ impl<R: CommandRunner> LinuxHost<R> {
                 if !facts.identity {
                     return Err(HostError::Unsafe);
                 }
-                self.fs.publish_bytes_group(
-                    CONFIG,
-                    self.material.configuration_bytes()?,
-                    Mode::from_raw_mode(0o640),
-                    gid,
-                )
+                if self.package_default(Some(authority), &facts, &mut String::new())? {
+                    if authority.phase() != SetupPhase::StateDirectoryCreated
+                        || authority.cleanup_checkpoint() != 0
+                        || !facts.package
+                        || !facts.masked
+                        || facts.active
+                        || facts.enabled
+                        || facts.process
+                        || !facts.listener.is_empty()
+                    {
+                        return Err(HostError::Foreign);
+                    }
+                    return self
+                        .fs
+                        .replace_package_default(self.material.configuration_bytes()?, gid);
+                }
+                let body = self.material.configuration_bytes()?;
+                let mode = Mode::from_raw_mode(0o640);
+                self.fs.publish_bytes_group(CONFIG, body, mode, gid)?;
+                // A visible target may precede the journal/rename durability checkpoint.
+                self.fs.sync_bytes(CONFIG, body, mode)
             }
             CreateStateDirectory => {
                 let facts = self.facts()?;
@@ -449,7 +474,18 @@ impl<R: CommandRunner> LinuxHost<R> {
                 self.remove_hashed(ARTIFACT, &self.material.package_sha256, 0o600)
             }
             RemoveConfigurationState => {
-                self.remove_hashed(CONFIG, &self.material.configuration_digest, 0o640)?;
+                let facts = self.facts()?;
+                if self.package_default(Some(authority), &facts, &mut String::new())? {
+                    self.fs.remove_package_default()?;
+                    // The private stage may have reached disk before an interrupted rename.
+                    self.remove_hashed(
+                        &format!("{CONFIG}.sbxr-next"),
+                        &self.material.configuration_digest,
+                        0o640,
+                    )?;
+                } else {
+                    self.remove_hashed(CONFIG, &self.material.configuration_digest, 0o640)?;
+                }
                 self.fs.remove(Resource {
                     path: "etc/sing-box",
                     kind: Kind::Directory(Mode::from_raw_mode(0o755)),

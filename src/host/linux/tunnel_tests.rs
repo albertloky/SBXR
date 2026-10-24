@@ -425,7 +425,7 @@ fn composed_tunnel_status_and_changed_prerequisites_expire_prepared_authority() 
     }
 }
 #[test]
-fn composed_tunnel_mismatched_probe_and_package_default_refuse_before_activation() {
+fn composed_tunnel_authenticates_probe_and_replaces_exact_package_default() {
     use crate::proxyinstallation::{ExecutionMode, Interface, TunnelOwnerInstallation};
     for package_default in [false, true] {
         let root = Root::new();
@@ -441,10 +441,25 @@ fn composed_tunnel_mismatched_probe_and_package_default_refuse_before_activation
             .review_tunnel_setup("fixture.example.com")
             .prepared
             .unwrap();
-        assert_eq!(
-            module.execute(prepared, Confirmation::Approved).outcome,
-            Outcome::Refused
-        );
+        let result = module.execute(prepared, Confirmation::Approved);
+        if package_default {
+            assert_eq!(
+                result.outcome,
+                Outcome::VmessConnectionPending,
+                "{result:?}"
+            );
+            assert_eq!(result.status, Status::Running);
+            assert_ne!(
+                fs::read(root.0.join(CONFIG)).unwrap(),
+                crate::package_acquisition::DEFAULT_CONFIGURATION
+            );
+            assert_eq!(
+                fs::metadata(root.0.join(CONFIG)).unwrap().mode() & 0o7777,
+                0o640
+            );
+            continue;
+        }
+        assert_eq!(result.outcome, Outcome::Refused);
         let record = OwnershipRecord::decode(
             &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
         )
@@ -455,17 +470,10 @@ fn composed_tunnel_mismatched_probe_and_package_default_refuse_before_activation
             crate::records::RecoveryDirection::Cleanup
         );
         assert!(!root.0.join("fixture-running").exists());
-        if package_default {
-            assert_eq!(
-                fs::read(root.0.join(CONFIG)).unwrap(),
-                include_bytes!("../../../tests/testdata/tunnel_native/package-default.json")
-            );
-        } else {
-            assert_eq!(
-                fs::read(root.0.join("usr/bin/sing-box")).unwrap(),
-                vec![b'X'; TUNNEL_IMAGE.len()]
-            );
-        }
+        assert_eq!(
+            fs::read(root.0.join("usr/bin/sing-box")).unwrap(),
+            vec![b'X'; TUNNEL_IMAGE.len()]
+        );
     }
 }
 #[test]

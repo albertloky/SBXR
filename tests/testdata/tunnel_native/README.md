@@ -20,7 +20,9 @@ from the pinned sing-box 1.14.3 amd64 DEB (full DEB SHA-256
 `ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e`).
 Its SHA-256 is `4da8152e6cc1b50b1eaa4ff5606510aeb6d3f6a6a5c91614d4b2c0ea9a2b1bde`.
 It is public package data, not an operational configuration. The integration
-regression proves the current Standard adapter refuses its 0644 mode after
-package installation. Native package-default replacement requires a separate
-exact-owned repair before installation can be qualified; these tests do not
-hide that refusal by treating the default as the final private configuration.
+regression now proves exact package-owned recognition and atomic replacement
+with the intended private 0640 file. The source copy in
+`src/package_acquisition/default-config.json` is independently checked against the
+fully pinned DEB's unique root:root 0644 member by the streaming package test.
+Changed, unclaimed or post-configuration defaults remain refused. These local
+fixtures do not qualify a native package installation or public VMess traffic.

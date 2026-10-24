@@ -44,6 +44,7 @@ pub enum Query {
     LoadState,
     Listener,
     UnitOwner,
+    ConfigurationOwner,
     Clock,
     ValidateConfiguration,
     DestinationDns,
@@ -88,6 +89,10 @@ impl Query {
                 ],
             ),
             Self::Listener => ("/usr/bin/ss", &["-H", "-ltnp", "sport", "=", ":443"]),
+            Self::ConfigurationOwner => (
+                "/usr/bin/dpkg-query",
+                &["--search", "/etc/sing-box/config.json"],
+            ),
             Self::UnitOwner => (
                 "/usr/bin/dpkg-query",
                 &["--search", "/usr/lib/systemd/system/sing-box.service"],
