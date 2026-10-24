@@ -609,6 +609,8 @@ struct SystemFixtureTransport {
     commands: std::rc::Rc<std::cell::RefCell<Vec<super::super::system::CommandSpec>>>,
     user_deleted: std::cell::Cell<bool>,
     fail_groupdel: std::cell::Cell<bool>,
+    fail_unhold: std::cell::Cell<bool>,
+    fail_clock: std::cell::Cell<bool>,
     replace_group_after_userdel: std::cell::Cell<bool>,
     foreign_identity: std::rc::Rc<std::cell::Cell<bool>>,
 }
@@ -642,6 +644,9 @@ impl super::super::system::Transport for SystemFixtureTransport {
                     .map(String::as_str)
                     .eq(arguments.iter().copied())
             {
+                if query == Query::Clock && self.fail_clock.get() {
+                    return Err(HostError::Unsafe);
+                }
                 if query == Query::User && self.user_deleted.get() {
                     return CommandOutput::completed(2, vec![]);
                 }
@@ -670,6 +675,9 @@ impl super::super::system::Transport for SystemFixtureTransport {
             ("/usr/bin/dpkg", ["--install", _]) => Some(Operation::InstallPackage),
             ("/usr/bin/apt-mark", ["hold", "sing-box"]) => Some(Operation::HoldPackage),
             ("/usr/bin/apt-mark", ["unhold", "sing-box"]) => {
+                if self.fail_unhold.get() {
+                    return CommandOutput::completed(1, vec![]);
+                }
                 self.backend.borrow_mut().held = false;
                 None
             }
@@ -736,6 +744,8 @@ fn system_host(root: &Root) -> (SystemHost, CommandLog, std::rc::Rc<std::cell::C
         commands: commands.clone(),
         user_deleted: std::cell::Cell::new(false),
         fail_groupdel: std::cell::Cell::new(false),
+        fail_unhold: std::cell::Cell::new(false),
+        fail_clock: std::cell::Cell::new(false),
         replace_group_after_userdel: std::cell::Cell::new(false),
         foreign_identity: foreign.clone(),
     };
@@ -999,5 +1009,455 @@ fn package_identity_proof_preserves_changed_group_after_user_deletion() {
         .unwrap()
         .recovery_direction(),
         crate::records::RecoveryDirection::Cleanup
+    );
+}
+
+#[test]
+fn authenticated_standard_factory_and_private_roles_recheck_protected_installed_bytes() {
+    use crate::private_roles::{Role, Runtime};
+    let root = Root::new();
+    // This fixture crosses the signature boundary only in cfg(test); the real
+    // acquisition test separately refuses a genuine foreign signer/claim set.
+    let (authenticated, executable) = crate::release_acquisition::fixture_authenticated();
+    root.write("usr/local/bin/sbxr", &executable, 0o755);
+    root.write(
+        "var/lib/sbxr/installed.json",
+        &authenticated.record().encode().unwrap(),
+        0o600,
+    );
+    fs::create_dir_all(root.0.join("run/lock")).unwrap();
+    let mut runtime = crate::host::runtime::InjectedRuntime::open(&root.0, &authenticated).unwrap();
+    assert_eq!(runtime.invoke(Role::ProvisionMutationLock), 0);
+    assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+    assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 1);
+    assert_eq!(runtime.invoke(Role::SubscriptionServing), 1);
+    let base = root.host();
+    let host = LinuxHost::injected_authenticated(
+        &root.0,
+        base.runner,
+        base.material,
+        admission(),
+        &authenticated,
+    )
+    .unwrap();
+    let mut installation =
+        StandardInstallation::new(host, authenticated.record().release_identity()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::SetupComplete
+    );
+    let mut wire: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+    )
+    .unwrap();
+    let startup = b"[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n";
+    root.write(
+        "etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf",
+        startup,
+        0o644,
+    );
+    wire["schema"] = 2.into();
+    wire["proxy_startup"] =
+        serde_json::json!({"drop_in_sha256":sha256_hex(startup),"directory_created":true});
+    let resources = wire["permitted_resources"].as_array_mut().unwrap();
+    resources[0] = resources[0]
+        .as_str()
+        .unwrap()
+        .replace("schema-1", "schema-2")
+        .into();
+    resources.push(format!("/etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf root:root 0644 one-link sha256:{}",sha256_hex(startup)).into());
+    resources.push("/etc/systemd/system/sing-box.service.d root:root 0755 SBXR-created empty-after-drop-in-removal".into());
+    let count = resources.len();
+    wire["resource_creating_releases"] =
+        serde_json::Value::Array(vec![wire["release_identity"].clone(); count]);
+    let record = OwnershipRecord::decode(&serde_json::to_vec(&wire).unwrap()).unwrap();
+    root.write(
+        "var/lib/sbxr/proxy-ownership.json",
+        &record.encode().unwrap(),
+        0o600,
+    );
+    assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 0);
+    root.write(
+        "etc/systemd/system/sing-box.service.d/sbxr-client-identity.conf",
+        b"foreign",
+        0o644,
+    );
+    assert_eq!(runtime.invoke(Role::ProxyStartAuthorize), 1);
+    root.write("usr/local/bin/sbxr", b"foreign", 0o755);
+    assert_eq!(runtime.invoke(Role::ProvisionMutationLock), 1);
+    let base = root.host();
+    assert!(
+        LinuxHost::injected_authenticated(
+            &root.0,
+            base.runner,
+            base.material,
+            admission(),
+            &authenticated
+        )
+        .is_err()
+    );
+}
+#[test]
+fn existing_standard_decoding_preserves_raw_hash_and_derives_client_values() {
+    let root = Root::new();
+    let host = root.host();
+    let bytes = host.material.configuration.as_bytes();
+    let decoded = ServerConfiguration::decode_standard(bytes).unwrap();
+    assert_eq!(decoded.as_bytes(), bytes);
+    let facts = decoded.connection_facts("8.8.8.8").unwrap();
+    assert_eq!(facts.public_ipv4().to_string(), "8.8.8.8");
+    let pretty =
+        serde_json::to_vec_pretty(&serde_json::from_slice::<serde_json::Value>(bytes).unwrap())
+            .unwrap();
+    assert_eq!(
+        ServerConfiguration::decode_standard(&pretty)
+            .unwrap()
+            .as_bytes(),
+        pretty
+    );
+    let mut bad: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    bad["unknown"] = true.into();
+    assert!(ServerConfiguration::decode_standard(&serde_json::to_vec(&bad).unwrap()).is_err());
+    let mut duplicate = bytes.to_vec();
+    duplicate.splice(1..1, b"\"inbounds\":[],".iter().copied());
+    assert!(ServerConfiguration::decode_standard(&duplicate).is_err());
+    assert_eq!(format!("{decoded:?}"), "Server configuration (redacted)");
+}
+
+#[test]
+fn package_hold_footprint_never_counts_as_absent() {
+    let root = Root::new();
+    let mut host = root.host();
+    host.runner.held = true;
+    let installation = StandardInstallation::new(host, release()).unwrap();
+    assert!(installation.review(Action::StartSetup).prepared.is_none());
+    assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+}
+#[test]
+fn failed_package_unhold_keeps_cleanup_pending_and_never_purges() {
+    let root = Root::new();
+    let (mut host, commands, _) = system_host(&root);
+    host.interrupt_after(Some(SetupPhase::ConfigurationValidated));
+    let mut installation = StandardInstallation::new(host, release()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    installation
+        .host()
+        .runner()
+        .transport()
+        .fail_unhold
+        .set(true);
+    let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    assert!(
+        !commands
+            .borrow()
+            .iter()
+            .any(|c| c.program() == "/usr/bin/apt-get"
+                && c.arguments().first().is_some_and(|a| a == "purge"))
+    );
+    assert!(
+        installation
+            .host()
+            .runner()
+            .transport()
+            .backend
+            .borrow()
+            .held
+    );
+    installation
+        .host()
+        .runner()
+        .transport()
+        .fail_unhold
+        .set(false);
+    let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::CleanedUp
+    );
+}
+
+#[test]
+fn invalid_pinned_material_never_generates_credentials() {
+    struct NoEntropy;
+    impl crate::identity_generation::Entropy for NoEntropy {
+        fn fill(&mut self, _: &mut [u8]) -> Result<(), crate::identity_generation::IdentityError> {
+            panic!("invalid material reached entropy")
+        }
+    }
+    assert!(matches!(
+        SetupMaterial::generated_standard(
+            b"synthetic invalid key".to_vec(),
+            vec![],
+            &mut NoEntropy
+        ),
+        Err(HostError::Foreign)
+    ));
+}
+
+fn running_removal_host(
+    root: &Root,
+) -> (
+    StandardRemovalHost<super::super::system::SystemRunner<SystemFixtureTransport>>,
+    CommandLog,
+) {
+    let (authenticated, executable) = crate::release_acquisition::fixture_authenticated();
+    root.write("usr/local/bin/sbxr", &executable, 0o755);
+    root.write(
+        "var/lib/sbxr/installed.json",
+        &authenticated.record().encode().unwrap(),
+        0o600,
+    );
+    let (base, commands, _) = system_host(root);
+    let host = LinuxHost::injected_authenticated(
+        &root.0,
+        base.runner,
+        base.material,
+        admission(),
+        &authenticated,
+    )
+    .unwrap();
+    let mut setup =
+        StandardInstallation::new(host, authenticated.record().release_identity()).unwrap();
+    let prepared = setup.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        setup.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::SetupComplete
+    );
+    (
+        StandardRemovalHost::new(setup.into_host()).unwrap(),
+        commands,
+    )
+}
+#[test]
+fn actual_standard_removal_requires_typed_confirmation_and_deletes_exact_owned_pair() {
+    for approved in [false, true] {
+        let root = Root::new();
+        let (host, commands) = running_removal_host(&root);
+        let mut installation = crate::proxyinstallation::RemovalInstallation::new(host);
+        let input = if approved {
+            b"2\nREMOVE SBXR\n".as_slice()
+        } else {
+            b"2\ny\n0\n".as_slice()
+        };
+        let mut input = std::io::Cursor::new(input);
+        let mut output = vec![];
+        crate::terminal::run(&mut input, &mut output, &mut installation).unwrap();
+        assert_eq!(root.0.join("usr/local/bin/sbxr").exists(), !approved);
+        assert_eq!(root.0.join("var/lib/sbxr").exists(), !approved);
+        assert!(!root.0.join("var/lib/.sbxr-removal.json").exists());
+        if approved {
+            assert!(
+                String::from_utf8(output)
+                    .unwrap()
+                    .contains("SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED")
+            );
+            let log = commands.borrow();
+            let unhold = log
+                .iter()
+                .position(|c| c.arguments() == ["unhold", "sing-box"])
+                .unwrap();
+            let purge = log
+                .iter()
+                .position(|c| c.arguments().first().is_some_and(|a| a == "purge"))
+                .unwrap();
+            assert!(unhold < purge);
+        }
+    }
+}
+#[test]
+fn durable_standard_finalizer_resumes_after_move_and_directory_removal() {
+    for point in [1, 2, 3] {
+        let root = Root::new();
+        let (mut host, _) = running_removal_host(&root);
+        host.interrupt_finalization(point);
+        let mut installation = crate::proxyinstallation::RemovalInstallation::new(host);
+        let prepared = installation
+            .review(Action::CompleteRemoval)
+            .prepared
+            .unwrap();
+        let result = installation.execute(prepared, Confirmation::Approved);
+        assert_eq!(result.outcome, Outcome::RemovalNeedsCompletion);
+        assert_eq!(
+            result.status,
+            if point == 3 {
+                Status::ProblemDetected
+            } else {
+                Status::RemovalIncomplete
+            }
+        );
+        assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+        assert_eq!(
+            root.0.join("var/lib/.sbxr-removal.json").exists(),
+            point != 3
+        );
+        let review = installation.review(Action::FinishRemoval);
+        if point == 3 {
+            assert!(review.prepared.is_none());
+        } else {
+            assert_eq!(
+                installation
+                    .execute(review.prepared.unwrap(), Confirmation::Approved)
+                    .outcome,
+                Outcome::RemovalComplete
+            );
+            assert!(!root.0.join("var/lib/sbxr").exists());
+            assert!(!root.0.join("var/lib/.sbxr-removal.json").exists());
+        }
+    }
+}
+#[test]
+fn removal_prepared_actions_expire_and_foreign_files_are_preserved() {
+    let root = Root::new();
+    let (host, _) = running_removal_host(&root);
+    let mut installation = crate::proxyinstallation::RemovalInstallation::new(host);
+    let prepared = installation
+        .review(Action::CompleteRemoval)
+        .prepared
+        .unwrap();
+    installation.review(Action::Status);
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::Refused
+    );
+    root.write("etc/sing-box/foreign", b"preserved", 0o644);
+    assert!(
+        installation
+            .review(Action::CompleteRemoval)
+            .prepared
+            .is_none()
+    );
+    assert_eq!(
+        fs::read(root.0.join("etc/sing-box/foreign")).unwrap(),
+        b"preserved"
+    );
+    assert_eq!(
+        OwnershipRecord::decode(
+            &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap()
+        )
+        .unwrap()
+        .phase(),
+        SetupPhase::Running
+    );
+}
+
+#[test]
+fn product_only_and_pre_activation_removal_remove_no_foreign_resources() {
+    for setup in [false, true] {
+        let root = Root::new();
+        let (authenticated, executable) = crate::release_acquisition::fixture_authenticated();
+        root.write("usr/local/bin/sbxr", &executable, 0o755);
+        root.write(
+            "var/lib/sbxr/installed.json",
+            &authenticated.record().encode().unwrap(),
+            0o600,
+        );
+        let (base, _, _) = system_host(&root);
+        let mut host = LinuxHost::injected_authenticated(
+            &root.0,
+            base.runner,
+            base.material,
+            admission(),
+            &authenticated,
+        )
+        .unwrap();
+        if setup {
+            host.interrupt_after(Some(SetupPhase::PackageHeld));
+            let mut installation =
+                StandardInstallation::new(host, authenticated.record().release_identity()).unwrap();
+            let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+            assert_eq!(
+                installation
+                    .execute(prepared, Confirmation::Approved)
+                    .outcome,
+                Outcome::NeedsCleanup
+            );
+            host = installation.into_host();
+        }
+        let host = StandardRemovalHost::new(host).unwrap();
+        let mut removal = crate::proxyinstallation::RemovalInstallation::new(host);
+        let prepared = removal.review(Action::CompleteRemoval).prepared.unwrap();
+        assert_eq!(
+            removal.execute(prepared, Confirmation::Approved).outcome,
+            Outcome::RemovalComplete
+        );
+        assert!(!root.0.join("var/lib/sbxr").exists());
+        assert!(!root.0.join("etc/systemd/system/sing-box.service").exists());
+    }
+}
+
+#[test]
+fn durable_removal_staging_never_skips_or_grants_a_checkpoint() {
+    let root = Root::new();
+    let material = root.host();
+    let mut store = crate::durable::OwnershipStore::open(
+        &root.0.join("var/lib/sbxr"),
+        fs::metadata(&root.0).unwrap().uid(),
+    )
+    .unwrap();
+    let source =
+        OwnershipRecord::new_standard(release(), "8.8.8.8", &material.configuration_sha256())
+            .unwrap();
+    store.publish(None, &source).unwrap();
+    let committed = crate::removal::commit_removal(Some(&source), &release()).unwrap();
+    store
+        .publish(Some(&source.encode().unwrap()), &committed)
+        .unwrap();
+    let next = crate::removal::next_checkpoint(&committed).unwrap();
+    root.write(
+        &format!("var/lib/sbxr/{}", crate::durable::STAGED_FILE),
+        &next.encode().unwrap(),
+        0o600,
+    );
+    let snapshot = store.load().unwrap();
+    assert_eq!(snapshot.recovery(), crate::durable::Recovery::Removal);
+    assert_eq!(
+        crate::removal::checkpoint(&snapshot.current.unwrap().record).unwrap(),
+        0
+    );
+    let skipped = crate::removal::next_checkpoint(&next).unwrap();
+    assert!(
+        store
+            .publish(Some(&committed.encode().unwrap()), &skipped)
+            .is_err()
+    );
+    store
+        .publish(Some(&committed.encode().unwrap()), &next)
+        .unwrap();
+    assert_eq!(
+        crate::removal::checkpoint(&store.load().unwrap().current.unwrap().record).unwrap(),
+        1
+    );
+}
+#[test]
+fn standard_removal_requires_ownership_without_clock_or_network_availability() {
+    let root = Root::new();
+    let (mut host, _) = running_removal_host(&root);
+    host.inner.runner.transport().fail_clock.set(true);
+    host.inner.admission.destination_compatible = false;
+    host.inner.admission.tcp443_available = false;
+    let mut removal = crate::proxyinstallation::RemovalInstallation::new(host);
+    let prepared = removal.review(Action::CompleteRemoval).prepared.unwrap();
+    assert_eq!(
+        removal.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::RemovalComplete
     );
 }

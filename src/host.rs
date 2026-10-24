@@ -7,6 +7,7 @@ pub mod linux;
 pub mod locks;
 pub mod network;
 pub mod process;
+pub mod runtime;
 mod setup;
 pub mod system;
 use crate::records::SetupPhase;
@@ -63,6 +64,7 @@ pub enum Operation {
     StopDisableService,
     RemovePackageArtifact,
     RemovePackage,
+    RemovePackageHold,
     RemoveConfigurationState,
     RemovePackageIdentity,
     RemoveAptSource,

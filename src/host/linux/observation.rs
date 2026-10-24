@@ -52,6 +52,90 @@ impl NativeObserver {
     }
 }
 impl NativeObserver {
+    /// Binds the actual kernel-reported running executable and protected installed
+    /// file to exact authenticated release/index/archive bytes. No effects follow.
+    pub fn authenticate_current(
+        &self,
+        transport: &mut impl crate::artifact_trust::AcquisitionTransport,
+        budget: &crate::artifact_trust::SelectionBudget,
+    ) -> Result<crate::release_acquisition::AuthenticatedInstalled, HostError> {
+        require_native_environment()?;
+        if std::env::current_exe().map_err(|_| HostError::Unsafe)?
+            != Path::new("/usr/local/bin/sbxr")
+        {
+            return Err(HostError::Foreign);
+        }
+        let record = self.read_installed()?.ok_or(HostError::Foreign)?;
+        let (installed, _) = self
+            .fs
+            .raw(
+                "usr/local/bin/sbxr",
+                Mode::from_raw_mode(0o755),
+                crate::release_identity::MAX_EXECUTABLE_BYTES,
+            )?
+            .ok_or(HostError::Foreign)?;
+        let descriptor = rustix::fs::open(
+            "/proc/self/exe",
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| HostError::Unsafe)?;
+        let mut file = std::fs::File::from(descriptor);
+        use std::os::unix::fs::MetadataExt;
+        let before = file.metadata().map_err(|_| HostError::Unsafe)?;
+        if !before.is_file()
+            || before.uid() != 0
+            || before.gid() != 0
+            || before.nlink() != 1
+            || before.mode() & 0o7777 != 0o755
+        {
+            return Err(HostError::Foreign);
+        }
+        // Read access may update atime. Stable ownership/inode/content metadata
+        // must not change; atime is not an authority or content-change proof.
+        let identity = |m: &std::fs::Metadata| {
+            (
+                m.dev(),
+                m.ino(),
+                m.mode(),
+                m.uid(),
+                m.gid(),
+                m.nlink(),
+                m.size(),
+                m.mtime(),
+                m.mtime_nsec(),
+                m.ctime(),
+                m.ctime_nsec(),
+            )
+        };
+        let stable = identity(&before);
+        let mut current = Vec::new();
+        use std::io::Read;
+        let mut chunk = [0; 8192];
+        loop {
+            budget.check().map_err(|_| HostError::Cancelled)?;
+            let n = file.read(&mut chunk).map_err(|_| HostError::Io)?;
+            if n == 0 {
+                break;
+            }
+            if current.len() + n > crate::release_identity::MAX_EXECUTABLE_BYTES {
+                return Err(HostError::OutputLimit);
+            }
+            current.extend_from_slice(&chunk[..n]);
+        }
+        let after = identity(&file.metadata().map_err(|_| HostError::Unsafe)?);
+        if stable != after {
+            return Err(HostError::Unsafe);
+        }
+        let admitted = crate::release_acquisition::AuthenticatedInstalled::acquire(
+            transport, record, &installed, &current, budget,
+        )
+        .map_err(|_| HostError::Foreign)?;
+        if self.read_installed()?.as_ref() != Some(admitted.record()) {
+            return Err(HostError::Foreign);
+        }
+        Ok(admitted)
+    }
     /// Reads validated authority without rewriting/promoting it or granting effects.
     pub fn read_ownership(&self) -> Result<Option<OwnershipRecord>, HostError> {
         read_ownership(&self.fs)
@@ -86,7 +170,9 @@ pub(super) fn read_ownership(fs: &ProtectedFs) -> Result<Option<OwnershipRecord>
     .map(|(bytes, _)| OwnershipRecord::decode(&bytes).map_err(|_| HostError::Foreign))
     .transpose()
 }
-pub(super) fn read_installed(fs: &ProtectedFs) -> Result<Option<InstalledRecord>, HostError> {
+pub(in crate::host) fn read_installed(
+    fs: &ProtectedFs,
+) -> Result<Option<InstalledRecord>, HostError> {
     let record = fs.raw(
         "var/lib/sbxr/installed.json",
         Mode::from_raw_mode(0o600),
@@ -229,9 +315,28 @@ impl Facts {
         runner: &impl CommandRunner,
         stop: &Cancellation,
     ) -> Result<Self, HostError> {
+        Self::query_inner(runner, stop, true)
+    }
+    pub(super) fn removal(
+        runner: &impl CommandRunner,
+        stop: &Cancellation,
+    ) -> Result<Self, HostError> {
+        Self::query_inner(runner, stop, false)
+    }
+    fn query_inner(
+        runner: &impl CommandRunner,
+        stop: &Cancellation,
+        clock: bool,
+    ) -> Result<Self, HostError> {
         let values = QUERIES
             .iter()
-            .map(|q| runner.query(*q, stop))
+            .map(|q| {
+                if *q == Query::Clock && !clock {
+                    CommandOutput::completed(0, b"yes".to_vec())
+                } else {
+                    runner.query(*q, stop)
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let mut fingerprint = String::new();
         for (q, value) in QUERIES.iter().zip(&values) {

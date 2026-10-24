@@ -6,6 +6,8 @@ pub enum Status {
     Running,
     SetupIncomplete,
     ProblemDetected,
+    RemovalIncomplete,
+    NotInstalled,
 }
 
 impl fmt::Display for Status {
@@ -15,6 +17,8 @@ impl fmt::Display for Status {
             Self::Running => "Running",
             Self::SetupIncomplete => "Setup incomplete",
             Self::ProblemDetected => "Problem detected",
+            Self::RemovalIncomplete => "Removal incomplete",
+            Self::NotInstalled => "Not installed",
         })
     }
 }
@@ -41,6 +45,8 @@ pub enum Action {
     StartSetup,
     FinishCleanup,
     FinishSetup,
+    CompleteRemoval,
+    FinishRemoval,
 }
 
 impl fmt::Display for Action {
@@ -51,6 +57,8 @@ impl fmt::Display for Action {
             Self::StartSetup => "Start setup",
             Self::FinishCleanup => "Finish cleanup",
             Self::FinishSetup => "Finish setup",
+            Self::CompleteRemoval => "Complete removal",
+            Self::FinishRemoval => "Finish removal",
         })
     }
 }
@@ -79,6 +87,8 @@ pub enum Outcome {
     NeedsCleanup,
     NeedsCompletion,
     CleanedUp,
+    RemovalComplete,
+    RemovalNeedsCompletion,
 }
 
 impl Outcome {
@@ -90,6 +100,8 @@ impl Outcome {
             Self::NeedsCleanup => "PROXY-INSTALLATION-SETUP-CLEANUP-REQUIRED",
             Self::NeedsCompletion => "PROXY-INSTALLATION-SETUP-COMPLETION-REQUIRED",
             Self::CleanedUp => "PROXY-INSTALLATION-SETUP-CLEANED-UP",
+            Self::RemovalComplete => "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED",
+            Self::RemovalNeedsCompletion => "PROXY-INSTALLATION-REMOVAL-COMPLETION-REQUIRED",
         }
     }
 }

@@ -113,3 +113,21 @@ fn foreign_modes_and_symlinks_are_preserved() {
     assert!(host.acquire_packages().is_err());
     assert!(p.is_symlink());
 }
+
+#[test]
+fn private_existing_locks_do_not_create_and_owned_package_guards_retain_exclusion() {
+    let root = Root::new();
+    assert!(HostLock::existing(&root.0, root.uid()).is_err());
+    assert!(HostLock::provision(&root.0, root.uid()).is_err());
+    assert!(!root.0.join("run").exists());
+    stdfs::create_dir_all(root.0.join("run/lock")).unwrap();
+    let host = std::sync::Arc::new(HostLock::provision(&root.0, root.uid()).unwrap());
+    let retained = host.retain_packages().unwrap();
+    for _ in 0..2 {
+        retained.verify().unwrap();
+        assert!(child_busy(&root.0.join(PACKAGE_LOCKS[0])));
+    }
+    assert!(matches!(host.acquire_packages(), Err(HostError::Busy)));
+    drop(retained);
+    assert!(!child_busy(&root.0.join(PACKAGE_LOCKS[0])));
+}

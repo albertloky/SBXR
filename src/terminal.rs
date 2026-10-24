@@ -114,6 +114,37 @@ pub fn run(
                 let result = installation.execute(prepared, confirmation);
                 write_result(output, &result)?;
             }
+            Action::CompleteRemoval | Action::FinishRemoval => {
+                let review = installation.review(action);
+                for line in review.plan {
+                    writeln!(output, "{line}")?;
+                }
+                let Some(prepared) = review.prepared else {
+                    writeln!(output, "Action refused. Review again.")?;
+                    continue;
+                };
+                let approval = if action == Action::CompleteRemoval {
+                    if prompt(
+                        input,
+                        output,
+                        "Type REMOVE SBXR to confirm Complete removal. Any other input cancels.",
+                    )?
+                    .as_deref()
+                        == Some("REMOVE SBXR")
+                    {
+                        Confirmation::Approved
+                    } else {
+                        Confirmation::Declined
+                    }
+                } else {
+                    Confirmation::Approved
+                };
+                let result = installation.execute(prepared, approval);
+                write_result(output, &result)?;
+                if result.outcome == crate::domain::Outcome::RemovalComplete {
+                    return Ok(());
+                }
+            }
             Action::Status => unreachable!("Status is not a menu action"),
         }
     }

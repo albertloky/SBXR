@@ -18,8 +18,12 @@ admission and fixed native command effects are `src/host/{locks,network,system}.
 the native frontend stays explicitly unavailable. Identity generation, structural
 release inspection and offline Sigstore authentication have separate modules and
 adjacent/integration tests. `tooling/rust-package/` is the separate offline CLI.
-Read that handoff
-before selecting Rust checks; Go live qualification never follows from local
+Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decoding
+is `src/release_archive.rs`. Fixed private dispatch is `src/private_roles.rs`.
+Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
+model in `src/removal.rs` and shared Interface bridge in
+`src/proxyinstallation/removal.rs`. Auxiliary removal and authenticated restoration
+remain unavailable. Read that handoff before selecting Rust checks; Go live qualification never follows from local
 Rust fixture or cross-compilation results.
 
 ## Product execution

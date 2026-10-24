@@ -611,6 +611,16 @@ pub struct AcquisitionRequest {
     json: bool,
 }
 impl AcquisitionRequest {
+    pub(crate) fn release_metadata(tag: &str) -> Result<Self> {
+        ReleaseIdentity::new(tag, &"a".repeat(40), &"b".repeat(64))
+            .map_err(|_| TrustError::Refused)?;
+        Ok(Self {
+            url: format!("https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}"),
+            limit: crate::release_identity::MAX_INDEX_BYTES,
+            json: true,
+        })
+    }
+
     pub fn url(&self) -> &str {
         &self.url
     }
@@ -809,7 +819,7 @@ fn resolve_bundle(
     budget.check()?;
     Ok(body)
 }
-fn read_response(
+pub(crate) fn read_response(
     mut response: AcquisitionResponse,
     limit: usize,
     budget: &SelectionBudget,
@@ -1046,7 +1056,7 @@ impl<'de> DeserializeSeed<'de> for Unique<'_> {
         decoder.deserialize_any(UniqueVisitor(self.0))
     }
 }
-fn json_object(bytes: &[u8], limit: usize) -> Result<Value> {
+pub(crate) fn json_object(bytes: &[u8], limit: usize) -> Result<Value> {
     if bytes.is_empty() || bytes.len() > limit {
         return Err(TrustError::Refused);
     }
@@ -1060,4 +1070,14 @@ fn json_object(bytes: &[u8], limit: usize) -> Result<Value> {
         return Err(TrustError::Refused);
     }
     Ok(value)
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_claims(expected: &ExpectedRelease) -> VerifiedNativeReleaseClaims {
+    // Only unit-test binaries can cross this fixture boundary. No runtime switch.
+    VerifiedNativeReleaseClaims {
+        identity: expected.identity.clone(),
+        proof_count: 1,
+        assets: expected.assets.clone(),
+    }
 }

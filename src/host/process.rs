@@ -128,6 +128,9 @@ pub trait CommandRunner {
     fn effect(&mut self, _operation: Operation, _stop: &Cancellation) -> Result<(), HostError> {
         Err(HostError::LiveUnavailable)
     }
+    fn removal_identity_safe(&self, _stop: &Cancellation) -> Result<(), HostError> {
+        Err(HostError::LiveUnavailable)
+    }
     fn change_lock(&mut self, _lock: Option<Arc<super::locks::HostLock>>) {}
     fn reload_units(&mut self, _stop: &Cancellation) -> Result<(), HostError> {
         Ok(())

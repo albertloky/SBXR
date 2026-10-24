@@ -41,6 +41,9 @@ impl<H: SetupHost> StandardInstallation<H> {
             release,
         })
     }
+    pub fn into_host(self) -> H {
+        self.host
+    }
     pub fn host(&self) -> &H {
         &self.host
     }
@@ -408,6 +411,7 @@ impl<H: SetupHost> StandardInstallation<H> {
     fn result(&self, outcome: Outcome, message: &'static str) -> ActionResult {
         let message = if self.host.is_injected_system() {
             match outcome {
+                Outcome::RemovalComplete | Outcome::RemovalNeedsCompletion => message,
                 Outcome::Cancelled => "Injected host action cancelled; no changes made.",
                 Outcome::Refused => {
                     "Injected host authority refused. Preserve unknown state; native deployment is unavailable."

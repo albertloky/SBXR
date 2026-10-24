@@ -299,6 +299,20 @@ impl OwnershipRecord {
     pub fn destination_server_name(&self) -> &str {
         &self.0.destination_server_name
     }
+    /// Ordinary private starts never choose a pending transition or recovery path.
+    pub fn ordinary_proxy_start_sha256(&self) -> Option<&str> {
+        if self.phase() != SetupPhase::Running
+            || self.recovery_direction() != RecoveryDirection::None
+            || self.pending_change().is_some()
+            || self.0.subscription_transport_migration
+        {
+            return None;
+        }
+        self.0
+            .proxy_startup
+            .as_ref()
+            .map(|s| s.drop_in_sha256.as_str())
+    }
     pub fn lock_provisioning_sha256(&self) -> Option<&str> {
         self.0
             .lock_provisioning

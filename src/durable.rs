@@ -146,7 +146,9 @@ impl Snapshot {
                 && staged.record.serving_authority().is_some();
             if crosses_barrier
                 || enablement_commit
-                || !current.record.permits_successor(&staged.record)
+                || !(current.record.permits_successor(&staged.record)
+                    || current.record.recovery_direction() == RecoveryDirection::Removal
+                        && permits_removal(Some(&current.record), &staged.record))
             {
                 return Recovery::Refused;
             }
@@ -297,12 +299,14 @@ impl OwnershipStore {
                 .encode()
                 .map_err(|_| error(StoreErrorKind::InvalidAuthority))?
                 != expected
-                || !source.permits_successor(next)
+                || !(source.permits_successor(next) || permits_removal(Some(&source), next))
             {
                 return Err(error(StoreErrorKind::Conflict));
             }
             self.synchronize(expected)?;
-        } else if next.phase() != SetupPhase::OwnershipRecorded || next.cleanup_checkpoint() != 0 {
+        } else if (next.phase() != SetupPhase::OwnershipRecorded || next.cleanup_checkpoint() != 0)
+            && !permits_removal(None, next)
+        {
             return Err(error(StoreErrorKind::InvalidAuthority));
         }
         self.expect_current(expected)?;
@@ -480,3 +484,18 @@ pub(crate) fn open_directory(path: &Path, owner_uid: u32) -> Result<OwnedFd, Sto
 #[cfg(test)]
 #[path = "durable_tests.rs"]
 mod tests;
+
+fn permits_removal(source: Option<&OwnershipRecord>, next: &OwnershipRecord) -> bool {
+    if next.recovery_direction() != RecoveryDirection::Removal {
+        return false;
+    }
+    let Ok(finisher) = crate::removal::finishing_release(next) else {
+        return false;
+    };
+    match source {
+        Some(source) if source.recovery_direction() == RecoveryDirection::Removal => {
+            crate::removal::next_checkpoint(source).as_ref() == Ok(next)
+        }
+        _ => crate::removal::commit_removal(source, &finisher).as_ref() == Ok(next),
+    }
+}

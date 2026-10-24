@@ -2,7 +2,9 @@
 //! Native construction stays unreleased; injected roots are test infrastructure.
 mod effects;
 mod material;
-mod observation;
+mod removal;
+pub use removal::StandardRemovalHost;
+pub(super) mod observation;
 pub use material::SetupMaterial;
 use observation::{Facts, ubuntu};
 pub use observation::{NativeObserver, ProtectedConfiguration, ReadOnlyObservation};
@@ -103,6 +105,7 @@ pub struct LinuxHost<R> {
     interruption: Option<SetupPhase>,
     lock: Option<Arc<super::locks::HostLock>>,
     native_mode: bool,
+    authenticated: Option<InstalledRecord>,
 }
 impl<R: CommandRunner> LinuxHost<R> {
     pub fn injected(
@@ -124,7 +127,37 @@ impl<R: CommandRunner> LinuxHost<R> {
             interruption: None,
             lock: None,
             native_mode: false,
+            authenticated: None,
         })
+    }
+    /// Authenticated installed bytes must also match this newly observed root.
+    pub fn injected_authenticated(
+        root: &Path,
+        runner: R,
+        material: SetupMaterial,
+        admission: InjectedAdmission,
+        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+    ) -> Result<Self, HostError> {
+        let mut host = Self::injected(root, runner, material, admission)?;
+        let current = observation::read_installed(&host.fs)?.ok_or(HostError::Foreign)?;
+        if &current != authenticated.record() {
+            return Err(HostError::Foreign);
+        }
+        host.authenticated = Some(authenticated.record().clone());
+        Ok(host)
+    }
+    pub fn native_authenticated_unreleased(
+        runner: R,
+        material: SetupMaterial,
+        network: super::network::NetworkAdmission,
+        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+    ) -> Result<Self, HostError> {
+        let mut host = Self::native_unreleased(runner, material, network)?;
+        if observation::read_installed(&host.fs)?.as_ref() != Some(authenticated.record()) {
+            return Err(HostError::Foreign);
+        }
+        host.authenticated = Some(authenticated.record().clone());
+        Ok(host)
     }
     pub fn native_unreleased(
         runner: R,
@@ -153,6 +186,7 @@ impl<R: CommandRunner> LinuxHost<R> {
             interruption: None,
             lock: None,
             native_mode: true,
+            authenticated: None,
         })
     }
     pub fn runner(&self) -> &R {

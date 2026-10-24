@@ -52,6 +52,62 @@ impl ServerIdentity {
 /// Secret-bearing server bytes. Only the explicit accessor discloses them.
 pub struct ServerConfiguration(Vec<u8>);
 impl ServerConfiguration {
+    /// Decode the exact Standard shape without changing its hash subject. Unknown
+    /// or duplicate fields, extra inbounds and unsupported configurations refuse.
+    pub fn decode_standard(bytes: &[u8]) -> Result<Self, ConfigurationError> {
+        let value =
+            crate::artifact_trust::json_object(bytes, 1 << 20).map_err(|_| ConfigurationError)?;
+        let inbound = &value["inbounds"][0];
+        let identity = ServerIdentity::from_private_key(
+            inbound["users"][0]["uuid"]
+                .as_str()
+                .ok_or(ConfigurationError)?,
+            inbound["tls"]["reality"]["private_key"]
+                .as_str()
+                .ok_or(ConfigurationError)?,
+            inbound["tls"]["reality"]["short_id"][0]
+                .as_str()
+                .ok_or(ConfigurationError)?,
+        )?;
+        let expected = Self::standard(&identity)?;
+        let parsed: Value =
+            serde_json::from_slice(expected.as_bytes()).map_err(|_| ConfigurationError)?;
+        if value != parsed {
+            return Err(ConfigurationError);
+        }
+        Ok(Self(bytes.to_vec()))
+    }
+    pub fn connection_facts(
+        &self,
+        public_ipv4: &str,
+    ) -> Result<crate::subscription_artifact::ConnectionFacts, ConfigurationError> {
+        let checked = Self::decode_standard(self.as_bytes())?;
+        let value: Value =
+            serde_json::from_slice(checked.as_bytes()).map_err(|_| ConfigurationError)?;
+        let inbound = &value["inbounds"][0];
+        let identity = crate::identity_generation::Identity::from_private_key(
+            inbound["users"][0]["uuid"]
+                .as_str()
+                .ok_or(ConfigurationError)?,
+            inbound["tls"]["reality"]["private_key"]
+                .as_str()
+                .ok_or(ConfigurationError)?,
+            inbound["tls"]["reality"]["short_id"][0]
+                .as_str()
+                .ok_or(ConfigurationError)?,
+        )
+        .map_err(|_| ConfigurationError)?;
+        crate::subscription_artifact::ConnectionFacts::new(
+            public_ipv4,
+            identity.uuid().as_str(),
+            STANDARD.server_name,
+            identity.public_key(),
+            identity.short_id(),
+            None,
+        )
+        .map_err(|_| ConfigurationError)
+    }
+
     pub fn standard(identity: &ServerIdentity) -> Result<Self, ConfigurationError> {
         Self::new(identity, STANDARD.handshake_address, STANDARD.server_name)
     }

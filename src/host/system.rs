@@ -287,8 +287,8 @@ impl<T: Transport> SystemRunner<T> {
         }
         Ok(())
     }
-    fn remove_identity(&self, stop: &Cancellation) -> Result<(), HostError> {
-        let Accounts { user, mut group } = self.accounts(stop)?;
+    fn exclusive_accounts(&self, stop: &Cancellation) -> Result<Accounts, HostError> {
+        let Accounts { user, group } = self.accounts(stop)?;
         if let (Some((uid, gid)), Some(group)) = (user, group.as_ref()) {
             if gid != group.gid {
                 return Err(HostError::Unsafe);
@@ -321,6 +321,10 @@ impl<T: Transport> SystemRunner<T> {
         } else if let Some(group) = group.as_ref() {
             self.group_exclusive(group.gid, stop)?;
         }
+        Ok(Accounts { user, group })
+    }
+    fn remove_identity(&self, stop: &Cancellation) -> Result<(), HostError> {
+        let Accounts { user, mut group } = self.exclusive_accounts(stop)?;
         if user.is_some() {
             self.checked("/usr/sbin/userdel", &["sing-box"], stop)?;
             let current = self.accounts(stop)?.group;
@@ -345,6 +349,9 @@ impl<T: Transport> CommandRunner for SystemRunner<T> {
     }
     fn native_effects(&self) -> bool {
         self.transport.native()
+    }
+    fn removal_identity_safe(&self, stop: &Cancellation) -> Result<(), HostError> {
+        self.exclusive_accounts(stop).map(|_| ())
     }
     fn change_lock(&mut self, lock: Option<Arc<HostLock>>) {
         self.transport.change_lock(lock.clone());
@@ -463,6 +470,17 @@ impl<T: Transport> CommandRunner for SystemRunner<T> {
                         &["stop", "sbxr-mutation-lock.service"],
                         stop,
                     )?
+                }
+                Ok(())
+            }
+            RemovePackageHold => {
+                if !self.package(stop)? {
+                    return Ok(());
+                }
+                self.checked("/usr/bin/apt-mark", &["unhold", "sing-box"], stop)?;
+                let holds = self.query(Query::Hold, stop)?;
+                if holds.code() != 0 || holds.text()?.split_whitespace().any(|s| s == "sing-box") {
+                    return Err(HostError::Unsafe);
                 }
                 Ok(())
             }

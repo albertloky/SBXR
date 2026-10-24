@@ -232,6 +232,7 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             && state_dir.is_none()
             && package_unit.is_none()
             && !facts.package
+            && !facts.held
             && facts.uid.is_none()
             && facts.gid.is_none()
             && !facts.enabled
@@ -401,9 +402,12 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             }
             RemoveAptSource => self.remove(SOURCE, APT_SOURCE, 0o644),
             RemoveAptKey => self.remove(KEY, &self.material.key, 0o644),
-            HoldPackage | EnableService | StartService | RemovePackage | RemovePackageIdentity => {
-                self.runner.effect(operation, &self.stop)
-            }
+            HoldPackage
+            | EnableService
+            | StartService
+            | RemovePackage
+            | RemovePackageHold
+            | RemovePackageIdentity => self.runner.effect(operation, &self.stop),
         }
     }
 }

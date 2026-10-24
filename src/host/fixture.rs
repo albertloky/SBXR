@@ -355,6 +355,7 @@ impl FixtureHost {
             }
             StopDisableService => (&[], &[Id::Active, Id::Enabled, Id::LockLink, Id::LockUnit]),
             RemovePackageArtifact => (&[], &[Id::PackageArtifact]),
+            RemovePackageHold => (&[], &[Id::Hold]),
             RemovePackage => (&[], &[Id::Hold, Id::Package]),
             RemoveConfigurationState => (
                 &[],

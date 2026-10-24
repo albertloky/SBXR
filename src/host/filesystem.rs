@@ -456,6 +456,112 @@ impl ProtectedFs {
         }
         Ok(())
     }
+    pub(super) fn sync_bytes(&self, path: &str, body: &[u8], mode: Mode) -> Result<(), HostError> {
+        let (bytes, proof) = self.raw(path, mode, 1 << 20)?.ok_or(HostError::Foreign)?;
+        if bytes != body {
+            return Err(HostError::Foreign);
+        }
+        let (dir, name) = self.parent(path, false)?.ok_or(HostError::Unsafe)?;
+        let fd = fs::openat(
+            &dir,
+            name.as_str(),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(failure)?;
+        if self
+            .raw(path, mode, 1 << 20)?
+            .is_none_or(|(_, p)| p != proof)
+        {
+            return Err(HostError::Unsafe);
+        }
+        fs::fsync(fd).map_err(failure)?;
+        fs::fsync(dir).map_err(failure)
+    }
+    pub(super) fn move_bytes(
+        &self,
+        source: &str,
+        target: &str,
+        body: &[u8],
+        mode: Mode,
+    ) -> Result<(), HostError> {
+        self.write_allowed()?;
+        let (bytes, proof) = self.raw(source, mode, 1 << 20)?.ok_or(HostError::Foreign)?;
+        if bytes != body || self.metadata(target)?.is_some() {
+            return Err(HostError::Foreign);
+        }
+        let (from, name) = self.parent(source, false)?.ok_or(HostError::Unsafe)?;
+        let (to, target_name) = self.parent(target, false)?.ok_or(HostError::Unsafe)?;
+        if self
+            .raw(source, mode, 1 << 20)?
+            .is_none_or(|(_, p)| p != proof)
+        {
+            return Err(HostError::Unsafe);
+        }
+        fs::renameat_with(
+            &from,
+            name.as_str(),
+            &to,
+            target_name.as_str(),
+            fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(failure)?;
+        fs::fsync(from).map_err(failure)?;
+        fs::fsync(to).map_err(failure)?;
+        self.sync_bytes(target, body, mode)
+    }
+    pub(super) fn directory_entries(
+        &self,
+        path: &str,
+        mode: Mode,
+    ) -> Result<Option<Vec<String>>, HostError> {
+        self.directory_entries_owned(path, mode, self.uid)
+    }
+    pub(super) fn directory_entries_owned(
+        &self,
+        path: &str,
+        mode: Mode,
+        uid: u32,
+    ) -> Result<Option<Vec<String>>, HostError> {
+        let Some((parent, name)) = self.parent(path, false)? else {
+            return Ok(None);
+        };
+        let fd = match fs::openat(
+            &parent,
+            name.as_str(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(failure(e)),
+        };
+        let stat = fs::fstat(&fd).map_err(failure)?;
+        if stat.st_uid != uid
+            || Mode::from_raw_mode(stat.st_mode) & Mode::from_raw_mode(0o7777) != mode
+        {
+            return Err(HostError::Foreign);
+        }
+        let mut names = Vec::new();
+        for entry in fs::Dir::read_from(&fd).map_err(failure)? {
+            let entry = entry.map_err(failure)?;
+            let name = entry.file_name().to_str().map_err(failure)?;
+            if !matches!(name, "." | "..") {
+                names.push(name.into());
+            }
+        }
+        let current =
+            fs::statat(parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW).map_err(failure)?;
+        if stat.st_dev != current.st_dev
+            || stat.st_ino != current.st_ino
+            || stat.st_uid != current.st_uid
+            || stat.st_mode != current.st_mode
+        {
+            return Err(HostError::Unsafe);
+        }
+        names.sort();
+        Ok(Some(names))
+    }
     pub(super) fn remove_bytes(
         &self,
         path: &str,

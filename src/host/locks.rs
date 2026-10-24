@@ -46,6 +46,15 @@ pub struct HostLock {
 }
 impl HostLock {
     pub fn acquire(root: &Path, uid: u32) -> Result<Self, HostError> {
+        Self::acquire_mode(root, uid, true, true)
+    }
+    pub fn existing(root: &Path, uid: u32) -> Result<Self, HostError> {
+        Self::acquire_mode(root, uid, false, false)
+    }
+    pub fn provision(root: &Path, uid: u32) -> Result<Self, HostError> {
+        Self::acquire_mode(root, uid, true, false)
+    }
+    fn acquire_mode(root: &Path, uid: u32, create: bool, parents: bool) -> Result<Self, HostError> {
         let descriptor = if root == Path::new("/") {
             super::linux::require_native_environment()?;
             if uid != 0 {
@@ -67,32 +76,44 @@ impl HostLock {
             file: None,
             package_guard: Mutex::new(false),
         };
-        let (parent, name) = lock.parent(MUTATION_LOCK, true)?.ok_or(HostError::Unsafe)?;
-        let file = match fs::openat(
-            &parent,
-            name.as_str(),
-            OFlags::RDWR
-                | OFlags::CREATE
-                | OFlags::EXCL
-                | OFlags::NOFOLLOW
-                | OFlags::NONBLOCK
-                | OFlags::CLOEXEC,
-            Mode::from_raw_mode(0o600),
-        ) {
-            Ok(file) => {
-                fs::fchmod(&file, Mode::from_raw_mode(0o600)).map_err(io)?;
-                fs::fsync(&file).map_err(io)?;
-                fs::fsync(&parent).map_err(io)?;
-                file
+        let (parent, name) = lock
+            .parent(MUTATION_LOCK, parents)?
+            .ok_or(HostError::Unsafe)?;
+        let file = if create {
+            match fs::openat(
+                &parent,
+                name.as_str(),
+                OFlags::RDWR
+                    | OFlags::CREATE
+                    | OFlags::EXCL
+                    | OFlags::NOFOLLOW
+                    | OFlags::NONBLOCK
+                    | OFlags::CLOEXEC,
+                Mode::from_raw_mode(0o600),
+            ) {
+                Ok(file) => {
+                    fs::fchmod(&file, Mode::from_raw_mode(0o600)).map_err(io)?;
+                    fs::fsync(&file).map_err(io)?;
+                    fs::fsync(&parent).map_err(io)?;
+                    file
+                }
+                Err(Errno::EXIST) => fs::openat(
+                    &parent,
+                    name.as_str(),
+                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(err)?,
+                Err(e) => return Err(err(e)),
             }
-            Err(Errno::EXIST) => fs::openat(
+        } else {
+            fs::openat(
                 &parent,
                 name.as_str(),
                 OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
                 Mode::empty(),
             )
-            .map_err(err)?,
-            Err(e) => return Err(err(e)),
+            .map_err(err)?
         };
         let before = fs::fstat(&file).map_err(io)?;
         let path = fs::statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW).map_err(io)?;
@@ -206,8 +227,9 @@ impl HostLock {
         *held = true;
         drop(held);
         let mut guard = PackageLocks {
-            host: self,
+            host: HostReference::Borrowed(self),
             files: Vec::new(),
+            release_lease: true,
         };
         for path in PACKAGE_LOCKS {
             let file = if let Some((parent, name)) = self.parent(path, false)? {
@@ -242,6 +264,18 @@ impl HostLock {
         guard.verify()?;
         Ok(guard)
     }
+    pub fn retain_packages(
+        self: &std::sync::Arc<Self>,
+    ) -> Result<PackageLocks<'static>, HostError> {
+        let mut borrowed = self.acquire_packages()?;
+        let files = std::mem::take(&mut borrowed.files);
+        borrowed.release_lease = false;
+        Ok(PackageLocks {
+            host: HostReference::Owned(self.clone()),
+            files,
+            release_lease: true,
+        })
+    }
     pub fn packages_available(&self) -> Result<(), HostError> {
         drop(self.acquire_packages()?);
         Ok(())
@@ -254,9 +288,23 @@ impl Drop for HostLock {
         }
     }
 }
+enum HostReference<'a> {
+    Borrowed(&'a HostLock),
+    Owned(std::sync::Arc<HostLock>),
+}
+impl std::ops::Deref for HostReference<'_> {
+    type Target = HostLock;
+    fn deref(&self) -> &HostLock {
+        match self {
+            Self::Borrowed(h) => h,
+            Self::Owned(h) => h,
+        }
+    }
+}
 pub struct PackageLocks<'a> {
-    host: &'a HostLock,
+    host: HostReference<'a>,
     files: Vec<(&'static str, Option<OwnedFd>)>,
+    release_lease: bool,
 }
 impl PackageLocks<'_> {
     /// No open/close of package inodes: POSIX locks are per-process, not per-fd.
@@ -297,7 +345,9 @@ impl Drop for PackageLocks<'_> {
                 drop(fd)
             }
         }
-        if let Ok(mut held) = self.host.package_guard.lock() {
+        if self.release_lease
+            && let Ok(mut held) = self.host.package_guard.lock()
+        {
             *held = false
         }
     }

@@ -2,7 +2,13 @@ use std::io;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    if std::env::args_os().len() != 1 {
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(code) =
+        sbxr::private_roles::dispatch(&arguments, &mut sbxr::private_roles::NativeUnavailable)
+    {
+        return ExitCode::from(code);
+    }
+    if !arguments.is_empty() {
         eprintln!("SBXR accepts no arguments.");
         return ExitCode::FAILURE;
     }

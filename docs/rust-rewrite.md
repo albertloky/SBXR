@@ -70,6 +70,10 @@ or Karing verification.
 | `src/artifact_trust.rs` | Real offline Sigstore verification against pinned roots/policies, exact authenticated claims and bounded acquisition interface |
 | `tooling/rust-package/` | Separate offline deterministic package/index CLI using the product release inspector |
 | `src/identity_generation.rs` | Ephemeral X25519/UUID/credential generation, injected entropy and Go-compatible validation |
+| `src/release_acquisition.rs`, `src/release_acquisition/` | Exact-tag metadata/Acceptance Record/signature/index/archive/current-byte binding; injected network boundary |
+| `src/release_archive.rs` | Bounded in-memory single gzip/ustar member inspection, with no extraction or execution |
+| `src/private_roles.rs`, `src/host/runtime.rs` | Fixed silent private dispatch and protected injected lock/start checks; native dispatcher refuses |
+| `src/removal.rs`, `src/host/linux/removal.rs`, `src/proxyinstallation/removal.rs` | Forward removal model, concrete Standard host/finalizer and shared Interface bridge |
 | `src/release_identity.rs` | Strict index/trailer bindings and explicit Rust/historical Go ELF inspection; no external authentication |
 | `src/subscription_artifact.rs` | Pure VLESS/VMess client encoding, HTTP link/token syntax and redacted secret-bearing types |
 | `src/records.rs`, `src/records/` | Strict schema-1/schema-2 historical authority, Installed Record codecs, exact ownership proofs and current HTTP/setup transitions |
@@ -605,3 +609,125 @@ because `x86_64-linux-gnu-gcc` is absent. No compiler or privileged package was
 installed to bypass that result. The earlier pre-crypto cross-check does not
 validate this updated dependency graph. Linux/musl builds and deployment
 qualification remain unestablished; the native frontend remains unavailable.
+
+
+## Authenticated installed bytes, private dispatch and Standard removal increment
+
+`AuthenticatedInstalled::acquire` binds an existing strict Installed Record and
+supplied current/installed bytes before any request. It reads only the exact-tag
+GitHub API route, requires stable immutable metadata and exactly four uploaded
+canonical asset API URLs, validates the current clean-install-only HTTP Acceptance
+Record, authenticates every native DSSE proof, then binds the exact index and
+selected archive to those authenticated digests. The unpacked executable must
+match the supplied installed bytes and pass retained Rust/historical Go ELF proof.
+An injected `AcquisitionTransport` must enforce its deadline, cancellation,
+HTTPS and redirect constraints. The current shared selection budget is 30 seconds;
+the native HTTP transport and parity with Go's longer archive-request window
+remain integration work. No live release was fetched by this increment.
+
+The current Acceptance Record reader intentionally covers the current
+`subscription-clean-install-only` policy, including five HTTP journeys and its
+exact disclosures/support/assets. Historical qualification, exceptions and
+candidate delivery refuse here rather than being converted. The preserved Go
+reader independently agrees with all 85 synthetic acceptance cases. The template
+under `src/release_acquisition/testdata/` describes a fictional run; it is not
+live evidence. Existing records require Go's toolchain line; a Rust-aware release
+qualification declaration/workflow still needs an explicit reviewed contract.
+
+`release_archive::unpack` uses pinned `flate2` 1.1.10 with its pure Rust backend.
+Its [single-member decoder](https://docs.rs/flate2/1.1.10/flate2/bufread/struct.GzDecoder.html)
+checks bounded output, complete compressed consumption and CRC, fixed regular
+`sbxr` member metadata, padding and terminal blocks. No archive path is extracted.
+The reader accepts the independently generated Go ustar/gzip fixture; noncanonical
+extensions and extra terminal blocks refuse more strictly than Go's generic tar
+reader. These encodings are outside the current fixed package producer contract.
+
+`NativeObserver::authenticate_current` implements the Linux bridge from
+`/proc/self/exe` and the protected installed pair to that acquisition chain. It
+checks the fixed process path, regular/root-owned/one-link/executable metadata
+and stable inode/content metadata, excluding read-updated atime. It is platform
+gated and was not executed on this Mac. `LinuxHost::injected_authenticated` checks
+newly observed installed files against the opaque authenticated result.
+`native_authenticated_unreleased` performs the corresponding construction but
+keeps native effects unavailable. `SetupMaterial::generated_standard` validates
+key/DEB pins before injectable entropy; `recovered_standard` decodes the bound
+existing configuration without new credentials. The Standard decoder rejects
+unknown/duplicate fields, preserves raw hash bytes and derives public X25519 facts.
+Actual pinned upstream key/DEB acquisition remains absent.
+
+The real acquisition entry refuses the preserved genuine foreign native bundle
+before downloading any index/archive. Positive index/archive/Standard integration
+unit tests cross the signature boundary through a private `cfg(test)` constructor
+only. That constructor is absent from product builds. A genuine SBXR native
+release/v0.2 positive bundle and the candidate fixture's raw manifest remain
+missing; the synthetic success path is not complete cryptographic acceptance.
+
+The zero-argument frontend remains the labeled simulator. It now recognizes only
+the six exact Go private arguments before menu dispatch: lock provision, proxy
+start, subscription serving and the three certbot roles. Product dispatch refuses
+silently, with the recorder's exact exit 125, until native prerequisites exist.
+`InjectedRuntime` performs real protected temporary-root lock provisioning and
+ordinary proxy-start checks using authenticated installed bytes, exact startup
+unit/configuration and unchanged running authority. Provisioning creates only the
+fixed coordination inode under existing parents. Ordinary startup requires an
+existing inode. Descriptor lending for busy runtime starts, serving profile/service
+integration, legacy renewal roles and signal/watch handling remain unavailable.
+
+`StandardRemovalHost` provides actual Standard file/command effects behind the
+worker's 29-test removal state machine. It requires an authenticated installed
+context, retains whole-host/package guards through commitment, releases package
+guards before commands, separates exact package unhold from pinned purge, and
+rechecks foreign files/accounts/processes. Removal observations use ownership
+facts without requiring clock, destination, public-IP or bind availability. A bare
+package hold now refuses an absent footprint; failed unhold cannot reach purge.
+The adapter handles product-only, running Standard and interrupted masked setup.
+Subscription, tunnel, renewal, startup and other auxiliary authority explicitly
+refuse until their concrete effects exist. Historical journals still decode.
+
+The central store admits only exact removal commitment and checkpoint successors.
+Staged checkpoints cannot skip progress or grant commitment. The finalizer moves
+the exact final record without replacement to `var/lib/.sbxr-removal.json`, syncs
+both parents, removes only the empty owned state directory, then unlinks and
+syncs the finalizer. Tests retry interruptions after the move and directory removal;
+post-unlink uncertainty maps to Problem detected and never removal success.
+First-commit conflicting/partial staging remains a refusal requiring correction.
+No recursive product cleanup is introduced. Unknown children remain untouched.
+
+`RemovalInstallation<H>` implements the shared Interface and terminal actions,
+including distinct Removal incomplete/Not installed states, exact result codes,
+every-Review token expiry and literal `REMOVE SBXR` confirmation for Complete
+removal. Finish removal follows Go's menu-selection approval without another
+prompt. `StandardInstallation::into_host` releases its directory-writer guard
+before `StandardRemovalHost::new` takes over. The tests drive setup then actual
+injected Standard removal through the shared menu. Exact authenticated restoration
+of missing installed members after process death is still unavailable; same-process
+finalizer retry tests do not claim that capability or physical crash durability.
+
+The Linux build inventory found QEMU 11.1.2 executables for amd64 and arm64, but no
+configured Docker/Podman/Colima/Lima runtime or workspace Linux guest image. No VM
+or container was started. The local Rust 1.90 toolchain has Darwin arm64 and Linux
+GNU amd64 standard libraries; no musl targets or cross-compilers were installed.
+The known GNU check needs `x86_64-linux-gnu-gcc` for AWS-LC/ring; that missing
+prerequisite was not bypassed or installed. A prepared Linux amd64 environment
+with Rust 1.90 and an existing C compiler can run `CARGO_BUILD_JOBS=2 cargo test
+--locked` and `cargo build --locked`. Musl releases additionally need the matching
+musl standard library/compiler, retained build-section embedding and packaging/
+bootstrap/workflow review. Available QEMU alone is not a ready build environment.
+
+Current evidence, the Go oracle and safety mutation logs are retained in
+`.scratch/acceptance/rust-acquire/`. Native installation, live qualification,
+VPS/Karing, signing, push and publication remain unperformed.
+
+
+Final validation passed 247 product tests (including the 29 removal cases), eight
+standalone packaging tests, format, strict all-target Clippy and both macOS builds.
+The independent Go oracle agrees with 85 Acceptance Record cases. Signature-bypass
+and weakened-phrase mutations each failed the corresponding integration test;
+exact source was restored before the final checks. Evidence includes the fixed
+bare-hold regression and the final product-only authority correction.
+
+For a prepared Linux environment, use the workspace-local run/TMPDIR recipe above;
+for example, create `.scratch/acceptance/linux/t` as a fresh owned directory, then
+run `TMPDIR="$PWD/.scratch/acceptance/linux/t" CARGO_BUILD_JOBS=2 cargo test --locked`
+and `cargo build --locked`. This requires Rust 1.90 and an existing C compiler.
+These commands were not run in a Linux guest during this increment.

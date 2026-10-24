@@ -3,6 +3,8 @@
 //! No live host adapter or deployment capability is implemented.
 mod fixture;
 pub use fixture::{FixtureInstallation, StandardInstallation};
+mod removal;
+pub use removal::RemovalInstallation;
 mod simulation;
 pub use simulation::{Facts, SimulatedHost, SimulationFault};
 
@@ -32,6 +34,7 @@ enum PreparedBasis {
         revision: u64,
     },
     Fixture(fixture::FixturePrepared),
+    Removal(crate::removal::PreparedRemoval),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
