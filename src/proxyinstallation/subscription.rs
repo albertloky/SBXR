@@ -82,7 +82,7 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
     }
     fn mode(&self) -> ExecutionMode {
         if self.host.root() == std::path::Path::new("/") {
-            ExecutionMode::NativeUnavailable
+            ExecutionMode::native_unreleased()
         } else {
             ExecutionMode::InjectedHost
         }

@@ -325,3 +325,56 @@ pub(super) fn verified_fixture_with_markers(markers: &[u8]) -> (AuthenticatedIns
     let mut f = Fixture::with_markers(markers);
     (f.finish().unwrap(), f.executable)
 }
+
+#[test]
+fn canonical_latest_metadata_never_bypasses_native_signature_verification() {
+    let mut f = Fixture::new();
+    let request = AcquisitionRequest::latest_metadata();
+    f.bodies.insert(request.url().into(), f.metadata.clone());
+    assert!(
+        AuthenticatedArchive::acquire_latest(&mut f, Architecture::Amd64, &SelectionBudget::new())
+            .is_err()
+    );
+    assert_eq!(f.requests.first().unwrap(), request.url());
+    assert!(f.requests.iter().any(|url| url.contains("attestations")));
+    assert!(
+        !f.requests
+            .iter()
+            .any(|url| url.contains("/releases/assets/"))
+    );
+    for key in ["draft", "prerelease"] {
+        let mut f = Fixture::new();
+        let mut value: serde_json::Value = serde_json::from_slice(&f.metadata).unwrap();
+        value[key] = true.into();
+        f.bodies
+            .insert(request.url().into(), serde_json::to_vec(&value).unwrap());
+        assert!(matches!(
+            AuthenticatedArchive::acquire_latest(
+                &mut f,
+                Architecture::Amd64,
+                &SelectionBudget::new()
+            ),
+            Err(TrustError::Refused)
+        ));
+        assert_eq!(f.requests.len(), 1);
+    }
+    struct Counter(usize);
+    impl AcquisitionTransport for Counter {
+        fn get(
+            &mut self,
+            _: &AcquisitionRequest,
+            _: &SelectionBudget,
+        ) -> Result<AcquisitionResponse> {
+            self.0 += 1;
+            Err(TrustError::Unavailable)
+        }
+    }
+    let mut f = Counter(0);
+    let budget = SelectionBudget::new();
+    budget.cancel();
+    assert!(matches!(
+        AuthenticatedArchive::acquire_latest(&mut f, Architecture::Amd64, &budget),
+        Err(TrustError::Interrupted)
+    ));
+    assert_eq!(f.0, 0);
+}

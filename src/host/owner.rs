@@ -125,7 +125,7 @@ impl<'a> NativeOwnerSources<'a> {
         Ok(Box::new(
             crate::proxyinstallation::TunnelOwnerInstallation::new(
                 tunnel,
-                ExecutionMode::NativeUnavailable,
+                ExecutionMode::native_unreleased(),
             ),
         ))
     }
@@ -243,6 +243,13 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
     fn journeys(&self) -> Result<Vec<Journey>, HostError> {
         super::linux::require_native_environment()?;
         let fs = ProtectedFs::native()?;
+        let lifecycle = super::lifecycle::LifecycleHost::native_unreleased()?.inspect()?;
+        if lifecycle.busy
+            || lifecycle.transaction
+            || lifecycle.installed.as_ref() != Some(self.proof.record())
+        {
+            return Err(HostError::Foreign);
+        }
         if super::linux::observation::read_installed(&fs)?.as_ref() != Some(self.proof.record()) {
             return Err(HostError::Foreign);
         }
@@ -307,6 +314,9 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
         Ok(journeys)
     }
     fn open(&self, journey: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
+        if !self.journeys()?.contains(&journey) {
+            return Err(HostError::Foreign);
+        }
         match journey {
             Journey::Tunnel => self.tunnel_module(),
             Journey::Http => Ok(Box::new(HttpInstallation::native_unreleased(self.proof)?)),
@@ -325,12 +335,73 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             Journey::Disclosure => Ok(Box::new(
                 crate::proxyinstallation::DisclosureInstallation::new(
                     super::disclosure::ProtectedDisclosureHost::native_unreleased(self.proof)?,
-                    ExecutionMode::NativeUnavailable,
+                    ExecutionMode::native_unreleased(),
                 ),
             )),
         }
     }
     fn mode(&self) -> ExecutionMode {
-        ExecutionMode::NativeUnavailable
+        ExecutionMode::native_unreleased()
     }
 }
+
+/// Concrete zero-argument native composition. The existing qualification boundary
+/// runs before transport construction, file inspection, entropy or host effects.
+/// No unsupported/development host is silently redirected to the simulator.
+pub fn run_public_unreleased(
+    input: &mut impl std::io::BufRead,
+    output: &mut impl std::io::Write,
+) -> Result<(), PublicEntryError> {
+    super::require_live_adapter()?;
+    let observer = super::linux::NativeObserver::open()?;
+    let budget = crate::artifact_trust::SelectionBudget::new();
+    let mut authentication =
+        crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
+    let proof = observer.authenticate_current(&mut authentication, &budget)?;
+    let mut owner = NativeOwnerSources::authenticated_unreleased(&proof)?.frontend();
+    let transport = crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
+    let mut lifecycle = crate::software_lifecycle::Installed::new(
+        super::lifecycle::LifecycleHost::native_unreleased()?,
+        transport,
+    );
+    crate::terminal::run_with_lifecycle(input, output, &mut owner, &mut lifecycle)?;
+    drop(owner);
+    use crate::software_lifecycle::Interface as _;
+    if let Some(finisher) = lifecycle.take_finisher() {
+        match finisher.exec_native_unreleased() {
+            Ok(never) => match never {},
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+pub enum PublicEntryError {
+    Host(HostError),
+    Terminal(std::io::Error),
+}
+impl std::fmt::Debug for PublicEntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Native public entry refused or terminal failed (redacted)")
+    }
+}
+impl From<HostError> for PublicEntryError {
+    fn from(value: HostError) -> Self {
+        Self::Host(value)
+    }
+}
+impl From<std::io::Error> for PublicEntryError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Terminal(value)
+    }
+}
+impl std::fmt::Display for PublicEntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Host(e) => e.fmt(f),
+            Self::Terminal(_) => f.write_str(
+                "Terminal session failed; preserve the current authority and review again.",
+            ),
+        }
+    }
+}
+impl std::error::Error for PublicEntryError {}

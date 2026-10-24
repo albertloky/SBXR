@@ -86,7 +86,7 @@ impl<H: RemovalHost> RemovalInstallation<H> {
             }
         }
         Review {
-            mode:if module.host().is_native_system() { ExecutionMode::NativeUnavailable } else { ExecutionMode::InjectedHost },
+            mode:if module.host().is_native_system() { ExecutionMode::native_unreleased() } else { ExecutionMode::InjectedHost },
             status,legal_actions,prepared,
             details:vec![if module.host().is_native_system() { "Native removal remains unavailable pending complete integration and qualification.".into() } else { "Injected protected removal of exactly recorded proxy and current auxiliary resources.".into() }],
             plan:vec!["Remove only the proved exact recorded resources and installed pair. Preserve unknown/shared resources. Committed removal finishes forward only.".into()],

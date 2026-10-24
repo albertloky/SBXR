@@ -52,7 +52,7 @@ impl<H: SetupHost> StandardInstallation<H> {
     }
     fn mode(&self) -> ExecutionMode {
         if self.host.is_native_system() {
-            ExecutionMode::NativeUnavailable
+            ExecutionMode::native_unreleased()
         } else if self.host.is_injected_system() {
             ExecutionMode::InjectedHost
         } else {

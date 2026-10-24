@@ -10,7 +10,7 @@ No Go subprocess, network, live host, credentials or deployment is needed.
 - `wizard-cases.tsv` records Standard-only inputs after selecting Start setup:
   name, escaped stdin, outcome key, Review count, Choose connection count.
   `\n` and `\r` denote LF and CR. A missing trailing newline is intentional.
-  Menu numbers are discovered from the executable, so Go/Rust menu ordering
+  Menu numbers are discovered from the explicit library simulator, so Go/Rust menu ordering
   is not asserted to be identical.
 - Wizard behavior comes from `internal/proxyinstallation/adapter/terminal/setup.go`
   (`runSetup`, `readSetupInput`) and `setup_test.go` (defaults, Help, Back,
@@ -30,3 +30,9 @@ Subscription Serving, credentials, removal, Software Lifecycle, outside-client
 traffic, Karing, packaging, signing, publication or live qualification. The
 in-memory effects counter proves only simulator non-mutation. Durable state is
 owned by the core implementation worker and requires separate boundary tests.
+
+The public executable now uses native admission and refuses an unsupported or
+unqualified environment before opening the menu; it never selects simulation
+automatically. Wizard assertions remain unchanged in the explicit library
+terminal. `tests/menu.rs` separately exercises the real executable's closed native
+entry and private/public argument refusals. These are not deployment passes.

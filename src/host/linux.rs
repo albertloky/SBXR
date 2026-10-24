@@ -262,6 +262,9 @@ impl<R: CommandRunner> LinuxHost<R> {
         }
     }
     fn admission(&self, facts: &Facts) -> Result<(), HostError> {
+        if !super::lifecycle::transactions_absent(&self.fs)? {
+            return Err(HostError::Foreign);
+        }
         let a = &self.admission;
         if let Some(lock) = &self.lock {
             lock.verify()?;

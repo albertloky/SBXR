@@ -131,9 +131,11 @@ cargo build --locked --offline
 rmdir "$TMPDIR"
 ```
 
-Run `cargo run --locked --offline` with no arguments for the local demonstration.
-No `sudo` or live resource is needed. The current binary is always the simulator;
-there is no hidden flag or environment switch to install on a host.
+The zero-argument executable now performs native admission and refuses an
+unsupported/unqualified environment; it never selects simulation automatically.
+`cargo run --locked --offline` exercises that closed admission path. The explicit
+`Installation::simulation()` library and terminal tests preserve the offline
+wizard; there is no public simulation flag or environment bypass.
 
 Initial missing-implementation failures, focused tests, final test/lint/build
 results and a subprocess transcript are retained under
@@ -142,19 +144,22 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
 
 ## Current finite parity checklist
 
-The dated increments below retain their original evidence. This table is the
-current work index; implemented library code is distinct from wired product
+The [current clean-install acceptance matrix](rust-acceptance.md) separates
+supported paths, intentional exclusions and qualification. It supersedes older
+increment checklists that treated every historical TLS/renewal mutation as a new
+Rust release requirement. The dated increments below retain their original
+evidence. This table is the current work index; implemented library code is distinct from wired product
 journeys and native/deployment validation. Historical decoders preserve evidence
 without enabling in-place Go-to-Rust migration.
 
 | Path | Implemented now | Concrete remaining completion |
 |---|---|---|
-| Native public entry and Standard setup/recovery | Shared Review/Execute and composed Owner routing; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Connect the qualified public entry and remaining owners. Digest-only early cleanup and exact authenticated package-default replacement/cleanup are implemented in fixtures. Native effects and new Linux branches remain unvalidated; public entry stays simulated. |
-| Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Connect the controller to each Owner journey. Development binaries refuse before native effects. |
-| HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Connect the qualified public entry and validate actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
-| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and complete public entry/details composition. Exact staged Client Identity publication retry and trusted historical certificate selection/state CAS are implemented. Historical TLS serving and its activation/repair/renewal Owner flows remain unavailable. |
+| Native public entry and Standard setup/recovery | Shared Review/Execute, composed Owner/lifecycle routing and zero-argument native admission; typed native HTTP/identity backends, protected system adapters and authenticated Standard input factory using pinned acquisition/recovery; fixture end-to-end checks | Complete native cancellation/build identity and qualify the composed public session. Digest-only early cleanup and exact authenticated package-default replacement/cleanup are implemented in fixtures. Native effects and new Linux branches remain unvalidated; public entry refuses unsupported/unqualified environments with no simulation fallback. |
+| Private runtime and service control | Native private-role composition for lock provisioning, proxy authorization and Standard HTTP serving; sandbox facts without proc; fixed bounded systemctl actions, lending, cutover and quiescence observations | Retain/verify released Rust build metadata and loaded commit; validate new Linux branches and real systemd sandbox/shutdown. Validate the composed controller in each current Owner journey. Development binaries refuse before native effects. |
+| HTTP enablement, link rotation and repair | Shared Interface/menu/default-No, strict durable authority, concrete protected publication/cleanup, actual local serving through retained-lock service control, full effect interruption/reopen matrix | Native runtime observations/effects and composed Owner routing are implemented and fixture-tested. Validate the composed public entry and actual Linux systemd/firewall/cgroup behavior. Exact known canonical/staged two-link publication is supported; conflicting records remain refused. |
+| Client Identity and client disclosure | Sequential durable rotation/recovery; concrete native identity runtime and composed Interface; protected publication/cutover, HTTP artifact refresh, strict VMess decoder; disclosure/link/compromise orchestration module | The protected disclosure Host, streaming output and terminal routing are implemented and fixture-tested. Qualify native runtime and the composed public entry/details path. Exact staged Client Identity publication retry and trusted historical certificate selection/state CAS are implemented. Historical TLS/activation/renewal creation is intentionally excluded from this clean-install HTTP release; original exact-release recovery remains authoritative. |
 | Optional VMess/tunnel | Rendering, client artifacts, identity generation, setup/recovery/check orchestration, guarded native connector/probe adapters, authenticated probe bytes and shared Owner frontend | Validate actual Linux connector/process/cgroup paths, local/public WS and VMess-only egress; qualify the optional profile. Fixture composition is not real tunnel qualification. |
-| Removal and Software Lifecycle | Standard/current HTTP/Client Identity artifact and dedicated tunnel removal with interrupted retries; exact finalization, signed acquisition, protected missing-member restoration and fixed descriptor execution preparation | Active/retired HTTPS lineage and renewal cleanup now have concrete protected effects and interrupted-reopen tests. Unfinished transport migration remains unavailable. Actual native restored-finisher exec and Linux qualification remain; Owner Check/Recover composition. Reconcile historical qualification-policy acquisition and transport timeout/root differences. Old journal decoding alone grants no migration. |
+| Removal and Software Lifecycle | Standard/current HTTP/Client Identity artifact and dedicated tunnel removal with interrupted retries; exact finalization, signed acquisition, protected missing-member restoration and fixed descriptor execution preparation | Active/retired HTTPS lineage and renewal cleanup now have concrete protected effects and interrupted-reopen tests. Unfinished transport migration remains unavailable. Owner lifecycle Status/Check/Recover and native public composition are implemented in the latest increment. Actual native restored-finisher exec, current-source acquisition and Linux qualification remain. Historical Go transactions are diagnosed and refused for their original exact release. Old journal decoding alone grants no migration. |
 | Packaging and Linux builds | Explicit Rust/historical Go artifact inspection, genuine public signature replay and offline packaging CLI | Retained Rust build section/loaded commit wiring, native amd64/arm64 musl builds, bootstrap/workflow integration and exact clean-source validation. Current Mac lacks a Linux cross-compiler/ready guest. |
 | Deployment qualification | Local tests and parent Linux evidence for its named earlier snapshot | All five current live journeys for the exact packaged Rust candidate, followed by any separately authorized signing/publication. No local test result is deployment qualification. |
 
@@ -1640,3 +1645,67 @@ failed before their corrections and passed afterward. Temporary fixture roots
 were cleaned. Mac fixture/process/loopback results do not establish
 Linux systemd/proc/cgroup/exec, physical crash durability, a packaged installation,
 outside traffic, Karing or release qualification.
+
+
+## Clean-install scope and native/lifecycle composition
+
+The [finite acceptance matrix](rust-acceptance.md) is now the current contract.
+New HTTPS/CA/renewal integration, automatic migration, incoming Go-to-Rust update
+and new software Update are intentional exclusions. The original Go implementation
+and its exact-release historical recovery remain unchanged. Rust does not pretend
+to finish a legacy software transaction: it preserves every byte, reports
+Recovery required, and refuses mutation. Strict retained readers, applicable
+current recovery directions, ownership-safe cleanup and exact removal-finisher
+restoration remain implemented. Historical policy acquisition unsupported by the
+current verifier remains an explicit refusal, not a release or recovery pass.
+
+`software_lifecycle` implements the current Status/Check/Update-refusal/Recover
+seam over `host::lifecycle`. Local Ready proves the protected installed pair and
+absence of transaction/conflicting mutation; it is independent from Proxy Profile
+configuration and is not artifact attestation. Check uses the canonical GitHub
+Latest endpoint and existing immutable metadata, Acceptance Record, native
+signature, index, installer and executable verification. Same exact release and
+sequence is current. Any newer qualified release is refused with the clean-install
+correction, never offered as Update. Unavailable/refused evidence and changed local
+facts retain their distinct existing machine result codes.
+
+Recovery Review creates no lock or files. Only an unchanged reviewed committed
+removal can select a restoration release; no Latest/creator fallback exists.
+Confirmed recovery reuses `RestorationHost` and `AuthenticatedArchive`, preserving
+the proxy journal and creating only missing exact members. Its one-use exact-inode
+finisher remains under both retained exclusions for takeover. The result says
+removal remains incomplete and never reports Not installed or verified traffic.
+Unknown direction, stale review, foreign pair/staging and legacy transaction
+residue refuse explicitly. Fixture tests use the existing opaque archive boundary;
+production still performs real cryptographic acquisition.
+
+The terminal composes the existing Owner and lifecycle interfaces, shows
+Check/Recover without Update, blocks proxy actions while lifecycle is not Ready,
+and defaults Recover to No. Output failure before Check starts no acquisition.
+A restored finisher returns directly to the native session for exact takeover,
+with the prior Owner writer dropped. Shared transaction admission now also guards
+native Owner sources/runtime, Standard effects and Client Identity effects.
+
+The public binary uses `host::owner::run_public_unreleased`: the existing closed
+qualification gate precedes native inspection/network/effects, then actual
+current-executable authentication, `NativeOwnerSources`, the lifecycle adapter,
+the shared terminal and exact finisher takeover are composed. Qualified native
+presentation is defined, but no gate is opened. Development/unsupported execution
+fails before the menu; simulation is only an explicit library fixture. Wizard
+assertions and Go result-code fixtures are preserved; physical executable tests
+now exercise native admission and fixed private/public argument refusal.
+
+Native cancellation/shutdown integration, current-source Linux systemd/proc/cgroup
+and finisher exec, retained Rust build identity, both musl architectures,
+bootstrap/CI and exact-candidate live qualification remain required before opening
+production. Optional VMess needs its separately bound two-node profile evidence.
+These are distinct from deliberately excluded legacy feature creation.
+
+Validation passed **531 product unit/integration tests**, **one compile-fail
+doctest**, **8 offline packaging tests**, format, strict all-target Clippy and both
+Mac builds. Nine mutations were caught and exact source restored. The executable
+fallback regression failed before the change and passed afterward. Existing
+wizard assertions and result-code fixtures remain unchanged in the explicit
+library terminal. Temporary fixtures were cleaned. Evidence is retained under
+`.scratch/acceptance/rust-entry/`; these results are not native Linux or live
+release qualification.

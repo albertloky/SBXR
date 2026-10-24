@@ -16,6 +16,7 @@ pub mod release_identity;
 pub mod removal;
 pub mod runtime_handoff;
 pub mod server_configuration;
+pub mod software_lifecycle;
 pub mod subscription_artifact;
 pub mod subscription_serving;
 pub mod terminal;

@@ -165,6 +165,32 @@ impl AuthenticatedArchive {
         let claims = trust::verify_native_release(transport, &metadata.expected()?, budget)?;
         acquire_archive(transport, &metadata, &claims, architecture, budget)
     }
+    /// Check the canonical qualified Latest using the same immutable metadata,
+    /// signatures, index, installer and executable validation as exact recovery.
+    /// This acquires bytes only; it never offers or performs an update.
+    pub fn acquire_latest(
+        transport: &mut impl AcquisitionTransport,
+        architecture: Architecture,
+        budget: &SelectionBudget,
+    ) -> Result<Self> {
+        budget.check()?;
+        let request = AcquisitionRequest::latest_metadata();
+        let response = transport.get(&request, budget)?;
+        let bytes = trust::read_complete_json_response(response, request.max_bytes(), budget)?;
+        let value = trust::json_object(&bytes, MAX_INDEX_BYTES)?;
+        let wire: WireRelease = serde_json::from_value(value).map_err(|_| TrustError::Refused)?;
+        let digest = wire
+            .assets
+            .iter()
+            .find(|a| a.name == "release-index.json")
+            .and_then(|a| a.digest.strip_prefix("sha256:"))
+            .ok_or(TrustError::Refused)?;
+        let selected = ReleaseIdentity::new(&wire.tag_name, &wire.target_commitish, digest)
+            .map_err(|_| TrustError::Refused)?;
+        let metadata = Metadata::decode_exact(&bytes, &selected)?;
+        let claims = trust::verify_native_release(transport, &metadata.expected()?, budget)?;
+        acquire_archive(transport, &metadata, &claims, architecture, budget)
+    }
     /// Native callers must freshly read protected installed/current executable
     /// bytes. The archive alone makes no assertion about their physical source.
     pub fn bind_current(

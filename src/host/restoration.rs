@@ -205,6 +205,9 @@ impl RestorationHost {
         host.recheck()?;
         Ok(host)
     }
+    pub(in crate::host) fn matches_authority(&self, expected: &AuthoritySnapshot) -> bool {
+        &self.authority == expected
+    }
     pub fn release(&self) -> &ReleaseIdentity {
         &self.release
     }

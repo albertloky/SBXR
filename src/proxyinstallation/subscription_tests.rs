@@ -2659,3 +2659,64 @@ fn native_tunnel_observation_binds_loopback_to_the_same_pinned_proxy_process() {
         );
     }
 }
+
+#[test]
+fn composed_owner_and_lifecycle_menu_keep_current_identity_and_never_offer_update() {
+    struct Offline;
+    impl crate::artifact_trust::AcquisitionTransport for Offline {
+        fn get(
+            &mut self,
+            _: &crate::artifact_trust::AcquisitionRequest,
+            _: &crate::artifact_trust::SelectionBudget,
+        ) -> Result<crate::artifact_trust::AcquisitionResponse, crate::artifact_trust::TrustError>
+        {
+            Err(crate::artifact_trust::TrustError::Unavailable)
+        }
+    }
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io,
+    });
+    let before = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+    let configuration = fs::read(root.0.join("etc/sing-box/config.json")).unwrap();
+    let mut life = crate::software_lifecycle::Installed::new(
+        crate::host::lifecycle::LifecycleHost::injected(&root.0).unwrap(),
+        Offline,
+    );
+    let mut output = Vec::new();
+    crate::terminal::run_with_lifecycle(
+        &mut std::io::Cursor::new(b"4\n5\n0\n"),
+        &mut output,
+        &mut owner,
+        &mut life,
+    )
+    .unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("Software Lifecycle status: Ready"));
+    assert!(text.contains(crate::software_lifecycle::Code::CheckReleaseUnavailable.as_str()));
+    assert!(text.contains("No recovery is available"));
+    assert!(!text.contains("Update SBXR"));
+    assert_eq!(
+        fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        before
+    );
+    assert_eq!(
+        fs::read(root.0.join("etc/sing-box/config.json")).unwrap(),
+        configuration
+    );
+    assert!(!root.0.join(TOKEN).exists());
+}

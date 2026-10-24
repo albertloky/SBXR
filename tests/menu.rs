@@ -1,24 +1,16 @@
-use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
-fn real_executable_runs_the_local_simulation() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sbxr"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"2\n\ny\n0\n")
-        .unwrap();
-    let result = child.wait_with_output().unwrap();
-    assert!(result.status.success());
-    assert!(result.stderr.is_empty());
-    let output = String::from_utf8(result.stdout).unwrap();
+fn explicit_library_simulation_keeps_the_wizard_contract() {
+    let mut installation = sbxr::proxyinstallation::Installation::simulation();
+    let mut output = Vec::new();
+    sbxr::terminal::run(
+        &mut std::io::Cursor::new(b"2\n\ny\n0\n"),
+        &mut output,
+        &mut installation,
+    )
+    .unwrap();
+    let output = String::from_utf8(output).unwrap();
     assert!(output.contains("Proxy status: Running"));
     assert!(output.contains("No software was installed"));
 }
@@ -63,4 +55,18 @@ fn fixed_private_roles_refuse_silently_without_native_prerequisites() {
         .unwrap();
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
+}
+
+#[test]
+fn native_entry_never_automatically_substitutes_the_simulator() {
+    let result = Command::new(env!("CARGO_BIN_EXE_sbxr"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let out = String::from_utf8(result.stdout).unwrap();
+    let error = String::from_utf8(result.stderr).unwrap();
+    assert!(out.is_empty());
+    assert!(!error.is_empty());
+    assert!(!out.contains("simulation") && !out.contains("Start setup"));
 }

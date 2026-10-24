@@ -8,7 +8,27 @@ pub fn run(
     output: &mut impl Write,
     installation: &mut impl Interface,
 ) -> io::Result<()> {
+    run_inner(input, output, installation, None)
+}
+
+/// Compose the existing Proxy Installation and Software Lifecycle modules.
+/// Each module retains its own prepared authority; no lifecycle Update menu.
+pub fn run_with_lifecycle(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    installation: &mut impl Interface,
+    lifecycle: &mut dyn crate::software_lifecycle::Interface,
+) -> io::Result<()> {
+    run_inner(input, output, installation, Some(lifecycle))
+}
+fn run_inner(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    installation: &mut impl Interface,
+    mut lifecycle: Option<&mut dyn crate::software_lifecycle::Interface>,
+) -> io::Result<()> {
     match installation.review(Action::Status).mode {
+        ExecutionMode::Native => writeln!(output, "SBXR")?,
         ExecutionMode::NativeUnavailable => {
             writeln!(output, "SBXR Rust — native installation unavailable")?;
             writeln!(
@@ -39,8 +59,9 @@ pub fn run(
         }
     }
     loop {
-        let current = installation.review(Action::Status);
+        let mut current = installation.review(Action::Status);
         let qualifier = match current.mode {
+            ExecutionMode::Native => "local",
             ExecutionMode::Simulation => "simulated",
             ExecutionMode::Fixture => "fixture",
             ExecutionMode::InjectedHost => "injected host",
@@ -52,23 +73,39 @@ pub fn run(
             "Subscription status: {} ({qualifier})",
             installation.subscription_status()
         )?;
-        match current.mode {
-            ExecutionMode::NativeUnavailable => writeln!(
-                output,
-                "Software Lifecycle status: Native authentication incomplete"
-            )?,
-            ExecutionMode::InjectedHost => writeln!(
-                output,
-                "Software Lifecycle status: Injected host pair (not release authenticated)"
-            )?,
-            ExecutionMode::Simulation => writeln!(
-                output,
-                "Software Lifecycle status: Not inspected (simulation)"
-            )?,
-            ExecutionMode::Fixture => writeln!(
-                output,
-                "Software Lifecycle status: Fixture pair only (not release authenticated)"
-            )?,
+        if let Some(module) = &mut lifecycle {
+            let state = module.status().state;
+            writeln!(output, "Software Lifecycle status: {state}")?;
+            if state != crate::software_lifecycle::State::Ready {
+                current.prepared = None;
+                current.legal_actions.retain(|a| *a == Action::ViewDetails);
+                writeln!(
+                    output,
+                    "Software Lifecycle must be Ready before proxy actions can continue."
+                )?;
+            }
+        } else {
+            match current.mode {
+                ExecutionMode::Native => {
+                    writeln!(output, "Software Lifecycle status: Not inspected")?
+                }
+                ExecutionMode::NativeUnavailable => writeln!(
+                    output,
+                    "Software Lifecycle status: Native authentication incomplete"
+                )?,
+                ExecutionMode::InjectedHost => writeln!(
+                    output,
+                    "Software Lifecycle status: Injected host pair (not release authenticated)"
+                )?,
+                ExecutionMode::Simulation => writeln!(
+                    output,
+                    "Software Lifecycle status: Not inspected (simulation)"
+                )?,
+                ExecutionMode::Fixture => writeln!(
+                    output,
+                    "Software Lifecycle status: Fixture pair only (not release authenticated)"
+                )?,
+            }
         }
         writeln!(output, "Proxy traffic: cannot be verified")?;
         if let Some(refusal) = current.refusal {
@@ -76,6 +113,10 @@ pub fn run(
         }
         for (index, action) in current.legal_actions.iter().enumerate() {
             writeln!(output, "{}. {action}", index + 1)?;
+        }
+        if lifecycle.is_some() {
+            writeln!(output, "{}. Check SBXR", current.legal_actions.len() + 1)?;
+            writeln!(output, "{}. Recover SBXR", current.legal_actions.len() + 2)?;
         }
         writeln!(output, "0. Exit")?;
         let Some(line) = prompt(input, output, "Choose:")? else {
@@ -85,6 +126,22 @@ pub fn run(
             return Ok(());
         }
         let number = line.parse::<usize>().ok().filter(|n| n.to_string() == line);
+        if let (Some(number), Some(module)) = (number, &mut lifecycle)
+            && (number == current.legal_actions.len() + 1
+                || number == current.legal_actions.len() + 2)
+        {
+            // Expire every outstanding proxy review before a lifecycle call.
+            installation.review(Action::Status);
+            if run_lifecycle(
+                input,
+                output,
+                *module,
+                number == current.legal_actions.len() + 1,
+            )? {
+                return Ok(());
+            }
+            continue;
+        }
         let Some(action) = number
             .and_then(|n| n.checked_sub(1))
             .and_then(|i| current.legal_actions.get(i))
@@ -195,6 +252,52 @@ pub fn run(
     }
 }
 
+fn lifecycle_result(
+    output: &mut impl Write,
+    result: &crate::software_lifecycle::Result,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "Software Lifecycle: {}\nResult: {}\nCode: {}",
+        result.state,
+        result.message,
+        result.code.as_str()
+    )
+}
+fn run_lifecycle(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    module: &mut dyn crate::software_lifecycle::Interface,
+    check: bool,
+) -> io::Result<bool> {
+    if check {
+        writeln!(output, "Progress: Checking the qualified latest release")?;
+        output.flush()?;
+        let result = module.check();
+        lifecycle_result(output, &result)?;
+        return Ok(false);
+    }
+    let reviewed = module.review_recover();
+    lifecycle_result(output, &reviewed)?;
+    let Some(direction) = reviewed.recovery_direction else {
+        writeln!(
+            output,
+            "No recovery is available. If a change is in progress, wait for it to finish."
+        )?;
+        return Ok(false);
+    };
+    writeln!(output, "Recovery direction: {direction}")?;
+    let approval = confirmation(input, output, "Recover SBXR? [y/N]")?;
+    if approval != Confirmation::Approved {
+        module.recover(approval);
+        writeln!(output, "No changes were made.")?;
+        return Ok(false);
+    }
+    let result = module.recover(approval);
+    lifecycle_result(output, &result)?;
+    Ok(result.code == crate::software_lifecycle::Code::RemovalRestored)
+}
+
 fn setup(
     input: &mut impl BufRead,
     output: &mut impl Write,
@@ -262,6 +365,7 @@ fn setup(
             match prompt(input, output, "Apply setup? [y/N]")?.as_deref() {
                 Some("y") => {
                     match review.mode {
+                        ExecutionMode::Native => writeln!(output, "Setup 3 — Install and check")?,
                         ExecutionMode::NativeUnavailable => {
                             writeln!(output, "Native setup is unavailable.")?;
                             return Ok(());

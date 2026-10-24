@@ -41,7 +41,7 @@ impl<H: ci::Host> ClientIdentityInstallation<H> {
     }
     fn mode(&self) -> ExecutionMode {
         if self.host.borrow().native_host() {
-            ExecutionMode::NativeUnavailable
+            ExecutionMode::native_unreleased()
         } else {
             ExecutionMode::InjectedHost
         }

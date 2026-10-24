@@ -611,6 +611,13 @@ pub struct AcquisitionRequest {
     json: bool,
 }
 impl AcquisitionRequest {
+    pub(crate) fn latest_metadata() -> Self {
+        Self {
+            url: format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"),
+            limit: crate::release_identity::MAX_INDEX_BYTES,
+            json: true,
+        }
+    }
     pub(crate) fn release_metadata(tag: &str) -> Result<Self> {
         ReleaseIdentity::new(tag, &"a".repeat(40), &"b".repeat(64))
             .map_err(|_| TrustError::Refused)?;

@@ -2109,3 +2109,24 @@ mod auxiliary_removal;
 
 #[path = "linux/historical_tests.rs"]
 mod historical_removal;
+
+#[test]
+fn lifecycle_transaction_arriving_after_setup_review_refuses_without_effects() {
+    let root = Root::new();
+    let mut installation = StandardInstallation::new(root.host(), release()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    let path = "usr/local/bin/.sbxr-update-candidate";
+    root.write(path, b"retained exact software transaction", 0o600);
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::Refused
+    );
+    assert!(installation.host().runner().effects.is_empty());
+    assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+    assert_eq!(
+        fs::read(root.0.join(path)).unwrap(),
+        b"retained exact software transaction"
+    );
+}

@@ -147,6 +147,9 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
         self.backend
     }
     fn installed(&self) -> Result<(), ci::Error> {
+        if !super::lifecycle::transactions_absent(&self.fs).map_err(refused)? {
+            return Err(ci::Error::Authority);
+        }
         if super::linux::observation::read_installed(&self.fs)
             .map_err(refused)?
             .as_ref()

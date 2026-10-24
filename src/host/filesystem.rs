@@ -1,4 +1,5 @@
 mod historical;
+mod lifecycle;
 mod package_default;
 pub(in crate::host) use historical::HistoricalFileLocks;
 mod restoration;

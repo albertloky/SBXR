@@ -6,6 +6,7 @@ mod filesystem;
 mod fixture;
 pub mod historical;
 pub mod identity;
+pub mod lifecycle;
 pub mod linux;
 pub mod locks;
 pub mod network;

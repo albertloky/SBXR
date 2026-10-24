@@ -15,7 +15,7 @@ setup/recovery is `src/proxyinstallation/fixture.rs` (`StandardInstallation<H>`)
 injected-root effects are in `src/host/linux.rs` and its small submodules; bounded
 process transport is `src/host/process.rs`. Retained locks, direct TLS/bind
 admission and fixed native command effects are `src/host/{locks,network,system}.rs`;
-the native frontend stays explicitly unavailable. Identity generation, structural
+the public frontend uses closed native admission, with no simulator fallback. Identity generation, structural
 release inspection and offline Sigstore authentication have separate modules and
 adjacent/integration tests. `tooling/rust-package/` is the separate offline CLI.
 Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decoding
@@ -45,7 +45,12 @@ The injected constructors reject `/`; typed native constructors now use
 `src/host/owner_runtime.rs` and its command/observation/probe/effect submodules.
 The composed Interface is `src/proxyinstallation/owner.rs`; native authenticated
 sources are `src/host/owner.rs`. Only one selected journey retains its writer and
-prepared authority. Native public Owner dispatch remains closed. Fixed cgroup
+prepared authority. `src/host/owner.rs` composes zero-argument native Owner/lifecycle dispatch behind
+the existing closed qualification gate. `src/software_lifecycle.rs` and
+`src/host/lifecycle.rs` own Status/Check, clean-install Update refusal and reviewed
+exact-finisher recovery; `src/host/filesystem/lifecycle.rs` is its read-only lock
+probe. `terminal::run_with_lifecycle` supplies the two-module menu. Native public
+Owner effects remain closed. Fixed cgroup
 virtual reads use `src/host/filesystem/runtime.rs` without changing ordinary
 record/file validation. `src/disclosure.rs` and `src/tunnel_setup.rs` hold the
 completed orchestration modules. Disclosure now uses the protected Host in

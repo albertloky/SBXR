@@ -75,10 +75,7 @@ fn executable(input: &[u8], arguments: &[&str]) -> (i32, String, String) {
 }
 
 fn successful_session(input: &[u8]) -> String {
-    let (status, output, error) = executable(input, &[]);
-    assert_eq!(status, 0, "stdout: {output}\nstderr: {error}");
-    assert!(error.is_empty(), "{error}");
-    output
+    terminal_session(&mut Installation::simulation(), input)
 }
 
 fn menu_number(output: &str, action: &str) -> String {
@@ -96,7 +93,7 @@ fn terminal_session(installation: &mut Installation, input: &[u8]) -> String {
 }
 
 #[test]
-fn zero_arguments_open_an_honestly_labeled_numbered_menu_and_eof_exits() {
+fn explicit_simulator_opens_an_honestly_labeled_numbered_menu_and_eof_exits() {
     for input in [b"0\n".as_slice(), b""] {
         let output = successful_session(input);
         for label in [
@@ -127,7 +124,7 @@ fn public_arguments_are_refused_before_the_menu() {
 }
 
 #[test]
-fn standard_wizard_matches_the_reference_input_cases_in_the_real_executable() {
+fn standard_wizard_matches_the_reference_input_cases_in_the_explicit_terminal() {
     let start = menu_number(&successful_session(b"0\n"), "Start setup");
     for line in include_str!("testdata/parity/wizard-cases.tsv").lines() {
         let fields: Vec<_> = line.split('\t').collect();

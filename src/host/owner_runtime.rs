@@ -86,6 +86,9 @@ impl<'a, I: OwnerIo> OwnerRuntime<'a, I> {
         )
     }
     pub(in crate::host) fn installed(&self) -> Result<(), HostError> {
+        if !super::lifecycle::transactions_absent(&self.fs)? {
+            return Err(HostError::Foreign);
+        }
         if super::linux::observation::read_installed(&self.fs)?.as_ref()
             != Some(self.proof.record())
         {

@@ -55,10 +55,23 @@ enum PreparedBasis {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecutionMode {
+    Native,
     Simulation,
     Fixture,
     InjectedHost,
     NativeUnavailable,
+}
+
+impl ExecutionMode {
+    /// Reuse the existing closed native qualification boundary. This mode is
+    /// presentation only; every concrete host retains its own effect guards.
+    pub(crate) fn native_unreleased() -> Self {
+        if crate::host::require_live_adapter().is_ok() {
+            Self::Native
+        } else {
+            Self::NativeUnavailable
+        }
+    }
 }
 
 /// The existing two-operation product boundary, shared by concrete adapters.
