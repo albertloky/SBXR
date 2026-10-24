@@ -1,11 +1,14 @@
 //! Standard Ubuntu command plans and an explicit filesystem-fixture adapter.
-//! Native observation is read-only; mutation effects require an explicit injected root/runner.
-//! A deployable live adapter remains unavailable.
+//! Fixed native command/file effects and retained guards are implemented, with
+//! fixture-only integration tests. The production entry remains unavailable.
 mod filesystem;
 mod fixture;
 pub mod linux;
+pub mod locks;
+pub mod network;
 pub mod process;
 mod setup;
+pub mod system;
 use crate::records::SetupPhase;
 pub use fixture::{FIXTURE_CONFIGURATION, FixtureHost, HostObservation};
 pub use setup::{SetupHost, SetupObservation};
@@ -22,6 +25,7 @@ pub enum HostError {
     Cancelled,
     Timeout,
     OutputLimit,
+    Busy,
 }
 impl fmt::Display for HostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

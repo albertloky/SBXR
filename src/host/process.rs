@@ -1,5 +1,5 @@
-//! Fixed read-only commands and a bounded subprocess transport. No shell or
-//! production mutation runner is exposed. Raw command output is never formatted.
+//! Fixed queries and bounded subprocess transport, shared by the system adapter.
+//! No shell is exposed. Raw command output is never formatted.
 use super::{HostError, Operation};
 use rustix::{
     fs::{OFlags, fcntl_getfl, fcntl_setfl},
@@ -46,10 +46,14 @@ pub enum Query {
     UnitOwner,
     Clock,
     ValidateConfiguration,
+    DestinationDns,
+    PublicIpDns,
 }
 impl Query {
-    fn argv(self) -> (&'static str, &'static [&'static str]) {
+    pub(super) fn argv(self) -> (&'static str, &'static [&'static str]) {
         match self {
+            Self::DestinationDns => ("/usr/bin/getent", &["ahosts", "google.com"]),
+            Self::PublicIpDns => ("/usr/bin/getent", &["ahostsv4", "api.ipify.org"]),
             Self::Package => (
                 "/usr/bin/dpkg-query",
                 &[
@@ -123,6 +127,13 @@ pub trait CommandRunner {
     fn query(&self, query: Query, stop: &Cancellation) -> Result<CommandOutput, HostError>;
     fn effect(&mut self, _operation: Operation, _stop: &Cancellation) -> Result<(), HostError> {
         Err(HostError::LiveUnavailable)
+    }
+    fn change_lock(&mut self, _lock: Option<Arc<super::locks::HostLock>>) {}
+    fn reload_units(&mut self, _stop: &Cancellation) -> Result<(), HostError> {
+        Ok(())
+    }
+    fn native_effects(&self) -> bool {
+        false
     }
     fn injected_effects(&self) -> bool {
         false
@@ -209,6 +220,16 @@ fn run(
     limit: usize,
     stop: &Cancellation,
 ) -> Result<CommandOutput, HostError> {
+    run_in(program, args, "/", timeout, limit, stop)
+}
+pub(super) fn run_in(
+    program: &str,
+    args: &[&str],
+    cwd: &str,
+    timeout: Duration,
+    limit: usize,
+    stop: &Cancellation,
+) -> Result<CommandOutput, HostError> {
     if stop.cancelled() {
         return Err(HostError::Cancelled);
     }
@@ -218,7 +239,7 @@ fn run(
         .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
         .env("LANG", "C")
         .env("LC_ALL", "C")
-        .current_dir("/")
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

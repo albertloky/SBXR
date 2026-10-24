@@ -48,7 +48,9 @@ impl<H: SetupHost> StandardInstallation<H> {
         &mut self.host
     }
     fn mode(&self) -> ExecutionMode {
-        if self.host.is_injected_system() {
+        if self.host.is_native_system() {
+            ExecutionMode::NativeUnavailable
+        } else if self.host.is_injected_system() {
             ExecutionMode::InjectedHost
         } else {
             ExecutionMode::Fixture
@@ -172,7 +174,33 @@ impl<H: SetupHost> StandardInstallation<H> {
                 "Fixture action cancelled. No changes were made.",
             );
         }
-        if prepared.action == Action::StartSetup {
+        if self.host.begin_change().is_err() {
+            return self.result(
+                Outcome::Refused,
+                "Whole-host exclusion could not be retained. Review again.",
+            );
+        }
+        let result = match self.state() {
+            Ok(locked)
+                if locked.action == Some(prepared.action)
+                    && locked.observation == basis.observation
+                    && locked.snapshot.current.as_ref().map(|r| r.bytes())
+                        == basis.current.as_deref()
+                    && locked.snapshot.staged.as_ref().map(|r| r.bytes())
+                        == basis.staged.as_deref() =>
+            {
+                self.execute_approved(prepared.action, locked)
+            }
+            _ => self.result(
+                Outcome::Refused,
+                "Facts changed while acquiring whole-host exclusion. Review again.",
+            ),
+        };
+        self.host.end_change();
+        result
+    }
+    fn execute_approved(&mut self, action: Action, state: State) -> ActionResult {
+        if action == Action::StartSetup {
             let Ok(record) = OwnershipRecord::new_standard(
                 self.release.clone(),
                 self.host.public_ipv4(),
@@ -194,7 +222,7 @@ impl<H: SetupHost> StandardInstallation<H> {
         let Some(current) = state.snapshot.current else {
             return self.result(Outcome::Refused, "Fixture ownership disappeared.");
         };
-        if prepared.action == Action::FinishCleanup {
+        if action == Action::FinishCleanup {
             self.cleanup(current.record)
         } else {
             self.run_setup(current.record)

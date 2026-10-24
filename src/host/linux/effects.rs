@@ -12,11 +12,41 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
     fn configuration_sha256(&self) -> String {
         self.material.configuration.sha256_hex()
     }
+    fn is_native_system(&self) -> bool {
+        self.native_mode
+    }
     fn is_injected_system(&self) -> bool {
-        true
+        !self.native_mode
     }
     fn effects_available(&self) -> bool {
-        self.runner.injected_effects()
+        if self.native_mode {
+            false
+        } else {
+            self.runner.injected_effects()
+        }
+    }
+    fn begin_change(&mut self) -> Result<(), HostError> {
+        if !self.effects_available() {
+            return Err(HostError::LiveUnavailable);
+        }
+        if self.lock.is_some() {
+            return Err(HostError::Busy);
+        }
+        let lock = Arc::new(super::super::locks::HostLock::acquire(
+            self.root(),
+            self.uid(),
+        )?);
+        if self.native_mode {
+            self.fs.authorize_native_writes(Some(lock.clone()))?;
+        }
+        self.runner.change_lock(Some(lock.clone()));
+        self.lock = Some(lock);
+        Ok(())
+    }
+    fn end_change(&mut self) {
+        self.runner.change_lock(None);
+        let _ = self.fs.authorize_native_writes(None);
+        self.lock = None;
     }
     fn interrupted(&self, phase: SetupPhase) -> bool {
         self.interruption == Some(phase)
@@ -84,9 +114,17 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             path: "etc/sing-box",
             kind: Kind::Directory(Mode::from_raw_mode(0o755)),
         })?;
+        let state_metadata = self.fs.metadata("var/lib/sing-box")?;
+        if (configuration || state_metadata.is_some()) && !facts.identity {
+            return Err(HostError::Foreign);
+        }
         let state_dir = self.fs.observe(Resource {
             path: "var/lib/sing-box",
-            kind: Kind::Directory(Mode::from_raw_mode(0o755)),
+            kind: Kind::OwnedDirectory(
+                Mode::from_raw_mode(0o755),
+                facts.uid.unwrap_or(self.fs.uid),
+                facts.gid.unwrap_or(self.fs.gid),
+            ),
         })?;
         fingerprint.push_str(&format!("{config_dir:?}:{state_dir:?}"));
         // Actual Linux UID/GID proofs belong to the observed package account. In the
@@ -124,7 +162,19 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             (ARTIFACT, self.material.package.as_slice(), 0o600),
             (LOCK_UNIT, UNIT, 0o644),
         ] {
-            staged |= self.file(&format!("{path}.sbxr-next"), bytes, mode, &mut fingerprint)?;
+            let stage_path = format!("{path}.sbxr-next");
+            let present = self.file(&stage_path, bytes, mode, &mut fingerprint)?;
+            if path == CONFIG
+                && present
+                && (!facts.identity
+                    || self
+                        .fs
+                        .metadata(&stage_path)?
+                        .is_none_or(|m| Some(m.gid) != facts.gid))
+            {
+                return Err(HostError::Foreign);
+            }
+            staged |= present;
         }
         let package_unit = self.fs.raw(
             "usr/lib/systemd/system/sing-box.service",
@@ -151,6 +201,7 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             && lock
             && link.is_some()
             && facts.package
+            && facts.held_package
             && facts.held
             && facts.identity
             && facts.provenance
@@ -181,7 +232,8 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             && state_dir.is_none()
             && package_unit.is_none()
             && !facts.package
-            && !facts.identity
+            && facts.uid.is_none()
+            && facts.gid.is_none()
             && !facts.enabled
             && !facts.active
             && !facts.process
@@ -207,8 +259,8 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
         operation: Operation,
         authority: &OwnershipRecord,
     ) -> Result<(), HostError> {
-        if !self.runner.injected_effects()
-            || self.root() == Path::new("/")
+        if !self.effects_available()
+            || self.lock.as_ref().is_none_or(|lock| lock.verify().is_err())
             || authority.schema() != 1
             || authority.tunnel_authority().is_some()
             || authority.configuration_sha256() != self.configuration_sha256()
@@ -244,12 +296,29 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             InstallAptKey => self.install(KEY, &self.material.key, 0o644),
             InstallAptSource => self.install(SOURCE, APT_SOURCE, 0o644),
             InstallConfiguration => {
-                self.install(CONFIG, self.material.configuration.as_bytes(), 0o640)
+                let facts = Facts::query(&self.runner, &self.stop)?;
+                let gid = facts.gid.ok_or(HostError::Unsafe)?;
+                if !facts.identity {
+                    return Err(HostError::Unsafe);
+                }
+                self.fs.publish_bytes_group(
+                    CONFIG,
+                    self.material.configuration.as_bytes(),
+                    Mode::from_raw_mode(0o640),
+                    gid,
+                )
             }
-            CreateStateDirectory => self.fs.install(Resource {
-                path: "var/lib/sing-box",
-                kind: Kind::Directory(Mode::from_raw_mode(0o755)),
-            }),
+            CreateStateDirectory => {
+                let facts = Facts::query(&self.runner, &self.stop)?;
+                self.fs.install(Resource {
+                    path: "var/lib/sing-box",
+                    kind: Kind::OwnedDirectory(
+                        Mode::from_raw_mode(0o755),
+                        facts.uid.ok_or(HostError::Unsafe)?,
+                        facts.gid.ok_or(HostError::Unsafe)?,
+                    ),
+                })
+            }
             MaskService => {
                 self.runner.effect(operation, &self.stop)?;
                 self.fs.install(Resource {
@@ -260,7 +329,8 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                 self.fs.install(Resource {
                     path: LOCK_LINK,
                     kind: Kind::Link("../sbxr-mutation-lock.service"),
-                })
+                })?;
+                self.runner.reload_units(&self.stop)
             }
             InstallPackage => {
                 let before = Facts::query(&self.runner, &self.stop)?;
@@ -300,7 +370,8 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                     path: LOCK_LINK,
                     kind: Kind::Link("../sbxr-mutation-lock.service"),
                 })?;
-                self.remove(LOCK_UNIT, UNIT, 0o644)
+                self.remove(LOCK_UNIT, UNIT, 0o644)?;
+                self.runner.reload_units(&self.stop)
             }
             UnmaskService => {
                 self.runner.effect(operation, &self.stop)?;
@@ -316,10 +387,17 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
                     path: "etc/sing-box",
                     kind: Kind::Directory(Mode::from_raw_mode(0o755)),
                 })?;
-                self.fs.remove(Resource {
-                    path: "var/lib/sing-box",
-                    kind: Kind::Directory(Mode::from_raw_mode(0o755)),
-                })
+                if let Some(metadata) = self.fs.metadata("var/lib/sing-box")? {
+                    self.fs.remove(Resource {
+                        path: "var/lib/sing-box",
+                        kind: Kind::OwnedDirectory(
+                            Mode::from_raw_mode(0o755),
+                            metadata.uid,
+                            metadata.gid,
+                        ),
+                    })?;
+                }
+                Ok(())
             }
             RemoveAptSource => self.remove(SOURCE, APT_SOURCE, 0o644),
             RemoveAptKey => self.remove(KEY, &self.material.key, 0o644),

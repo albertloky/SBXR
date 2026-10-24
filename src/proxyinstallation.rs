@@ -39,6 +39,7 @@ pub enum ExecutionMode {
     Simulation,
     Fixture,
     InjectedHost,
+    NativeUnavailable,
 }
 
 /// The existing two-operation product boundary, shared by concrete adapters.

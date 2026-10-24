@@ -15,6 +15,7 @@ use std::{
 pub(super) enum Kind {
     File(&'static [u8], Mode),
     Directory(Mode),
+    OwnedDirectory(Mode, u32, u32),
     Link(&'static str),
 }
 #[derive(Clone, Copy)]
@@ -38,6 +39,8 @@ pub(super) struct ProtectedFs {
     root: OwnedFd,
     path: PathBuf,
     pub uid: u32,
+    pub gid: u32,
+    native_write_lock: Option<std::sync::Arc<super::locks::HostLock>>,
 }
 fn failure(_: impl std::fmt::Debug) -> HostError {
     HostError::Io
@@ -46,10 +49,13 @@ impl ProtectedFs {
     pub fn open(path: &Path) -> Result<Self, HostError> {
         let uid = std::fs::symlink_metadata(path).map_err(failure)?.uid();
         let root = crate::durable::open_directory(path, uid).map_err(|_| HostError::Unsafe)?;
+        let gid = fs::fstat(&root).map_err(failure)?.st_gid;
         Ok(Self {
             root,
             path: path.into(),
             uid,
+            gid,
+            native_write_lock: None,
         })
     }
     pub fn path(&self) -> &Path {
@@ -71,7 +77,33 @@ impl ProtectedFs {
             root,
             path: PathBuf::from("/"),
             uid: 0,
+            gid: stat.st_gid,
+            native_write_lock: None,
         })
+    }
+    pub(super) fn authorize_native_writes(
+        &mut self,
+        lock: Option<std::sync::Arc<super::locks::HostLock>>,
+    ) -> Result<(), HostError> {
+        if let Some(guard) = &lock {
+            super::linux::require_native_environment()?;
+            if self.path != Path::new("/") || guard.root() != self.path {
+                return Err(HostError::Unsafe);
+            }
+            guard.verify()?;
+        }
+        self.native_write_lock = lock;
+        Ok(())
+    }
+    fn write_allowed(&self) -> Result<(), HostError> {
+        if self.path == Path::new("/") {
+            super::linux::require_native_environment()?;
+            self.native_write_lock
+                .as_ref()
+                .ok_or(HostError::LiveUnavailable)?
+                .verify()?;
+        }
+        self.check_root()
     }
     fn check_root(&self) -> Result<(), HostError> {
         let current = if self.path == Path::new("/") {
@@ -232,10 +264,18 @@ impl ProtectedFs {
             Err(Errno::NOENT) => return Ok(None),
             Err(error) => return Err(failure(error)),
         };
-        if stat.st_uid != self.uid {
+        let expected_uid = match resource.kind {
+            Kind::OwnedDirectory(_, uid, _) => uid,
+            _ => self.uid,
+        };
+        if stat.st_uid != expected_uid {
             return Err(HostError::Foreign);
         }
         match resource.kind {
+            Kind::OwnedDirectory(mode, _, gid)
+                if FileType::from_raw_mode(stat.st_mode) == FileType::Directory
+                    && Mode::from_raw_mode(stat.st_mode) & Mode::from_raw_mode(0o7777) == mode
+                    && stat.st_gid == gid => {}
             Kind::Directory(mode)
                 if FileType::from_raw_mode(stat.st_mode) == FileType::Directory
                     && Mode::from_raw_mode(stat.st_mode) & Mode::from_raw_mode(0o7777) == mode => {}
@@ -263,9 +303,7 @@ impl ProtectedFs {
         }))
     }
     pub fn install(&self, resource: Resource) -> Result<(), HostError> {
-        if self.path == Path::new("/") {
-            return Err(HostError::LiveUnavailable);
-        }
+        self.write_allowed()?;
         if self.observe(resource)?.is_some() {
             return Ok(());
         }
@@ -288,6 +326,24 @@ impl ProtectedFs {
                 file.write_all(body).map_err(failure)?;
                 file.sync_all().map_err(failure)?;
             }
+            Kind::OwnedDirectory(mode, uid, gid) => {
+                fs::mkdirat(&dir, name.as_str(), mode).map_err(failure)?;
+                let fd = fs::openat(
+                    &dir,
+                    name.as_str(),
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(failure)?;
+                fs::fchown(
+                    &fd,
+                    Some(rustix::process::Uid::from_raw(uid)),
+                    Some(rustix::process::Gid::from_raw(gid)),
+                )
+                .map_err(failure)?;
+                fs::fchmod(&fd, mode).map_err(failure)?;
+                fs::fsync(fd).map_err(failure)?;
+            }
             Kind::Directory(mode) => {
                 fs::mkdirat(&dir, name.as_str(), mode).map_err(failure)?;
                 let created = fs::openat(
@@ -307,9 +363,7 @@ impl ProtectedFs {
         Ok(())
     }
     pub fn remove(&self, resource: Resource) -> Result<(), HostError> {
-        if self.path == Path::new("/") {
-            return Err(HostError::LiveUnavailable);
-        }
+        self.write_allowed()?;
         if self.observe(resource)?.is_none() {
             return Ok(());
         }
@@ -319,7 +373,10 @@ impl ProtectedFs {
         fs::unlinkat(
             &dir,
             name.as_str(),
-            if matches!(resource.kind, Kind::Directory(_)) {
+            if matches!(
+                resource.kind,
+                Kind::Directory(_) | Kind::OwnedDirectory(_, _, _)
+            ) {
                 AtFlags::REMOVEDIR
             } else {
                 AtFlags::empty()
@@ -353,12 +410,19 @@ impl ProtectedFs {
         body: &[u8],
         mode: Mode,
     ) -> Result<(), HostError> {
-        if self.path == Path::new("/") {
-            return Err(HostError::LiveUnavailable);
-        }
+        self.publish_bytes_group(path, body, mode, self.gid)
+    }
+    pub(super) fn publish_bytes_group(
+        &self,
+        path: &str,
+        body: &[u8],
+        mode: Mode,
+        gid: u32,
+    ) -> Result<(), HostError> {
+        self.write_allowed()?;
         let stage = format!("{path}.sbxr-next");
-        if let Some((existing, _)) = self.raw(path, mode, 1 << 26)? {
-            if existing != body {
+        if let Some((existing, evidence)) = self.raw(path, mode, 1 << 26)? {
+            if existing != body || evidence.gid != gid {
                 return Err(HostError::Foreign);
             }
             if self.metadata(&stage)?.is_some() {
@@ -366,12 +430,12 @@ impl ProtectedFs {
             }
             return Ok(());
         }
-        if let Some((existing, _)) = self.raw(&stage, mode, 1 << 26)? {
-            if existing != body {
+        if let Some((existing, evidence)) = self.raw(&stage, mode, 1 << 26)? {
+            if existing != body || evidence.gid != gid {
                 return Err(HostError::Foreign);
             }
         } else {
-            self.install_bytes(&stage, body, mode)?;
+            self.install_bytes_group(&stage, body, mode, gid)?;
         }
         let (dir, name) = self.parent(path, false)?.ok_or(HostError::Unsafe)?;
         let stage_name = format!("{name}.sbxr-next");
@@ -386,7 +450,7 @@ impl ProtectedFs {
         fs::fsync(&dir).map_err(failure)?;
         if self
             .raw(path, mode, 1 << 26)?
-            .is_none_or(|(bytes, _)| bytes != body)
+            .is_none_or(|(bytes, evidence)| bytes != body || evidence.gid != gid)
         {
             return Err(HostError::Unsafe);
         }
@@ -398,9 +462,7 @@ impl ProtectedFs {
         body: &[u8],
         mode: Mode,
     ) -> Result<(), HostError> {
-        if self.path == Path::new("/") {
-            return Err(HostError::LiveUnavailable);
-        }
+        self.write_allowed()?;
         let Some((existing, evidence)) = self.raw(path, mode, 1 << 26)? else {
             return Ok(());
         };
@@ -418,9 +480,16 @@ impl ProtectedFs {
         fs::fsync(dir).map_err(failure)
     }
     pub fn install_bytes(&self, path: &str, body: &[u8], mode: Mode) -> Result<(), HostError> {
-        if self.path == Path::new("/") {
-            return Err(HostError::LiveUnavailable);
-        }
+        self.install_bytes_group(path, body, mode, self.gid)
+    }
+    fn install_bytes_group(
+        &self,
+        path: &str,
+        body: &[u8],
+        mode: Mode,
+        gid: u32,
+    ) -> Result<(), HostError> {
+        self.write_allowed()?;
         if self.raw(path, mode, 1 << 20)?.is_some() {
             return Err(HostError::Foreign);
         }
@@ -432,6 +501,7 @@ impl ProtectedFs {
             mode,
         )
         .map_err(failure)?;
+        fs::fchown(&fd, None, Some(rustix::process::Gid::from_raw(gid))).map_err(failure)?;
         fs::fchmod(&fd, mode).map_err(failure)?;
         let mut file = File::from(fd);
         file.write_all(body).map_err(failure)?;

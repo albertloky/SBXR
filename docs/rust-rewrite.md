@@ -62,8 +62,13 @@ or Karing verification.
 | `src/proxyinstallation/simulation.rs` | Explicit in-memory fixture facts, phases and interruption injection; no operating-system adapter |
 | `src/terminal.rs` | Numbered menu and wizard through Review/Execute; explicit simulation/fixture labels |
 | `src/host.rs`, `src/host/` | `SetupHost` contract, protected descriptor-relative files, original fixtures and Linux observation/injected effects |
-| `src/host/process.rs` | Fixed native read-only argv, bounded output, cancellation, deadlines and owned process-group cleanup |
-| `src/host/linux.rs`, `src/host/linux/` | Fail-closed native observers; pinned material and explicit injected-root Standard effects |
+| `src/host/process.rs` | Fixed queries, bounded subprocess output, cancellation, deadlines and owned process-group cleanup |
+| `src/host/linux.rs`, `src/host/linux/` | Fail-closed native observers, pinned material, Standard file effects and injected-root integration |
+| `src/host/locks.rs` | Retained whole-host flock and POSIX package guards, including descriptor-safe verification |
+| `src/host/network.rs` | Direct verified TLS 1.3 public-IP/destination checks and exact IPv4 TCP443 bind admission |
+| `src/host/system.rs` | Fixed managed command adapter with retained lock, pinned DEB and exclusive identity checks |
+| `src/artifact_trust.rs` | Real offline Sigstore verification against pinned roots/policies, exact authenticated claims and bounded acquisition interface |
+| `tooling/rust-package/` | Separate offline deterministic package/index CLI using the product release inspector |
 | `src/identity_generation.rs` | Ephemeral X25519/UUID/credential generation, injected entropy and Go-compatible validation |
 | `src/release_identity.rs` | Strict index/trailer bindings and explicit Rust/historical Go ELF inspection; no external authentication |
 | `src/subscription_artifact.rs` | Pure VLESS/VMess client encoding, HTTP link/token syntax and redacted secret-bearing types |
@@ -89,8 +94,9 @@ Independent parity checks now live in `tests/parity.rs` and
 and now guard expiration of earlier Prepared Actions after every later Review,
 including Status and View details. Pure server configuration and HTTP Subscription Serving are now implemented
 through public library APIs. Cryptographic generation and structural release inspection are now integrated.
-Product orchestration, Software Lifecycle, real Ubuntu mutation effects and
-external authentication remain separate integration scopes; the CLI still constructs only the Standard simulator.
+Fixed Ubuntu system effects and offline signature verification are integrated library
+modules. Production acquisition/orchestration and Software Lifecycle remain separate
+integration scopes; the CLI still constructs only the Standard simulator.
 
 ## Local commands and evidence
 
@@ -126,10 +132,12 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
 
 ## Parity gaps that remain required
 
-- Real Ubuntu mutation effects with retained whole-host/dpkg locks, authenticated
-  package acquisition, dynamic UID/GID changes and effect subprocess budgets.
-  Native root/OS/architecture observation and bounded read-only probes exist;
-  public-IP, destination TLS compatibility and TCP443 bind admission remain gaps.
+- A complete authenticated native entry: actual bounded HTTP acquisition,
+  current-executable/release/index/archive authority, native prerequisites and
+  qualification bindings. Fixed system effects, UID/GID publication, retained
+  locks and direct network/bind admission now exist, tested through temporary
+  roots, fake command transports and nonprivileged loopback. Native execution
+  remains explicitly unavailable until these complete inputs are connected.
 - Production integration of the strict records and Standard filesystem foundation.
   Historical schema-2, tunnel, HTTPS and removal records decode without migration;
   only current HTTP and setup transitions have writers. Physical crash/power-loss
@@ -143,10 +151,11 @@ not native Ubuntu, packaged deployment, release qualification or Karing evidence
   Software Lifecycle Check/Recover and exact historical transaction readers.
 - Other statuses/actions, full details and display-incomplete behavior for secret
   disclosures. Only setup outcomes are currently implemented in Rust.
-- Native Linux amd64/arm64 build and packaging proof, bootstrap installer,
-  signature/attestation verification and Rust-aware executable provenance.
-  The existing verifier's Go metadata/`.gopclntab` requirement needs an explicit
-  Rust proof while retaining historical Go compatibility; do not weaken it.
+- Native Linux amd64/arm64 musl builds, retained Rust build-section embedding,
+  bootstrap/workflow integration and authenticated extraction. Explicit Rust ELF
+  and historical Go proofs, real offline attestation verification and local package
+  tooling exist. They do not establish a clean-source build, complete positive
+  SBXR release authentication or deployment qualification.
 - All five current live acceptance journeys and publication approval. No live
   VPS, Karing, credentials, security setting, signing or publication action was
   attempted for this increment.
@@ -413,8 +422,9 @@ configuration requires root ownership, 0640, the freshly observed package GID an
 its exact expected digest. Installed pairs require protected files plus matching
 record/trailer identity, sequence and whole-executable digest, and explicit Linux
 ELF/build proof from `release_identity`. These are structural coherence checks,
-not signer/index/attestation authentication. `production_admitted` is always false:
-network/bind admission and retained real mutation/package locks are not supplied.
+not signer/index/attestation authentication. `production_admitted` remains false.
+The next increment supplies network/bind and retained locks without enabling the
+native frontend.
 
 `host::process` exposes fixed typed `Query` values, not shell strings. Native
 commands have five-second deadlines, a combined 1 MiB output cap, null stdin,
@@ -422,10 +432,10 @@ cleared environment, fixed PATH/locale and `/` working directory. Output reads
 are nonblocking and check cancellation/deadline on every iteration. Child processes
 run in a dedicated process group; wait-without-reaping retains the owned leader
 until group termination and reaping, including descendant-held pipes and errors.
-Raw stdout/stderr are never formatted by errors or Debug. Native configuration
-validation and every mutation effect remain unavailable. Injected runners have
-an explicit cooperative-cancellation contract; a production mutation transport
-with its five-minute Go operation budgets has not been implemented.
+Raw stdout/stderr are never formatted by errors or Debug. This read-only runner
+still refuses configuration validation and mutation. The system adapter described
+below adds separate managed-command budgets; injected runners retain an explicit
+cooperative-cancellation contract.
 
 `StandardInstallation<H: SetupHost>` reuses the existing Review/Execute state
 machine and opaque Prepared Action for both the original fixture and a Linux
@@ -443,8 +453,8 @@ network or lock proofs. This adapter publishes production-format APT/config/unit
 files below that root and verifies fresh package/service/account facts through
 the supplied runner. Native root writes are separately refused by protected
 filesystem primitives. Current injected UID/GID mappings are caller-owned test
-files; native chown, package/account exclusivity and systemd effects are not
-implemented. There is no native-to-fixture fallback and no real effect runner.
+files. The next increment adds native chown, package/account exclusivity and fixed
+systemd command implementations. There is no native-to-fixture fallback.
 
 `SetupMaterial::verified` requires the pinned upstream signing-key digest and
 DEB size/digest, a bounded fixed Standard configuration, and no implicit download.
@@ -484,7 +494,114 @@ by a product action. Explicit accessors remain subject to future Owner authority
 `release_identity` integrates sixteen offline tests for strict raw-byte index and
 trailer bindings, installed-pair coherence, explicit pinned Rust metadata/static
 ELF and historical Go build proof. It introduces no dependency and removes no Go
-proof requirement. External attestation/trusted-root verification, authenticated
-archive extraction, native Rust build/packaging proof and existing Go-only release
-workflow changes remain gaps. Structural inspection alone never authorizes a
-trusted release, deployment or publication. See each fixture subtree README.
+proof requirement. The next increment adds external attestation verification and
+local packaging; authenticated archive extraction, native Rust build proof and
+existing Go-only workflow integration remain gaps. Structural inspection alone
+never authorizes a trusted release, deployment or publication. See each fixture
+subtree README.
+
+
+## Retained host guards, system effects and authenticated evidence increment
+
+`HostLock::acquire` retains the exact `run/lock/sbxr.lock` inode with an exclusive
+flock. Review and declining approval create no coordination file. Approved Execute
+acquires the guard, then rechecks record/stage bytes and observed fingerprints
+before publishing or changing anything. Trusted descriptor-relative parents,
+root/lock identity, owner, mode and one-link checks refuse unsafe replacements.
+The root-owned sticky coordination parent is admitted only for this fixed lock.
+The lock file stays after release, matching volatile coordination semantics.
+
+`HostLock::acquire_packages` retains nonblocking POSIX locks on existing fixed
+APT/dpkg lock inodes. Verification uses metadata without reopening or closing a
+package inode, because closing another descriptor could release a process's POSIX
+locks. A guard lease prevents duplicate acquisition through the same host guard.
+Package guards are released before APT/dpkg commands acquire their own locks;
+whole-host exclusion remains retained. Child-process tests prove package locks
+stay busy across verification and become available after release.
+
+`SystemRunner<T: Transport>` implements fixed systemd/APT/dpkg/account commands;
+its narrow `CommandSpec` exposes read-only inspection, with private construction.
+`NativeTransport` checks supported native environment and retained change lock,
+protected executable bytes before/after execution, fixed argv/cwd, cleared
+environment and bounded output/process-group cleanup. Managed commands and
+sing-box validation receive Go's separate five-minute completion budget;
+ordinary observations retain five seconds and the combined 1 MiB output cap.
+A started managed command can complete after UI cancellation, under that bound.
+
+Installation accepts only a supplied size/digest-pinned DEB; it does not download
+one implicitly. Configuration publication uses the observed package GID, and the
+state directory uses the observed UID/GID through descriptor chown. Unit reloads
+follow durable unit/link effects. Cleanup validates the pinned package and exact
+resources, refuses foreign UID/GID files or processes, compares the complete group
+record after user deletion, and supports retry after partial user deletion or dpkg
+states. Existing configuration/state and configuration staging require the current
+package-account proof; missing accounts do not authorize a directory by its own
+metadata. Two new refusal cases failed before these corrections and pass afterward. No recursive product deletion is introduced. The durable checkpoint
+still selects cleanup before activation and forward-only completion afterward.
+
+`NetworkAdmission::native` directly resolves fixed endpoints, reads the protected
+Ubuntu CA bundle and uses rustls with an explicit provider and certificate/name
+verification. Public IPv4 discovery is TLS 1.3 HTTPS to `api.ipify.org`, bounded to
+64 body bytes and ten seconds. The destination is `google.com:443`, requiring
+TLS 1.3 and h2, with a separate ten-second deadline. Pre-activation admission also
+proves the exact IPv4 TCP443 bind and immediately closes it. Reads have absolute
+deadlines and cooperative cancellation; a blocking TCP connect is bounded by its
+remaining deadline. Ambient proxy settings are not used. The IP HTTP parser
+refuses redirects, ambiguous framing and malformed lengths; these are stricter
+failure cases than Go's default HTTP redirect behavior. Loopback tests use a
+public fixed test key and isolated test CA, with no OS trust-store change.
+
+The actual Standard state machine now drives this system adapter through a fake
+command transport and real protected temporary files, including setup, partial
+cleanup, foreign identity preservation and competing-host exclusion. Native
+constructors refuse this Mac before commands or external network requests.
+`LinuxHost::native_unreleased` has a distinct `NativeUnavailable` mode and cannot
+grant a Prepared Action. Its effects capability remains false pending the complete
+authenticated entry chain. The zero-argument frontend still selects the simulator.
+These local tests do not run APT, systemd, chown to a foreign identity, or privileged
+port binding on the host, and do not establish Ubuntu operation or live acceptance.
+
+`artifact_trust` now authenticates real DSSE bundles with pinned
+`sigstore-verify` 0.15.1 and its AWS-LC backend. Native GitHub release proofs require
+verified RFC3161 timestamps and the exact release-service identity under the
+preserved root; candidate proofs require the exact workflow/OIDC issuer, Rekor and
+authenticated observer time. No current-time fallback or ambient roots are used.
+Private result constructors separate authenticated payload/claims from structural
+inspection. Signed SHA256 asset subjects and the SHA1 commit are checked in the
+same authenticated native payload. Snappy decompression and injected acquisition
+are bounded by size, deadlines and cancellation. The native HTTP acquisition
+transport itself is not implemented.
+
+Twenty-four trust tests include two preserved genuine bundles, signature/payload/
+timestamp/log tampering and forged claim rejection. The foreign repository's
+genuine native proof authenticates cryptographically but refuses SBXR admission.
+The backend intentionally refuses invalid extra timestamps and noncanonical wire
+aliases more strictly than Go. A genuine valid SBXR release/v0.2 bundle and the
+candidate fixture's raw manifest are absent, so complete positive authentication
+orchestration is not demonstrated. Authentication does not grant qualification.
+See `tests/testdata/artifact_trust/README.md` for policy and fixture provenance.
+
+The separate [offline package tool](../tooling/rust-package/README.md) reuses
+`release_identity` to generate metadata, package supplied static Rust ELF files,
+bind an index and check all four assets. Its canonical single-member archives,
+exact installer constants and digest bindings are tested with inert ELF inputs for
+both architectures and an independent decoder. It never executes supplied
+artifacts, signs or publishes. Actual retained-section embedding, native musl
+builds/linkers and bootstrap/workflow integration remain required. AWS-LC and ring
+add native C/assembly build dependencies; a successful Mac build does not prove
+Linux cross-build availability. Local integrated and package logs are retained in
+`.scratch/acceptance/rust-native/`.
+
+
+Final validation for this increment passed 198 product tests, format, strict
+Clippy and a macOS arm64 build. Both retained-POSIX-lock and foreign-identity
+mutation checks failed under their intentionally removed guard, then source was
+restored before the final suite. The standalone package checks pass eight tests
+plus format, strict Clippy and build. These counts include real local child,
+filesystem and nonprivileged loopback boundaries, not native operating effects.
+
+The updated Linux GNU cross-check failed in the native cryptographic dependencies
+because `x86_64-linux-gnu-gcc` is absent. No compiler or privileged package was
+installed to bypass that result. The earlier pre-crypto cross-check does not
+validate this updated dependency graph. Linux/musl builds and deployment
+qualification remain unestablished; the native frontend remains unavailable.

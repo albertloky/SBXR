@@ -204,7 +204,10 @@ pub(super) fn ubuntu(fs: &ProtectedFs) -> Result<bool, HostError> {
 pub(super) struct Facts {
     pub(super) package: bool,
     pub(super) held: bool,
+    pub(super) held_package: bool,
     pub(super) identity: bool,
+    pub(super) uid: Option<u32>,
+    pub(super) gid: Option<u32>,
     pub(super) enabled: bool,
     pub(super) active: bool,
     pub(super) masked: bool,
@@ -239,15 +242,31 @@ impl Facts {
             ))
         }
         let package = presence(&values[0], 1)?;
+        let mut held_package = false;
         if package {
             let parts: Vec<_> = values[0].text()?.split_whitespace().collect();
             if parts.len() != 3
                 || parts[0] != "1.14.3"
                 || parts[1] != "amd64"
-                || !matches!(parts[2], "ii" | "hi")
+                || !matches!(
+                    parts[2],
+                    "ii" | "hi"
+                        | "rc"
+                        | "iU"
+                        | "iF"
+                        | "iH"
+                        | "it"
+                        | "iW"
+                        | "hU"
+                        | "hF"
+                        | "hH"
+                        | "ht"
+                        | "hW"
+                )
             {
                 return Err(HostError::Foreign);
             }
+            held_package = parts[2] == "hi";
         }
         if values[1].code() != 0 {
             return Err(HostError::Unsafe);
@@ -258,22 +277,24 @@ impl Facts {
             .any(|v| v == "sing-box");
         let user = presence(&values[2], 2)?;
         let group = presence(&values[3], 2)?;
-        if user != group {
-            return Err(HostError::Unsafe);
-        }
+        let (mut uid, mut user_gid, mut gid) = (None, None, None);
         if user {
             let u: Vec<_> = values[2].text()?.split(':').collect();
-            let g: Vec<_> = values[3].text()?.split(':').collect();
-            if u.len() != 7
-                || g.len() != 4
-                || u[0] != "sing-box"
-                || g[0] != "sing-box"
-                || u[3] != g[2]
-                || u[2].parse::<u32>().is_err()
-                || u[3].parse::<u32>().is_err()
-            {
+            if u.len() != 7 || u[0] != "sing-box" {
                 return Err(HostError::Unsafe);
             }
+            uid = Some(u[2].parse::<u32>().map_err(|_| HostError::Unsafe)?);
+            user_gid = Some(u[3].parse::<u32>().map_err(|_| HostError::Unsafe)?);
+        }
+        if group {
+            let g: Vec<_> = values[3].text()?.split(':').collect();
+            if g.len() != 4 || g[0] != "sing-box" {
+                return Err(HostError::Unsafe);
+            }
+            gid = Some(g[2].parse::<u32>().map_err(|_| HostError::Unsafe)?);
+        }
+        if user && group && user_gid != gid {
+            return Err(HostError::Unsafe);
         }
         let process = presence(&values[4], 1)?;
         if process
@@ -309,7 +330,10 @@ impl Facts {
         Ok(Self {
             package,
             held,
-            identity: user,
+            held_package,
+            identity: user && group,
+            uid,
+            gid,
             enabled: enabled == "enabled",
             active: active == "active",
             masked: enabled == "masked",

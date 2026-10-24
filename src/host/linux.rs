@@ -1,5 +1,5 @@
-//! Linux observations over fixed commands and protected files. Native entry is
-//! read-only; the injected-root constructor is explicitly test infrastructure.
+//! Linux observations and Standard effects over fixed commands/protected files.
+//! Native construction stays unreleased; injected roots are test infrastructure.
 mod effects;
 mod material;
 mod observation;
@@ -21,7 +21,7 @@ use crate::{
 use rustix::fs::{FileType, Mode};
 #[cfg(test)]
 use std::path::PathBuf;
-use std::{fmt, path::Path};
+use std::{fmt, path::Path, sync::Arc};
 const APT_SOURCE:&[u8]=b"Types: deb\nURIs: https://deb.sagernet.org/\nSuites: *\nComponents: *\nSigned-By: /etc/apt/keyrings/sagernet.asc\n";
 const KEY: &str = "etc/apt/keyrings/sagernet.asc";
 const SOURCE: &str = "etc/apt/sources.list.d/sagernet.sources";
@@ -70,7 +70,15 @@ pub(super) fn verify_probe_executable(
         return Err(HostError::Unsafe);
     }
     let (_, evidence) = fs
-        .raw(path, Mode::from_raw_mode(0o755), 16 << 20)?
+        .raw(
+            path,
+            Mode::from_raw_mode(0o755),
+            if program == "/usr/bin/sing-box" {
+                256 << 20
+            } else {
+                16 << 20
+            },
+        )?
         .ok_or(HostError::Unsafe)?;
     Ok(evidence)
 }
@@ -93,6 +101,8 @@ pub struct LinuxHost<R> {
     admission: InjectedAdmission,
     stop: Cancellation,
     interruption: Option<SetupPhase>,
+    lock: Option<Arc<super::locks::HostLock>>,
+    native_mode: bool,
 }
 impl<R: CommandRunner> LinuxHost<R> {
     pub fn injected(
@@ -112,6 +122,37 @@ impl<R: CommandRunner> LinuxHost<R> {
             admission,
             stop: Cancellation::new(),
             interruption: None,
+            lock: None,
+            native_mode: false,
+        })
+    }
+    pub fn native_unreleased(
+        runner: R,
+        material: SetupMaterial,
+        network: super::network::NetworkAdmission,
+    ) -> Result<Self, HostError> {
+        require_native_environment()?;
+        if !runner.native_effects() || !network.bind_proved() || !network.destination().compatible()
+        {
+            return Err(HostError::LiveUnavailable);
+        }
+        Ok(Self {
+            fs: ProtectedFs::native()?,
+            runner,
+            material,
+            admission: InjectedAdmission {
+                public_ipv4: network.public_ipv4().to_string(),
+                root: true,
+                architecture: "amd64".into(),
+                destination_compatible: true,
+                tcp443_available: true,
+                host_lock_held: true,
+                package_locks_held: true,
+            },
+            stop: Cancellation::new(),
+            interruption: None,
+            lock: None,
+            native_mode: true,
         })
     }
     pub fn runner(&self) -> &R {
@@ -128,6 +169,26 @@ impl<R: CommandRunner> LinuxHost<R> {
     }
     fn admission(&self, facts: &Facts) -> Result<(), HostError> {
         let a = &self.admission;
+        if let Some(lock) = &self.lock {
+            lock.verify()?;
+            lock.packages_available()?;
+        }
+        if self.native_mode {
+            let direction = observation::read_ownership(&self.fs)?.map(|r| r.recovery_direction());
+            let require_bind = !matches!(
+                direction,
+                Some(
+                    crate::records::RecoveryDirection::FinishSetup
+                        | crate::records::RecoveryDirection::None
+                )
+            );
+            let current = super::network::NetworkAdmission::native(&self.stop, require_bind)?;
+            if current.public_ipv4().to_string() != a.public_ipv4
+                || !current.destination().compatible()
+            {
+                return Err(HostError::Unsafe);
+            }
+        }
         if !a.root || a.architecture != "amd64" || !ubuntu(&self.fs)? {
             return Err(HostError::UnsupportedHost);
         }

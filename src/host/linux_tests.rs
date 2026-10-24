@@ -138,6 +138,7 @@ impl CommandRunner for Fake {
         }
         let metadata = fs::metadata(&self.root).unwrap();
         let (code, text) = match q {
+            Query::DestinationDns | Query::PublicIpDns => return Err(HostError::Unsafe),
             Query::Package => {
                 if self.package {
                     (
@@ -601,4 +602,402 @@ fn coherent_plain_text_pair_is_not_accepted_as_linux_release_structure() {
         0o600,
     );
     assert!(read_installed(&root.host().fs).is_err());
+}
+
+struct SystemFixtureTransport {
+    backend: std::rc::Rc<std::cell::RefCell<Fake>>,
+    commands: std::rc::Rc<std::cell::RefCell<Vec<super::super::system::CommandSpec>>>,
+    user_deleted: std::cell::Cell<bool>,
+    fail_groupdel: std::cell::Cell<bool>,
+    replace_group_after_userdel: std::cell::Cell<bool>,
+    foreign_identity: std::rc::Rc<std::cell::Cell<bool>>,
+}
+impl super::super::system::Transport for SystemFixtureTransport {
+    fn run(
+        &self,
+        spec: &super::super::system::CommandSpec,
+        stop: &Cancellation,
+    ) -> Result<CommandOutput, HostError> {
+        self.commands.borrow_mut().push(spec.clone());
+        let p = spec.program();
+        let args = spec.arguments();
+        for query in [
+            Query::Package,
+            Query::Hold,
+            Query::User,
+            Query::Group,
+            Query::Process,
+            Query::Enabled,
+            Query::Active,
+            Query::LoadState,
+            Query::Listener,
+            Query::UnitOwner,
+            Query::Clock,
+            Query::ValidateConfiguration,
+        ] {
+            let (program, arguments) = query.argv();
+            if p == program
+                && args
+                    .iter()
+                    .map(String::as_str)
+                    .eq(arguments.iter().copied())
+            {
+                if query == Query::User && self.user_deleted.get() {
+                    return CommandOutput::completed(2, vec![]);
+                }
+                let output = self.backend.borrow().query(query, stop)?;
+                if query == Query::Group
+                    && self.user_deleted.get()
+                    && self.replace_group_after_userdel.get()
+                    && output.code() == 0
+                {
+                    return CommandOutput::completed(
+                        0,
+                        format!("{}foreign-member", output.text()?).into_bytes(),
+                    );
+                }
+                return Ok(output);
+            }
+        }
+        let operation = match (
+            p,
+            args.iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        ) {
+            ("/usr/bin/systemctl", ["mask", "sing-box.service"]) => Some(Operation::MaskService),
+            ("/usr/bin/dpkg", ["--install", _]) => Some(Operation::InstallPackage),
+            ("/usr/bin/apt-mark", ["hold", "sing-box"]) => Some(Operation::HoldPackage),
+            ("/usr/bin/apt-mark", ["unhold", "sing-box"]) => {
+                self.backend.borrow_mut().held = false;
+                None
+            }
+            ("/usr/bin/systemctl", ["unmask", "sing-box.service"]) => {
+                Some(Operation::UnmaskService)
+            }
+            ("/usr/bin/systemctl", ["enable", "sing-box.service"]) => {
+                Some(Operation::EnableService)
+            }
+            ("/usr/bin/systemctl", ["start", "sing-box.service"]) => Some(Operation::StartService),
+            ("/usr/bin/systemctl", ["disable", "--now", "sing-box.service"]) => {
+                Some(Operation::StopDisableService)
+            }
+            ("/usr/bin/systemctl", ["daemon-reload"]) => None,
+            ("/usr/bin/systemctl", ["stop", "sbxr-mutation-lock.service"]) => None,
+            ("/usr/bin/apt-get", ["update"]) => None,
+            ("/usr/bin/apt-get", ["purge", "-y", "sing-box=1.14.3"]) => {
+                Some(Operation::RemovePackage)
+            }
+            ("/usr/sbin/userdel", ["sing-box"]) => {
+                self.user_deleted.set(true);
+                None
+            }
+            ("/usr/sbin/groupdel", ["sing-box"]) => {
+                if self.fail_groupdel.get() {
+                    return CommandOutput::completed(1, vec![]);
+                }
+                Some(Operation::RemovePackageIdentity)
+            }
+            ("/usr/bin/find", _) => {
+                return CommandOutput::completed(
+                    0,
+                    if self.foreign_identity.get() {
+                        b"foreign owned path\n".to_vec()
+                    } else {
+                        vec![]
+                    },
+                );
+            }
+            ("/usr/bin/pgrep", ["-u" | "-G" | "-x", _]) => {
+                return self.backend.borrow().query(Query::Process, stop);
+            }
+            _ => panic!("unexpected fixture command {spec:?}"),
+        };
+        if let Some(operation) = operation
+            && self.backend.borrow_mut().effect(operation, stop).is_err()
+        {
+            return CommandOutput::completed(
+                1,
+                b"synthetic failure; no raw diagnostics escape".to_vec(),
+            );
+        }
+        CommandOutput::completed(0, vec![])
+    }
+}
+type SystemHost = LinuxHost<super::super::system::SystemRunner<SystemFixtureTransport>>;
+type CommandLog = std::rc::Rc<std::cell::RefCell<Vec<super::super::system::CommandSpec>>>;
+fn system_host(root: &Root) -> (SystemHost, CommandLog, std::rc::Rc<std::cell::Cell<bool>>) {
+    let base = root.host();
+    let commands = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let foreign = std::rc::Rc::new(std::cell::Cell::new(false));
+    let transport = SystemFixtureTransport {
+        backend: std::rc::Rc::new(std::cell::RefCell::new(base.runner)),
+        commands: commands.clone(),
+        user_deleted: std::cell::Cell::new(false),
+        fail_groupdel: std::cell::Cell::new(false),
+        replace_group_after_userdel: std::cell::Cell::new(false),
+        foreign_identity: foreign.clone(),
+    };
+    let runner = super::super::system::SystemRunner::injected(
+        &root.0,
+        transport,
+        &base.material.configuration.sha256_hex(),
+    )
+    .unwrap()
+    .fixture_package(&base.material.package);
+    (
+        LinuxHost::injected(&root.0, runner, base.material, admission()).unwrap(),
+        commands,
+        foreign,
+    )
+}
+#[test]
+fn actual_system_adapter_drives_standard_setup_and_ownership_safe_cleanup() {
+    for cleanup in [false, true] {
+        let root = Root::new();
+        let (mut host, commands, _) = system_host(&root);
+        if cleanup {
+            host.interrupt_after(Some(SetupPhase::ConfigurationValidated));
+        }
+        let mut installation = StandardInstallation::new(host, release()).unwrap();
+        assert!(!root.0.join(super::super::locks::MUTATION_LOCK).exists());
+        let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+        assert!(!root.0.join(super::super::locks::MUTATION_LOCK).exists());
+        let result = installation.execute(prepared, Confirmation::Approved);
+        assert_eq!(
+            result.outcome,
+            if cleanup {
+                Outcome::NeedsCleanup
+            } else {
+                Outcome::SetupComplete
+            }
+        );
+        if cleanup {
+            let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+            assert_eq!(
+                installation
+                    .execute(prepared, Confirmation::Approved)
+                    .outcome,
+                Outcome::CleanedUp
+            );
+            assert!(
+                commands
+                    .borrow()
+                    .iter()
+                    .any(|c| c.program() == "/usr/sbin/userdel")
+            );
+            assert!(
+                commands
+                    .borrow()
+                    .iter()
+                    .any(|c| c.program() == "/usr/sbin/groupdel")
+            );
+            assert!(!root.0.join(CONFIG).exists());
+        } else {
+            assert_eq!(
+                fs::metadata(root.0.join(CONFIG)).unwrap().gid(),
+                fs::metadata(&root.0).unwrap().gid()
+            );
+            assert_eq!(installation.review(Action::Status).status, Status::Running);
+        }
+        assert!(
+            commands
+                .borrow()
+                .iter()
+                .any(|c| c.program() == "/usr/bin/dpkg")
+        );
+        assert!(
+            commands
+                .borrow()
+                .iter()
+                .any(|c| c.arguments() == ["daemon-reload"])
+        );
+        // Execute released exclusion; the persistent coordination inode is preserved.
+        super::super::locks::HostLock::acquire(&root.0, fs::metadata(&root.0).unwrap().uid())
+            .unwrap();
+    }
+}
+#[test]
+fn system_adapter_preserves_foreign_identity_resources_and_pending_direction() {
+    let root = Root::new();
+    let (mut host, commands, foreign) = system_host(&root);
+    host.interrupt_after(Some(SetupPhase::ConfigurationValidated));
+    let mut installation = StandardInstallation::new(host, release()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    foreign.set(true);
+    let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    assert!(
+        !commands
+            .borrow()
+            .iter()
+            .any(|c| c.program() == "/usr/sbin/userdel")
+    );
+    assert!(root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+}
+#[test]
+fn competing_host_lock_refuses_prepared_action_without_system_mutation() {
+    let root = Root::new();
+    let (host, commands, _) = system_host(&root);
+    let mut installation = StandardInstallation::new(host, release()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    let competing =
+        super::super::locks::HostLock::acquire(&root.0, fs::metadata(&root.0).unwrap().uid())
+            .unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::Refused
+    );
+    assert!(!commands.borrow().iter().any(|c| c.mutation()));
+    assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+    drop(competing);
+}
+
+#[test]
+fn partial_user_deletion_keeps_group_cleanup_recoverable() {
+    let root = Root::new();
+    let (mut host, _, _) = system_host(&root);
+    host.interrupt_after(Some(SetupPhase::ConfigurationValidated));
+    let mut installation = StandardInstallation::new(host, release()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    installation
+        .host()
+        .runner()
+        .transport()
+        .fail_groupdel
+        .set(true);
+    let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    assert!(installation.host().runner().transport().user_deleted.get());
+    installation
+        .host()
+        .runner()
+        .transport()
+        .fail_groupdel
+        .set(false);
+    let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::CleanedUp
+    );
+}
+
+#[test]
+fn missing_package_identity_proof_preserves_existing_state() {
+    for staged_only in [false, true] {
+        let root = Root::new();
+        let (mut host, commands, _) = system_host(&root);
+        host.interrupt_after(Some(SetupPhase::ConfigurationValidated));
+        let mut installation = StandardInstallation::new(host, release()).unwrap();
+        let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+        assert_eq!(
+            installation
+                .execute(prepared, Confirmation::Approved)
+                .outcome,
+            Outcome::NeedsCleanup
+        );
+        let configuration_path = if staged_only {
+            let stage = root.0.join(format!("{CONFIG}.sbxr-next"));
+            fs::rename(root.0.join(CONFIG), &stage).unwrap();
+            fs::remove_dir(root.0.join("var/lib/sing-box")).unwrap();
+            stage
+        } else {
+            root.0.join(CONFIG)
+        };
+        let configuration = fs::read(&configuration_path).unwrap();
+        installation
+            .host()
+            .runner()
+            .transport()
+            .user_deleted
+            .set(true);
+        commands.borrow_mut().clear();
+        assert!(
+            installation
+                .review(Action::FinishCleanup)
+                .prepared
+                .is_none()
+        );
+        assert_eq!(fs::read(&configuration_path).unwrap(), configuration);
+        assert_eq!(root.0.join("var/lib/sing-box").exists(), !staged_only);
+        assert!(!commands.borrow().iter().any(|c| c.mutation()));
+        assert_eq!(
+            OwnershipRecord::decode(
+                &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap()
+            )
+            .unwrap()
+            .recovery_direction(),
+            crate::records::RecoveryDirection::Cleanup
+        );
+    }
+}
+
+#[test]
+fn package_identity_proof_preserves_changed_group_after_user_deletion() {
+    let root = Root::new();
+    let (mut host, commands, _) = system_host(&root);
+    host.interrupt_after(Some(SetupPhase::ConfigurationValidated));
+    let mut installation = StandardInstallation::new(host, release()).unwrap();
+    let prepared = installation.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    installation
+        .host()
+        .runner()
+        .transport()
+        .replace_group_after_userdel
+        .set(true);
+    let prepared = installation.review(Action::FinishCleanup).prepared.unwrap();
+    assert_eq!(
+        installation
+            .execute(prepared, Confirmation::Approved)
+            .outcome,
+        Outcome::NeedsCleanup
+    );
+    assert!(installation.host().runner().transport().user_deleted.get());
+    assert!(
+        !commands
+            .borrow()
+            .iter()
+            .any(|c| c.program() == "/usr/sbin/groupdel")
+    );
+    assert_eq!(
+        OwnershipRecord::decode(
+            &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap()
+        )
+        .unwrap()
+        .recovery_direction(),
+        crate::records::RecoveryDirection::Cleanup
+    );
 }

@@ -9,6 +9,13 @@ pub fn run(
     installation: &mut impl Interface,
 ) -> io::Result<()> {
     match installation.review(Action::Status).mode {
+        ExecutionMode::NativeUnavailable => {
+            writeln!(output, "SBXR Rust — native installation unavailable")?;
+            writeln!(
+                output,
+                "Authenticated acquisition and production prerequisites are incomplete. No native action is enabled."
+            )?;
+        }
         ExecutionMode::InjectedHost => {
             writeln!(output, "SBXR Rust — injected Linux host only")?;
             writeln!(
@@ -37,10 +44,15 @@ pub fn run(
             ExecutionMode::Simulation => "simulated",
             ExecutionMode::Fixture => "fixture",
             ExecutionMode::InjectedHost => "injected host",
+            ExecutionMode::NativeUnavailable => "native unavailable",
         };
         writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
         writeln!(output, "Subscription status: Not enabled ({qualifier})")?;
         match current.mode {
+            ExecutionMode::NativeUnavailable => writeln!(
+                output,
+                "Software Lifecycle status: Native authentication incomplete"
+            )?,
             ExecutionMode::InjectedHost => writeln!(
                 output,
                 "Software Lifecycle status: Injected host pair (not release authenticated)"
@@ -157,6 +169,10 @@ fn setup(
             match prompt(input, output, "Apply setup? [y/N]")?.as_deref() {
                 Some("y") => {
                     match review.mode {
+                        ExecutionMode::NativeUnavailable => {
+                            writeln!(output, "Native setup is unavailable.")?;
+                            return Ok(());
+                        }
                         ExecutionMode::InjectedHost => {
                             writeln!(output, "Setup 3 — Apply injected host effects and check")?
                         }

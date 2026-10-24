@@ -13,9 +13,12 @@ documented by [the Rust handoff](../rust-rewrite.md). In that workspace, Standar
 setup/recovery is `src/proxyinstallation/fixture.rs` (`StandardInstallation<H>`);
 `src/host/setup.rs` defines its narrow host contract. Native observations and
 injected-root effects are in `src/host/linux.rs` and its small submodules; bounded
-read-only process transport is `src/host/process.rs`. Identity generation and
-structural release inspection have separate modules and adjacent/integration
-tests. A native production mutation adapter remains unavailable. Read that handoff
+process transport is `src/host/process.rs`. Retained locks, direct TLS/bind
+admission and fixed native command effects are `src/host/{locks,network,system}.rs`;
+the native frontend stays explicitly unavailable. Identity generation, structural
+release inspection and offline Sigstore authentication have separate modules and
+adjacent/integration tests. `tooling/rust-package/` is the separate offline CLI.
+Read that handoff
 before selecting Rust checks; Go live qualification never follows from local
 Rust fixture or cross-compilation results.
 

@@ -40,7 +40,14 @@ pub trait SetupHost {
         operation: Operation,
         authority: &OwnershipRecord,
     ) -> Result<(), HostError>;
+    fn begin_change(&mut self) -> Result<(), HostError> {
+        Ok(())
+    }
+    fn end_change(&mut self) {}
     fn interrupted(&self, _phase: SetupPhase) -> bool {
+        false
+    }
+    fn is_native_system(&self) -> bool {
         false
     }
     fn is_injected_system(&self) -> bool {
