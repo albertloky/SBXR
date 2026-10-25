@@ -13,7 +13,7 @@ use crate::{
     client_identity as ci,
     durable::OwnershipStore,
     records::{OwnershipRecord, ReleaseIdentity, sha256_hex},
-    release_acquisition::AuthenticatedInstalled,
+    release_acquisition::InstalledEvidence,
     runtime_handoff::{self, PeerObservations, ProcessIdentity, ProxyStartHost, StartContext},
     subscription_serving::Cancellation,
 };
@@ -68,7 +68,7 @@ pub enum IdentityFault {
 }
 pub struct ProtectedIdentityHost<'a, B> {
     fs: ProtectedFs,
-    proof: &'a AuthenticatedInstalled,
+    proof: &'a dyn InstalledEvidence,
     backend: B,
     stop: Cancellation,
     #[cfg(test)]
@@ -105,7 +105,7 @@ impl<'a>
         self.stop = stop;
         self
     }
-    pub fn native_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn native_unreleased(proof: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
         let host = Self {
             fs: ProtectedFs::native()?,
@@ -124,7 +124,7 @@ impl<'a>
 impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
     pub fn injected(
         root: &Path,
-        proof: &'a AuthenticatedInstalled,
+        proof: &'a dyn InstalledEvidence,
         backend: B,
     ) -> Result<Self, HostError> {
         if root == Path::new("/") {

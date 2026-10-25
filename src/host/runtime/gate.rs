@@ -53,12 +53,13 @@ impl CutoverGate {
     fn lend_start(
         &self,
         listener: std::os::unix::net::UnixListener,
-        authenticated: &AuthenticatedInstalled,
+        authenticated: &dyn InstalledEvidence,
         peers: &(impl runtime_handoff::PeerObservations + Sync),
         context: &StartContext,
         start: impl FnOnce(&StartContext) -> bool,
     ) -> bool {
-        if authenticated.record().executable_sha256() != self.executable_sha256
+        if authenticated.verify_binding().is_err()
+            || authenticated.record().executable_sha256() != self.executable_sha256
             || context.check().is_err()
         {
             return false;
@@ -92,7 +93,7 @@ impl CutoverGate {
     /// systemd start effect; this API does not accept a command or path.
     pub fn start_native(
         &self,
-        authenticated: &AuthenticatedInstalled,
+        authenticated: &dyn InstalledEvidence,
         context: &StartContext,
         start: impl FnOnce(&StartContext) -> bool,
     ) -> bool {
@@ -114,7 +115,7 @@ impl CutoverGate {
     pub fn start_fixture(
         &self,
         socket: &Path,
-        authenticated: &AuthenticatedInstalled,
+        authenticated: &dyn InstalledEvidence,
         peers: &(impl runtime_handoff::PeerObservations + Sync),
         context: &StartContext,
         start: impl FnOnce(&StartContext) -> bool,

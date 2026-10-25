@@ -15,11 +15,12 @@ pub struct ProxyRuntimeHost<'a, P, R> {
 impl<'a> ProxyRuntimeHost<'a, LinuxPeers, NativeReadOnly> {
     /// Local private startup revalidates an already installed protected pair.
     /// This is not signed acquisition or permission to install supplied bytes.
-    pub fn native_local_unreleased(
-        record: &'a crate::records::InstalledRecord,
+    pub(in crate::host) fn native_local_unreleased(
+        proof: &'a crate::host::admission_private::OfflinePrivateAdmission,
     ) -> Result<Self, HostError> {
+        proof.require_role(Role::ProxyStartAuthorize)?;
         Ok(Self {
-            files: RuntimeFiles::native_record(record)?,
+            files: RuntimeFiles::native_record(proof)?,
             peers: LinuxPeers,
             runner: NativeReadOnly,
             socket: None,
@@ -27,7 +28,7 @@ impl<'a> ProxyRuntimeHost<'a, LinuxPeers, NativeReadOnly> {
     }
     /// Real Linux observations/effects are implemented but public dispatch remains
     /// closed. The caller must supply proof of the actual native current process.
-    pub fn native_unreleased(authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn native_unreleased(authenticated: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         Ok(Self {
             files: RuntimeFiles::native(authenticated)?,
             peers: LinuxPeers,
@@ -39,7 +40,7 @@ impl<'a> ProxyRuntimeHost<'a, LinuxPeers, NativeReadOnly> {
 impl<'a, P: PeerObservations, R: CommandRunner> ProxyRuntimeHost<'a, P, R> {
     pub fn injected(
         root: &Path,
-        authenticated: &'a AuthenticatedInstalled,
+        authenticated: &'a dyn InstalledEvidence,
         peers: P,
         runner: R,
         socket: PathBuf,
@@ -132,8 +133,7 @@ impl<P: PeerObservations, R: CommandRunner> ProxyStartHost for ProxyRuntimeHost<
         context: &StartContext,
     ) -> Result<ReleaseIdentity, Error> {
         context.check()?;
-        lock.verify()?;
-        self.files.installed()?;
+        self.files.start(Role::ProxyStartAuthorize, lock, context)?;
         let current = self.peers.current()?;
         if current.uid != self.files.fs.uid
             || current.executable_sha256 != self.files.record.executable_sha256()

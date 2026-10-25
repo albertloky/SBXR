@@ -140,7 +140,11 @@ fn unsupported_native_owner_construction_refuses_before_commands_or_network() {
         Err(HostError::UnsupportedHost)
     ));
     assert!(matches!(
-        crate::host::owner::NativeOwnerSources::authenticated_unreleased(&proof),
+        crate::host::admission::NativeAdmission::stable(
+            &mut NeverNetwork,
+            &crate::artifact_trust::SelectionBudget::new(),
+            Cancellation::new()
+        ),
         Err(HostError::UnsupportedHost)
     ));
 }
@@ -516,3 +520,14 @@ fn historical_serving_unit_recognition_is_removal_only() {
 
 #[path = "package_tests.rs"]
 mod package_tests;
+
+struct NeverNetwork;
+impl crate::artifact_trust::AcquisitionTransport for NeverNetwork {
+    fn get(
+        &mut self,
+        _: &crate::artifact_trust::AcquisitionRequest,
+        _: &crate::artifact_trust::SelectionBudget,
+    ) -> Result<crate::artifact_trust::AcquisitionResponse, crate::artifact_trust::TrustError> {
+        panic!("unreleased entry must not acquire")
+    }
+}

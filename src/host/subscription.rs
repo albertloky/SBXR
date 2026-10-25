@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     records::{HttpOperation, OwnershipRecord, ServingAuthority, sha256_hex},
-    release_acquisition::AuthenticatedInstalled,
+    release_acquisition::InstalledEvidence,
     runtime_handoff::StartContext,
     subscription_artifact::{HttpSubscriptionLink, SubscriptionCredential},
 };
@@ -105,7 +105,7 @@ pub enum HttpFault {
 }
 pub struct ProtectedHttpHost<'a, B> {
     fs: ProtectedFs,
-    authenticated: &'a AuthenticatedInstalled,
+    authenticated: &'a dyn InstalledEvidence,
     backend: B,
     owner: Option<Arc<HostLock>>,
     fault: Option<HttpFault>,
@@ -120,7 +120,7 @@ impl<'a>
         self.backend = self.backend.with_cancellation(stop);
         self
     }
-    pub fn native_unreleased(authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn native_unreleased(authenticated: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
         let host = Self {
             fs: ProtectedFs::native()?,
@@ -136,7 +136,7 @@ impl<'a>
 impl<'a, B: HttpRuntime> ProtectedHttpHost<'a, B> {
     pub fn injected(
         root: &Path,
-        authenticated: &'a AuthenticatedInstalled,
+        authenticated: &'a dyn InstalledEvidence,
         backend: B,
     ) -> Result<Self, HostError> {
         if root == Path::new("/") {

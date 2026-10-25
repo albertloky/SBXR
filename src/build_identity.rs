@@ -19,6 +19,11 @@ pub fn compiled_commit() -> Option<&'static str> {
     let expected = build_metadata::metadata(commit, target)?;
     (LOADED == expected).then_some(commit)
 }
+/// Exact loaded statement, usable only when the controlled retained build is
+/// present. This is structural identity, never signature/activation authority.
+pub(crate) fn compiled_statement() -> Option<&'static [u8]> {
+    compiled_commit().map(|_| LOADED)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

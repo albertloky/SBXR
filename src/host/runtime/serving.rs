@@ -18,34 +18,11 @@ pub struct ServingRuntimeHost<'a, E> {
     watch_interval: Duration,
 }
 impl<'a> ServingRuntimeHost<'a, NativeServingEnvironment> {
-    pub fn native_unreleased(
-        record: &'a crate::records::InstalledRecord,
+    pub(in crate::host) fn native_unreleased(
+        proof: &'a crate::host::admission_private::OfflinePrivateAdmission,
     ) -> Result<Self, HostError> {
-        super::super::linux::require_native_environment()?;
-        // Loaded Rust build identity is independent of argv/environment at
-        // runtime. An ordinary development binary has no released identity.
-        if crate::build_identity::compiled_commit() != Some(record.release_identity().commit()) {
-            return Err(HostError::LiveUnavailable);
-        }
-        let files = RuntimeFiles::native_record(record)?;
-        let (executable, _) = files
-            .fs
-            .raw(
-                "usr/local/bin/sbxr",
-                Mode::from_raw_mode(0o755),
-                crate::release_identity::MAX_EXECUTABLE_BYTES,
-            )?
-            .ok_or(HostError::Foreign)?;
-        if crate::release_identity::inspect_linux_artifact(
-            &executable,
-            crate::release_identity::Architecture::Amd64,
-        )
-        .map_err(|_| HostError::Foreign)?
-        .kind()
-            != crate::release_identity::ArtifactKind::Rust
-        {
-            return Err(HostError::Foreign);
-        }
+        proof.require_role(Role::SubscriptionServing)?;
+        let files = RuntimeFiles::native_record(proof)?;
         Ok(Self {
             files,
             environment: NativeServingEnvironment,
@@ -165,8 +142,7 @@ impl<E: ServingEnvironment> ServingHost for ServingRuntimeHost<'_, E> {
         context: &StartContext,
     ) -> Result<ReleaseIdentity, Error> {
         context.check()?;
-        lock.verify()?;
-        self.files.installed()?;
+        self.files.start(Role::SubscriptionServing, lock, context)?;
         Ok(self.files.record.release_identity())
     }
     fn ownership(&self) -> Result<Vec<u8>, Error> {

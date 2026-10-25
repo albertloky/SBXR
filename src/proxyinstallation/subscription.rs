@@ -423,7 +423,7 @@ impl<'a>
         self
     }
     pub fn native_unreleased(
-        proof: &'a crate::release_acquisition::AuthenticatedInstalled,
+        proof: &'a dyn crate::release_acquisition::InstalledEvidence,
     ) -> HostResult<Self, HostError> {
         Self::open(
             crate::host::subscription::ProtectedHttpHost::native_unreleased(proof)?,

@@ -142,7 +142,7 @@ impl<R: CommandRunner> LinuxHost<R> {
         runner: R,
         material: SetupMaterial,
         admission: InjectedAdmission,
-        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+        authenticated: &dyn crate::release_acquisition::InstalledEvidence,
     ) -> Result<Self, HostError> {
         let mut host = Self::injected(root, runner, material, admission)?;
         let current = observation::read_installed(&host.fs)?.ok_or(HostError::Foreign)?;
@@ -156,8 +156,11 @@ impl<R: CommandRunner> LinuxHost<R> {
         runner: R,
         material: SetupMaterial,
         network: super::network::NetworkAdmission,
-        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+        authenticated: &dyn crate::release_acquisition::InstalledEvidence,
     ) -> Result<Self, HostError> {
+        authenticated
+            .verify_binding()
+            .map_err(|_| HostError::Foreign)?;
         let mut host = Self::native_unreleased(runner, material, network)?;
         if observation::read_installed(&host.fs)?.as_ref() != Some(authenticated.record()) {
             return Err(HostError::Foreign);
@@ -171,9 +174,12 @@ impl<R: CommandRunner> LinuxHost<R> {
         runner: R,
         material: SetupMaterial,
         public_ipv4: &str,
-        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+        authenticated: &dyn crate::release_acquisition::InstalledEvidence,
     ) -> Result<Self, HostError> {
         require_native_environment()?;
+        authenticated
+            .verify_binding()
+            .map_err(|_| HostError::Foreign)?;
         let fs = ProtectedFs::native()?;
         if !runner.native_effects()
             || !material.offline

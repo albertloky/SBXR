@@ -4,11 +4,13 @@ use crate::host::linux::observation;
 pub(super) struct RuntimeFiles<'a> {
     pub fs: ProtectedFs,
     pub record: &'a crate::records::InstalledRecord,
+    bound: Option<&'a dyn InstalledEvidence>,
+    offline: Option<&'a crate::host::admission_private::OfflinePrivateAdmission>,
 }
 impl<'a> RuntimeFiles<'a> {
     pub fn injected(
         root: &Path,
-        authenticated: &'a AuthenticatedInstalled,
+        authenticated: &'a dyn InstalledEvidence,
     ) -> Result<Self, HostError> {
         if root == Path::new("/") {
             return Err(HostError::LiveUnavailable);
@@ -16,15 +18,19 @@ impl<'a> RuntimeFiles<'a> {
         let files = Self {
             fs: ProtectedFs::open(root)?,
             record: authenticated.record(),
+            bound: Some(authenticated),
+            offline: None,
         };
         files.installed().map_err(|_| HostError::Foreign)?;
         Ok(files)
     }
-    pub fn native(authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn native(authenticated: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         crate::host::linux::require_native_environment()?;
         let files = Self {
             fs: ProtectedFs::native()?,
             record: authenticated.record(),
+            bound: Some(authenticated),
+            offline: None,
         };
         files.installed().map_err(|_| HostError::Foreign)?;
         Ok(files)
@@ -42,20 +48,41 @@ impl<'a> RuntimeFiles<'a> {
         let files = Self {
             fs,
             record: archive.record(),
+            bound: None,
+            offline: None,
         };
         files.installed().map_err(|_| HostError::Foreign)?;
         Ok(files)
     }
-    pub fn native_record(record: &'a crate::records::InstalledRecord) -> Result<Self, HostError> {
+    pub fn native_record(
+        proof: &'a crate::host::admission_private::OfflinePrivateAdmission,
+    ) -> Result<Self, HostError> {
         crate::host::linux::require_native_environment()?;
         let files = Self {
             fs: ProtectedFs::native()?,
-            record,
+            record: proof.record(),
+            bound: None,
+            offline: Some(proof),
         };
         files.installed().map_err(|_| HostError::Foreign)?;
         Ok(files)
     }
+    pub fn start(&self, role: Role, lock: &StartLock, context: &StartContext) -> Result<(), Error> {
+        context.check()?;
+        lock.verify()?;
+        if let Some(proof) = self.offline {
+            proof.verify_start(role, lock, context).map_err(refused)?;
+        }
+        self.installed()?;
+        context.check()
+    }
     pub fn installed(&self) -> Result<(), Error> {
+        if let Some(proof) = self.offline {
+            proof.verify().map_err(refused)?;
+        }
+        if let Some(proof) = self.bound {
+            proof.verify_binding().map_err(refused)?;
+        }
         if observation::read_installed(&self.fs)
             .map_err(refused)?
             .as_ref()

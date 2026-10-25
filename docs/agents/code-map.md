@@ -31,7 +31,12 @@ Exact installed-byte acquisition is `src/release_acquisition.rs`; its
 `candidate.rs` submodule authenticates the signed empty-source HTTP candidate
 manifest and keeps candidate archive/installed authority distinct from stable
 proof. It shares bounded asset/archive/ELF verification with the stable route;
-public/private native admission remains closed. The private-root, fixed-route
+`host::admission` binds real delivery proofs to the protected/current executable
+and loaded Rust statement, and guards selected Owner journeys. The sealed
+`InstalledEvidence` interface retains candidate/stable roles throughout concrete
+runtime effects and handoff. `host::admission_private` owns the separate offline
+private exact-pair/role/start-lock proof; it never performs release acquisition.
+Public/private activation remains closed. The private-root, fixed-route
 `release_https::CandidateGatewayTransport` composes the retained qualification
 gateway without changing public/system TLS trust or artifact authentication.
 Archive decoding is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine

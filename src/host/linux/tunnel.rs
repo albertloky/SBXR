@@ -131,7 +131,7 @@ impl<R: CommandRunner, B: TunnelRuntime> StandardHost for TunnelStandard<R, B> {
     }
     fn verify_installed(
         &mut self,
-        proof: &crate::release_acquisition::AuthenticatedInstalled,
+        proof: &dyn crate::release_acquisition::InstalledEvidence,
     ) -> Result<(), HostError> {
         if self.host.authenticated.as_ref() != Some(proof.record())
             || observation::read_installed(&self.host.fs)?.as_ref() != Some(proof.record())

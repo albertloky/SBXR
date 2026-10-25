@@ -462,6 +462,7 @@ pub struct Handoff<'a> {
     owner: &'a StartLock,
     role: Role,
     expected: ExpectedPeer,
+    binding: Option<&'a dyn crate::release_acquisition::InstalledEvidence>,
 }
 impl<'a> Handoff<'a> {
     pub fn new(
@@ -481,6 +482,7 @@ impl<'a> Handoff<'a> {
             owner,
             role,
             expected: ExpectedPeer::Exact(expected),
+            binding: None,
         })
     }
     /// Systemd assigns the child PID after start. Pin its authenticated image,
@@ -490,9 +492,10 @@ impl<'a> Handoff<'a> {
         listener: UnixListener,
         owner: &'a StartLock,
         role: Role,
-        authenticated: &crate::release_acquisition::AuthenticatedInstalled,
+        authenticated: &'a dyn crate::release_acquisition::InstalledEvidence,
     ) -> Result<Self, Error> {
         role_name(role)?;
+        authenticated.verify_binding().map_err(refused)?;
         if owner.borrowed {
             return Err(Error::Refused);
         }
@@ -505,6 +508,7 @@ impl<'a> Handoff<'a> {
             expected: ExpectedPeer::Service {
                 executable_sha256: authenticated.record().executable_sha256().into(),
             },
+            binding: Some(authenticated),
         })
     }
     pub fn accept(
@@ -525,6 +529,9 @@ impl<'a> Handoff<'a> {
         };
         drop(self.listener);
         connection.set_nonblocking(true).map_err(refused)?;
+        if let Some(proof) = self.binding {
+            proof.verify_binding().map_err(refused)?;
+        }
         let expected = observations.peer(&connection)?;
         let accepted = match &self.expected {
             ExpectedPeer::Exact(exact) => &expected == exact,

@@ -2090,3 +2090,88 @@ and artifact positive evidence; then qualify the exact Linux packaged gateway,
 public/private startup and recovery before opening gates. Removing a refusal or
 accepting a structural proof alone cannot satisfy these prerequisites. The HTTP
 clean-install exclusions remain unchanged.
+
+
+## Bound native and offline private admission (base c084520)
+
+`NativeAdmission::stable` and `::candidate` compose the real acquisition paths
+with a retained protected process snapshot. Explicit `DeliveryRole` cannot be
+promoted across sources. The sealed `InstalledEvidence` interface carries the
+original opaque proof through existing setup, HTTP, identity, disclosure, tunnel,
+service-controller and handoff adapters; external records cannot implement it.
+No signature callback or candidate fixture constructor was added.
+
+The snapshot retains close-on-exec named/current executable descriptors and binds
+protected Installed Record raw bytes/inode, exact executable bytes/inode and
+metadata, canonical loaded Rust statement, absence of lifecycle transactions and
+session cancellation. Positional descriptor reads avoid shared seek offsets.
+Copies with identical executable bytes, changed/replaced records, namespace
+replacement, wrong loaded metadata and cancelled selection refuse. Cryptographic
+and structural checks remain separate. NativeOwnerSources now requires this
+concrete proof, and selected journeys retain a process guard before Review,
+Execute, details or link disclosure. Runtime file checks and one-use service
+handoff revalidate the bound proof while preserving Owner descriptor lifetime.
+
+`OfflinePrivateAdmission` is deliberately not authenticated delivery evidence.
+Ordinary private startup remains offline. It retains the protected pair/record
+namespace, full loaded Rust statement, exact supported role and cancellation.
+Proxy/provision roles additionally retain the current process snapshot. Serving
+keeps the existing fixed cgroup, kernel execfn and complete sandbox observations
+without /proc or online acquisition; the Owner independently verifies full child
+bytes when lending. RuntimeFiles retains this proof and checks its role, exact
+root, existing startup lock and context before startup. A stale lock inode or
+Owner exclusion without a working lender cannot become ordinary-start authority.
+No explicit unlock was added to borrowed HostLock/start descriptors.
+
+The repository public composition accepts explicit reviewed `PublicDelivery`.
+Candidate mode uses the protected gateway and actual manifest verifier; stable
+mode keeps public release qualification. Both public and private gates remain
+closed before any native effects. Normal zero-argument entry still selects stable
+delivery. There is no ambient file/environment candidate selector. The reviewed
+candidate input must still be bound to the actual zero-argument qualification
+invocation; a different wrapper binary is not qualification of SBXR itself.
+
+Final local validation passed **161 selected product tests**, **4 compile-fail
+doctests**, format, strict all-target Clippy and the Mac build. The product set
+comprises 8 admission, 15 acquisition, 72 fixture setup/recovery/removal, 10 menu,
+15 parity, 26 artifact-trust, 2 genuine public proof, 5 exact native refusal/ordinary
+proxy checks and 8 socket-free retained-lock/protocol cases. The 72 filesystem
+cases progressed through their existing failure matrices and finished in 236.74s;
+they never execute native package/service commands. The temporary fixture directory
+is empty. Commands/results: `.scratch/acceptance/rust-admission/final-checks.json`.
+
+Eight targeted mutations were caught: current inode, record inode, loaded build,
+prepared-action process guard, private role, startup lock, delivery role and sealed
+evidence. Source bytes were restored exactly before final checks. Initial
+integration compilation exposed concrete stable-only callers; these now carry the
+sealed role-preserving interface. A new structural ELF fixture initially lacked
+mandatory text/rodata sections; the existing release-identity test builder corrected
+it, without weakening inspection. The lock fixture initially used provision without
+existing runtime parents; using the existing fixture acquire contract corrected
+that setup. None of those synthetic snapshots issues authentic candidate authority.
+
+No full listener-dependent product suite, live socket/ps/private-scratch operation,
+blocked CI closeout, native activation, external search, VPS/security change,
+live credential generation, source upload/push, CI dispatch, signing or publication ran.
+Current-source Linux/musl, actual sandbox/handoff/NAT and packaged recovery remain
+unverified. The preserved genuine candidate bundle still lacks its matching raw
+manifest; that old failed v2 candidate could not positively qualify a current Rust
+clean-install manifest even if its raw bytes were available. Genuine current
+candidate/manifest/archive admission has not been positively exercised. No
+signature/manifest correspondence or successful qualification was fabricated.
+
+The finite next preparation is one reviewed exact current Rust candidate: both
+native musl artifacts, retained build identities, four assets with exact sizes and
+hashes, authentic workflow/native proofs, and a signed current v3 empty-source HTTP
+manifest/attempt with all five journeys and its exact raw digest. Bind the
+independently reviewed gateway CA pin and candidate selection to the supported
+zero-argument invocation, then validate current source/packaged startup on Linux
+before changing the closed activation policy. Source transfer, CI/candidate
+creation or signing requires its own concrete permission; this increment performs
+none. A real installation qualification additionally needs approval naming the
+exact candidate/disposable Ubuntu 24.04 amd64 host, bounded root package/hold,
+service/user/group/firewall changes, disposable credentials/revocation, genuinely
+outside and applicable Karing observations, recovery and complete owned cleanup.
+Existing working proxies, optional tunnel/account changes, system trust changes
+and stable publication are not implied. The [acceptance matrix](rust-acceptance.md#evidence-bound-native-admission-base-c084520)
+keeps these prerequisites distinct from implemented local proof composition.

@@ -7,7 +7,6 @@ use crate::{
         OwnerInstallation, OwnerSources,
     },
     records::{RecoveryDirection, SetupPhase},
-    release_acquisition::AuthenticatedInstalled,
 };
 /// The executing bytes must already be authenticated by NativeObserver. This
 /// adapter never creates an installed proof from local metadata alone.
@@ -20,14 +19,17 @@ type NativeRemovalHost<'a> = super::linux::StandardRemovalHost<
     >,
 >;
 pub struct NativeOwnerSources<'a> {
-    proof: &'a AuthenticatedInstalled,
+    proof: &'a super::admission::NativeAdmission,
     stop: crate::subscription_serving::Cancellation,
     package: std::cell::RefCell<Option<CachedPackage>>,
     probe: std::cell::RefCell<Option<crate::package_acquisition::ProbeImage>>,
 }
 impl<'a> NativeOwnerSources<'a> {
-    pub fn authenticated_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn authenticated_unreleased(
+        proof: &'a super::admission::NativeAdmission,
+    ) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
+        proof.verify()?;
         super::owner_runtime::OwnerRuntime::native_unreleased(proof)?;
         Ok(Self {
             proof,
@@ -261,6 +263,7 @@ impl<'a> NativeOwnerSources<'a> {
 }
 impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
     fn journeys(&self) -> Result<Vec<Journey>, HostError> {
+        self.proof.verify()?;
         super::linux::require_native_environment()?;
         if self.stop.is_cancelled() {
             return Err(HostError::Cancelled);
@@ -340,7 +343,7 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
         if !self.journeys()?.contains(&journey) {
             return Err(HostError::Foreign);
         }
-        match journey {
+        let inner: Result<Box<dyn Interface + 'a>, HostError> = match journey {
             Journey::Tunnel => self.tunnel_module(),
             Journey::Http => Ok(Box::new(
                 HttpInstallation::native_unreleased(self.proof)?
@@ -369,7 +372,12 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
                     ExecutionMode::native_unreleased(),
                 ),
             )),
-        }
+        };
+        let inner = inner?;
+        Ok(Box::new(super::admission::BoundJourney::new(
+            self.proof.snapshot_guard(),
+            inner,
+        )))
     }
     fn mode(&self) -> ExecutionMode {
         ExecutionMode::native_unreleased()
@@ -383,6 +391,19 @@ pub fn run_public_unreleased(
     input: &mut impl std::os::fd::AsFd,
     output: &mut impl std::io::Write,
 ) -> Result<(), PublicEntryError> {
+    run_public_delivery_unreleased(input, output, PublicDelivery::Stable)
+}
+/// Explicit repository composition input, never inferred from an environment,
+/// unsigned metadata or an unverified candidate response. No CLI is added.
+pub enum PublicDelivery<'a> {
+    Stable,
+    Candidate { reviewed_ca_sha256: &'a str },
+}
+pub fn run_public_delivery_unreleased(
+    input: &mut impl std::os::fd::AsFd,
+    output: &mut impl std::io::Write,
+    delivery: PublicDelivery<'_>,
+) -> Result<(), PublicEntryError> {
     super::require_live_adapter()?;
     let commit = crate::build_identity::compiled_commit().ok_or(HostError::LiveUnavailable)?;
     let stop = crate::subscription_serving::Cancellation::new();
@@ -392,9 +413,16 @@ pub fn run_public_unreleased(
     let mut output = super::input::InterruptibleOutput::new(output, stop.clone());
     let observer = super::linux::NativeObserver::open()?;
     let budget = crate::artifact_trust::SelectionBudget::new().with_cancellation(stop.clone());
-    let mut authentication =
-        crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
-    let proof = observer.authenticate_current(&mut authentication, &budget)?;
+    let proof = match delivery {
+        PublicDelivery::Stable => {
+            let mut authentication =
+                crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
+            observer.authenticate_current(&mut authentication, &budget, stop.clone())?
+        }
+        PublicDelivery::Candidate { reviewed_ca_sha256 } => {
+            observer.authenticate_candidate_current(reviewed_ca_sha256, &budget, stop.clone())?
+        }
+    };
     if proof.record().release_identity().commit() != commit {
         return Err(HostError::Foreign.into());
     }

@@ -10,7 +10,6 @@ use super::{
 use crate::{
     durable::OwnershipStore,
     records::{OwnershipRecord, ReleaseIdentity, sha256_hex},
-    release_acquisition::AuthenticatedInstalled,
     runtime_handoff::{self, ProcessIdentity},
     server_configuration::{ServerConfiguration, tunnel_unit},
     tunnel_setup::{
@@ -1474,7 +1473,10 @@ pub trait StandardHost {
         false
     }
     fn root(&self) -> &Path;
-    fn verify_installed(&mut self, proof: &AuthenticatedInstalled) -> Result<(), HostError>;
+    fn verify_installed(
+        &mut self,
+        proof: &dyn crate::release_acquisition::InstalledEvidence,
+    ) -> Result<(), HostError>;
     fn public_ipv4(&mut self, owner: &Arc<HostLock>) -> Result<String, HostError>;
     /// Bind root/package/configuration admission and exact proxy PID, command,
     /// executable, cgroup, TCP443 and loopback TCP10000 observations. Unknown or
@@ -1515,12 +1517,12 @@ pub struct TunnelGuard {
 pub struct ProtectedTunnelHost<'a, S, I = NativeConnectorIo> {
     standard: S,
     connector: Connector<I>,
-    proof: &'a AuthenticatedInstalled,
+    proof: &'a dyn crate::release_acquisition::InstalledEvidence,
     network: ProbeNetwork,
 }
 impl<'a, S: StandardHost> ProtectedTunnelHost<'a, S, NativeConnectorIo> {
     pub fn native_unreleased(
-        proof: &'a AuthenticatedInstalled,
+        proof: &'a dyn crate::release_acquisition::InstalledEvidence,
         standard: S,
     ) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
@@ -1540,7 +1542,7 @@ impl<'a, S: StandardHost> ProtectedTunnelHost<'a, S, NativeConnectorIo> {
 impl<'a, S: StandardHost, I: ConnectorIo> ProtectedTunnelHost<'a, S, I> {
     pub fn injected(
         root: &Path,
-        proof: &'a AuthenticatedInstalled,
+        proof: &'a dyn crate::release_acquisition::InstalledEvidence,
         standard: S,
         io: I,
         network: ProbeNetwork,

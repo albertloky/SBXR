@@ -17,6 +17,79 @@ pub use candidate::{AuthenticatedCandidateArchive, AuthenticatedCandidateInstall
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 type Result<T> = std::result::Result<T, TrustError>;
+/// Delivery role is never a qualification/activation flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryRole {
+    Stable,
+    Candidate,
+}
+pub(crate) mod installed_seal {
+    pub trait Sealed {}
+}
+/// Sealed authenticated bytes, with the original delivery role retained.
+/// Native entry additionally requires host::admission::NativeAdmission, not
+/// this byte proof alone. A bound native proof rechecks its protected snapshot.
+/// ```compile_fail
+/// struct Forged;
+/// impl sbxr::release_acquisition::InstalledEvidence for Forged {
+/// fn record(&self)->&sbxr::records::InstalledRecord { panic!() }
+/// fn index(&self)->&sbxr::release_identity::ReleaseIndex { panic!() }
+/// fn role(&self)->sbxr::release_acquisition::DeliveryRole { sbxr::release_acquisition::DeliveryRole::Stable }
+/// fn verify_binding(&self)->Result<(),sbxr::artifact_trust::TrustError> { Ok(()) }
+/// }
+/// ```
+pub trait InstalledEvidence: installed_seal::Sealed + Send + Sync {
+    fn record(&self) -> &InstalledRecord;
+    fn index(&self) -> &ReleaseIndex;
+    fn role(&self) -> DeliveryRole;
+    fn verify_binding(&self) -> std::result::Result<(), TrustError>;
+}
+impl<T: InstalledEvidence + ?Sized> installed_seal::Sealed for std::sync::Arc<T> {}
+impl<T: InstalledEvidence + ?Sized> InstalledEvidence for std::sync::Arc<T> {
+    fn record(&self) -> &InstalledRecord {
+        (**self).record()
+    }
+    fn index(&self) -> &ReleaseIndex {
+        (**self).index()
+    }
+    fn role(&self) -> DeliveryRole {
+        (**self).role()
+    }
+    fn verify_binding(&self) -> std::result::Result<(), TrustError> {
+        (**self).verify_binding()
+    }
+}
+impl installed_seal::Sealed for AuthenticatedInstalled {}
+impl InstalledEvidence for AuthenticatedInstalled {
+    fn record(&self) -> &InstalledRecord {
+        self.record()
+    }
+    fn index(&self) -> &ReleaseIndex {
+        self.index()
+    }
+    fn role(&self) -> DeliveryRole {
+        DeliveryRole::Stable
+    }
+    fn verify_binding(&self) -> std::result::Result<(), TrustError> {
+        Ok(())
+    }
+}
+impl installed_seal::Sealed for AuthenticatedCandidateInstalled {}
+impl InstalledEvidence for AuthenticatedCandidateInstalled {
+    fn record(&self) -> &InstalledRecord {
+        self.record()
+    }
+    fn index(&self) -> &ReleaseIndex {
+        self.index()
+    }
+    fn role(&self) -> DeliveryRole {
+        DeliveryRole::Candidate
+    }
+    fn verify_binding(&self) -> std::result::Result<(), TrustError> {
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 struct WireAsset {
     name: String,

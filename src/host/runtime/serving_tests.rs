@@ -324,7 +324,16 @@ fn concrete_serving_refuses_native_route_and_non_loopback_fixture_bind() {
         )
         .is_err()
     );
-    assert!(ServingRuntimeHost::native_unreleased(a.record()).is_err());
+    assert!(
+        crate::host::admission_private::OfflinePrivateAdmission::native(
+            Role::SubscriptionServing,
+            &StartContext::new(
+                Cancellation::new(),
+                Instant::now() + runtime_handoff::START_TIMEOUT
+            )
+        )
+        .is_err()
+    );
     assert!(NativeServingEnvironment.process().is_err());
 }
 

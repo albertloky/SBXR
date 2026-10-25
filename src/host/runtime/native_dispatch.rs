@@ -29,11 +29,10 @@ impl NativePrivateRuntime {
             Instant::now() + runtime_handoff::START_TIMEOUT,
         );
         let _signals = super::shutdown::Signals::native(context.stop.clone())?;
-        let observer = super::super::linux::NativeObserver::open().map_err(refused)?;
-        let installed = observer
-            .read_installed()
-            .map_err(refused)?
-            .ok_or(Error::Refused)?;
+        let admission =
+            crate::host::admission_private::OfflinePrivateAdmission::native(role, &context)
+                .map_err(refused)?;
+        let installed = admission.record();
         if commit != installed.release_identity().commit() {
             return Err(Error::Refused);
         }
@@ -43,7 +42,7 @@ impl NativePrivateRuntime {
                 // loaded build identity, protected installed pair and complete
                 // sandbox checks form the ordinary local contract. The Owner
                 // independently checks full child bytes when lending authority.
-                let host = ServingRuntimeHost::native_unreleased(&installed).map_err(refused)?;
+                let host = ServingRuntimeHost::native_unreleased(&admission).map_err(refused)?;
                 if runtime_handoff::serve_subscription(&host, &Module::new(), &context)
                     == Code::Stopped
                 {
@@ -53,7 +52,7 @@ impl NativePrivateRuntime {
                 }
             }
             Role::ProxyStartAuthorize => runtime_handoff::authorize_proxy_start(
-                &ProxyRuntimeHost::native_local_unreleased(&installed).map_err(refused)?,
+                &ProxyRuntimeHost::native_local_unreleased(&admission).map_err(refused)?,
                 &context,
             ),
             Role::ProvisionMutationLock => {
@@ -63,7 +62,7 @@ impl NativePrivateRuntime {
                     return Err(Error::Refused);
                 }
                 let files =
-                    super::material::RuntimeFiles::native_record(&installed).map_err(refused)?;
+                    super::material::RuntimeFiles::native_record(&admission).map_err(refused)?;
                 let lock = HostLock::provision(Path::new("/"), 0).map_err(refused)?;
                 files.installed()?;
                 if LinuxPeers.current()? != current {

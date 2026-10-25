@@ -153,27 +153,51 @@ artifact authentication stay mandatory. Public roots, system trust stores and
 public/private activation gates are unchanged. Tests use in-memory TLS and
 protected temporary files; no listener or real gateway/NAT route is exercised.
 
-One source activation blocker remains before an authentic packaged journey:
+## Evidence-bound native admission (base c084520)
 
-- Public Owner: `host::require_live_adapter` unconditionally refuses before
-  `host::owner::run_public_unreleased`. Compose protected native current/installed
-  observation with explicit candidate versus stable authenticated results;
-  `NativeObserver::authenticate_current` and `NativeOwnerSources` currently accept
-  stable proof only. Supply the independently reviewed CA digest to the scoped
-  gateway constructor and bind the selected release/index, Installed Record,
-  complete executable/current-process bytes and compiled build identity before
-  retaining Owner authority. A candidate manifest is delivery authority, not a
-  stable/live Acceptance Record. Removing the gate alone is insufficient.
-- Private startup: `host::runtime::native_dispatch::released_build` shares the
-  closed gate. Preserve its offline AF_UNIX-only sandbox contract: exact loaded
-  build/protected installed pair, same-release ownership, authenticated one-use
-  handoff, retained locks and cancellation must compose before effects. Do not
-  add online CA/release acquisition to ordinary private startup or treat a build
-  marker, environment flag or structural ELF proof as cryptographic trust.
+Native admission now has two real acquisition constructors. Stable delivery keeps
+qualified Acceptance Record/native signature checks; candidate delivery keeps the
+explicit reviewed CA pin, manifest signature/approval and four-asset bindings.
+Both produce `NativeAdmission` only after binding the protected Installed Record
+raw bytes/inode, exact protected executable, the same kernel current executable
+inode/bytes, and the canonical loaded Rust statement. The statement remains a
+structural check in addition to cryptography. Record, namespace, metadata, bytes,
+transaction absence and cancellation are rechecked through retained descriptors.
+A copied executable with identical bytes cannot substitute for the current inode.
 
-Activation also needs the complete positive signed current-candidate fixture and
-Linux packaged public/private startup, actual gateway HTTP/NAT, systemd/cgroup and
-recovery qualification. This local TLS increment grants none of those effects.
+The sealed `InstalledEvidence` boundary preserves `DeliveryRole` and permits the
+existing concrete effect adapters to carry either genuine delivery role or the
+bound process proof. It cannot be implemented by an external structural record.
+`NativeOwnerSources` requires the concrete native proof; every selected journey
+retains a fresh process guard before Review, Execute and disclosure. Runtime file
+checks and both creation/acceptance of one-use service handoff recheck the bound
+proof. Existing owner/borrower lock lifetime and recovery direction remain intact.
+
+Private startup uses a distinct `OfflinePrivateAdmission`, never delivery trust.
+It rechecks the protected exact pair/inodes, loaded Rust metadata, supported role,
+cancellation and existing startup lock. Serving derives its actual fixed cgroup,
+kernel execfn and complete sandbox observations without /proc or online release
+acquisition. Proxy/provision roles additionally retain their current executable
+snapshot. Startup binds the proof to the exact role/root/lock; an Owner-held lock
+without its lender cannot silently become ordinary-start authority. This local
+private proof cannot be used as authenticated acquisition evidence.
+
+Both `require_live_adapter` and private released-build activation still refuse.
+The explicit repository entry composition
+`run_public_delivery_unreleased(..., PublicDelivery::Candidate { reviewed_ca_sha256 })`
+uses real candidate admission behind the same gate. Normal zero-argument entry
+still selects stable delivery; no ambient/environment candidate selector was
+introduced. Binding the independently reviewed candidate input to the actual
+zero-argument qualification invocation remains a precise coordinator/driver
+integration prerequisite. A different wrapper executable cannot stand in for
+qualification of the exact packaged SBXR executable.
+
+Before any activation, obtain a complete genuine signed current Rust candidate
+manifest/artifact positive set and validate the current source on Linux. The
+protected candidate invocation, actual gateway HTTP/NAT, public/private systemd
+startup, cgroup/handoff and recovery behavior need exact-candidate qualification.
+These prerequisites cannot be replaced by fixture positives, a build marker,
+removing a refusal or converting candidate delivery into stable qualification.
 
 The existing genuine candidate bundle verifies, but its matching raw manifest
 (digest `0add26026bed41b9bebd770353e6d4249cf30bbf3090c618e59f619b0c30d476`)

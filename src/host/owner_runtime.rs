@@ -19,7 +19,7 @@ use super::{
 use crate::{
     client_identity as ci,
     records::{OwnershipRecord, ServingAuthority, sha256_hex},
-    release_acquisition::AuthenticatedInstalled,
+    release_acquisition::InstalledEvidence,
     runtime_handoff::{self, PeerObservations, StartContext},
     subscription_artifact::SubscriptionCredential,
     subscription_serving::Cancellation,
@@ -40,13 +40,13 @@ fn refused(_: impl std::fmt::Debug) -> HostError {
 }
 pub struct OwnerRuntime<'a, I> {
     fs: ProtectedFs,
-    proof: &'a AuthenticatedInstalled,
+    proof: &'a dyn InstalledEvidence,
     io: I,
     probe: Option<std::net::SocketAddr>,
     stop: Cancellation,
 }
 impl<'a> OwnerRuntime<'a, NativeIo> {
-    pub fn native_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn native_unreleased(proof: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
         let runtime = Self {
             fs: ProtectedFs::native()?,
@@ -62,7 +62,7 @@ impl<'a> OwnerRuntime<'a, NativeIo> {
 impl<'a, I: OwnerIo> OwnerRuntime<'a, I> {
     pub fn injected(
         root: &Path,
-        proof: &'a AuthenticatedInstalled,
+        proof: &'a dyn InstalledEvidence,
         io: I,
         probe: std::net::SocketAddr,
     ) -> Result<Self, HostError> {
@@ -93,6 +93,7 @@ impl<'a, I: OwnerIo> OwnerRuntime<'a, I> {
         )
     }
     pub(in crate::host) fn installed(&self) -> Result<(), HostError> {
+        self.proof.verify_binding().map_err(refused)?;
         if self.stop.is_cancelled() {
             return Err(HostError::Cancelled);
         }

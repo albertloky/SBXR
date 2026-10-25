@@ -1,6 +1,8 @@
 //! Standard Ubuntu command plans and an explicit filesystem-fixture adapter.
 //! Fixed native command/file effects and retained guards are implemented, with
 //! fixture-only integration tests. The production entry remains unavailable.
+pub mod admission;
+mod admission_private;
 pub mod disclosure;
 mod filesystem;
 mod fixture;

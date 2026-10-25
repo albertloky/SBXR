@@ -14,7 +14,7 @@ use super::{HostError, filesystem::ProtectedFs, linux::observation, locks::HostL
 use crate::{
     private_roles::{Role, Runtime},
     records::{OwnershipRecord, ReleaseIdentity, sha256_hex},
-    release_acquisition::AuthenticatedInstalled,
+    release_acquisition::InstalledEvidence,
     runtime_handoff::{self, Error, ProxyStartHost, StartContext, StartLock},
     subscription_serving::Cancellation,
 };
@@ -27,10 +27,10 @@ use std::path::Path;
 const STARTUP: &[u8] = b"[Service]\nExecCondition=+/usr/local/bin/sbxr --proxy-start-authorize\n";
 pub struct InjectedRuntime<'a> {
     fs: ProtectedFs,
-    authenticated: &'a AuthenticatedInstalled,
+    authenticated: &'a dyn InstalledEvidence,
 }
 impl<'a> InjectedRuntime<'a> {
-    pub fn open(root: &Path, authenticated: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn open(root: &Path, authenticated: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         if root == Path::new("/") {
             return Err(HostError::LiveUnavailable);
         }
@@ -156,3 +156,6 @@ impl Runtime for InjectedRuntime<'_> {
         }
     }
 }
+
+#[cfg(test)]
+use crate::release_acquisition::AuthenticatedInstalled;

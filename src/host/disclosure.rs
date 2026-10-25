@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     disclosure as d, durable::OwnershipStore, records::OwnershipRecord,
-    release_acquisition::AuthenticatedInstalled,
+    release_acquisition::InstalledEvidence,
 };
 use rustix::fs::Mode;
 use std::{cell::RefCell, path::Path, sync::Arc};
@@ -19,14 +19,14 @@ pub struct Guard {
 }
 pub struct ProtectedDisclosureHost<'a, I> {
     fs: ProtectedFs,
-    proof: &'a AuthenticatedInstalled,
+    proof: &'a dyn InstalledEvidence,
     runtime: OwnerRuntime<'a, I>,
 }
 fn refused(_: impl std::fmt::Debug) -> d::Error {
     d::Error::Authority
 }
 impl<'a> ProtectedDisclosureHost<'a, NativeIo> {
-    pub fn native_unreleased(proof: &'a AuthenticatedInstalled) -> Result<Self, HostError> {
+    pub fn native_unreleased(proof: &'a dyn InstalledEvidence) -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
         let fs = ProtectedFs::native()?;
         if fs.uid != 0 || fs.gid != 0 {
@@ -46,7 +46,7 @@ impl<'a, I: OwnerIo> ProtectedDisclosureHost<'a, I> {
     }
     pub fn injected(
         root: &Path,
-        proof: &'a AuthenticatedInstalled,
+        proof: &'a dyn InstalledEvidence,
         io: I,
         address: std::net::SocketAddr,
     ) -> Result<Self, HostError> {

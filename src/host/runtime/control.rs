@@ -91,7 +91,7 @@ impl ServiceCommands for NativeServiceCommands {
 }
 pub struct ServiceController<'a, P, C> {
     files: RuntimeFiles<'a>,
-    authenticated: &'a AuthenticatedInstalled,
+    authenticated: &'a dyn InstalledEvidence,
     owner: Arc<HostLock>,
     peers: P,
     commands: C,
@@ -99,7 +99,7 @@ pub struct ServiceController<'a, P, C> {
 }
 impl<'a> ServiceController<'a, runtime_handoff::LinuxPeers, NativeServiceCommands> {
     pub fn native_unreleased(
-        authenticated: &'a AuthenticatedInstalled,
+        authenticated: &'a dyn InstalledEvidence,
         owner: Arc<HostLock>,
     ) -> Result<Self, HostError> {
         let commands = NativeServiceCommands::new(owner.clone())?;
@@ -118,7 +118,7 @@ impl<'a> ServiceController<'a, runtime_handoff::LinuxPeers, NativeServiceCommand
 impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P, C> {
     pub fn injected(
         root: &Path,
-        authenticated: &'a AuthenticatedInstalled,
+        authenticated: &'a dyn InstalledEvidence,
         owner: Arc<HostLock>,
         peers: P,
         commands: C,
@@ -139,7 +139,7 @@ impl<'a, P: PeerObservations + Sync, C: ServiceCommands> ServiceController<'a, P
         Ok(controller)
     }
     pub(in crate::host) fn native_with_commands(
-        authenticated: &'a AuthenticatedInstalled,
+        authenticated: &'a dyn InstalledEvidence,
         owner: Arc<HostLock>,
         peers: P,
         commands: C,
