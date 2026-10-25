@@ -60,6 +60,8 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 		{"declaration-sources", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"declaration-contract", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"declaration-exception", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
+		{"declaration-correction", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
+		{"declaration-correction-empty", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"declaration-scope", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"later-failure", accepted, "fetch source tags", "completed", "accepted", 0, 37},
 		{"diagnostic-write-failure", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
@@ -106,6 +108,10 @@ exit "$VERIFIER_STATUS"
 				attempt = strings.ReplaceAll(attempt, "sbxr-subscription-update-v1", "unsupported")
 			case "declaration-exception":
 				attempt = strings.Replace(attempt, "{", `{"owner_exception":true,`, 1)
+			case "declaration-correction":
+				attempt = strings.Replace(attempt, "{", `{"live89_correction_review":{"target_sequence":168,"target_tag":"v3.1.90"},`, 1)
+			case "declaration-correction-empty":
+				attempt = strings.Replace(attempt, "{", `{"live89_correction_review":{},`, 1)
 			case "declaration-scope":
 				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-only", "unknown")
 			}

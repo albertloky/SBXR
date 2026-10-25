@@ -103,7 +103,8 @@ func TestLive89CorrectionWorkflowBinding(t *testing.T) {
 		`archived_evidence:$archived[0].evidence`,
 		`karing_latest_checked_at="$(jq -r .karing_latest_checked_at <<<"$V3_ATTEMPT")"`,
 		`started_at:$now,karing_latest_checked_at:$karing_latest_checked_at`,
-		`python3 .github/scripts/live89-correction-review.py payload "release/sbxr-linux-$target.tar.gz"`,
+		// Rust candidates cannot reuse the one-off Go payload evidence.
+		`.owner_exception == null and .live89_correction_review == null`,
 		`python3 .github/scripts/live89-correction-review.py payload "rechecked/sbxr-linux-$architecture.tar.gz"`,
 	} {
 		if !strings.Contains(workflow, required) {

@@ -21,6 +21,12 @@ with explicit provenance rather than driving a new live session. Original failed
 live89 history and its burn remain intact. This path has no `owner_exception` and
 retains ordinary native, signing, attestation, failure and publication gates.
 
+The current Rust candidate producer refuses `live89_correction_review` during
+preflight, before builds or drafts. That one-off Go payload evidence cannot
+qualify a Rust rewrite. The pinned review script and candidate/stable readback
+checks remain for historical evidence verification; this exclusion does not
+relax their source, payload, signature or publication requirements.
+
 | Area | Entry points |
 |---|---|
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
