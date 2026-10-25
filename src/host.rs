@@ -1,6 +1,7 @@
 //! Standard Ubuntu command plans and an explicit filesystem-fixture adapter.
 //! Fixed native command/file effects and retained guards are implemented, with
-//! fixture-only integration tests. The production entry remains unavailable.
+//! fixture-backed integration tests. Native entry requires the controlled release
+//! build and separate authenticated admission; no simulator fallback exists.
 pub mod admission;
 mod admission_private;
 pub mod disclosure;
@@ -44,7 +45,7 @@ pub enum HostError {
 impl fmt::Display for HostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::LiveUnavailable => "Real deployment is unavailable in this Rust increment.",
+            Self::LiveUnavailable => "Native execution prerequisites or authority could not be proved.",
             Self::UnsupportedHost => "This host is unsupported; Linux Ubuntu 24.04 amd64 and root are required. No simulation fallback is selected.",
             Self::Cancelled => "Host operation cancelled; reinspect before further effects.",
             Self::Timeout => "Host operation timed out; reinspect before further effects.",
@@ -55,10 +56,13 @@ impl fmt::Display for HostError {
 }
 impl std::error::Error for HostError {}
 
-/// Explicit capability refusal; never substitutes the fixture adapter for live work.
+/// Native platform/build prerequisite only, never delivery or effect authority.
+/// Public entry must still acquire NativeAdmission; private startup independently
+/// verifies the exact protected pair, role, sandbox and retained start lock.
 pub fn require_live_adapter() -> Result<(), HostError> {
     linux::require_native_environment()?;
-    Err(HostError::LiveUnavailable)
+    crate::build_identity::compiled_statement().ok_or(HostError::LiveUnavailable)?;
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

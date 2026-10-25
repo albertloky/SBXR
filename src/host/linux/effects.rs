@@ -23,12 +23,15 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
     }
     fn effects_available(&self) -> bool {
         if self.native_mode {
-            false
+            self.runner.native_effects() && self.native_authorized().is_ok()
         } else {
             self.runner.injected_effects()
         }
     }
     fn begin_change(&mut self) -> Result<(), HostError> {
+        if self.stop.cancelled() {
+            return Err(HostError::Cancelled);
+        }
         if !self.effects_available() {
             return Err(HostError::LiveUnavailable);
         }
@@ -40,6 +43,8 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
             self.uid(),
         )?);
         if self.native_mode {
+            // Close the interval between the first admission check and exclusion.
+            self.native_authorized()?;
             self.fs.authorize_native_writes(Some(lock.clone()))?;
         }
         self.runner.change_lock(Some(lock.clone()));

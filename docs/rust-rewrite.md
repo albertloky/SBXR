@@ -2247,3 +2247,43 @@ current Rust native admission positive path is not claimed. Logs and commands:
 All temporary fixtures were cleaned. No live effect, VPS access, listener/ps,
 blocked CI closeout, upload/push, signing, trust/credential change or publication
 ran. The 596-case Linux result belongs only to f824c1f and was not rerun here.
+
+
+### Conditional native Standard setup (base 594add9)
+
+The Owner's explicit source-level approval resolves the earlier admission-edit
+blocker. Native platform/controlled-build checks no longer unconditionally refuse
+valid released code. Public entry still obtains genuine candidate/stable native
+admission before constructing Owner effects; private startup retains offline exact
+pair/process, role, sandbox and lock/handoff checks. Native Standard availability
+requires both the native runner and retained concrete admission. Proof is rechecked
+after acquiring exclusion and before native filesystem writes. Stale or missing
+proof, cancellation, foreign resources and unsupported operations still refuse.
+Native Review/results describe actual setup/recovery without fixture labels or
+claiming outside traffic. All implementation uses the existing mechanisms.
+
+No actual native setup, installation, host/security/trust change, live credential,
+VPS access, push, workflow dispatch, signing or publication follows from this code
+change. The [current acceptance matrix](rust-acceptance.md#conditional-native-setup-base-594add9)
+records the remaining genuine current Rust positive evidence and Linux/packaged
+qualification. The older 596-case Linux pass remains evidence of f824c1f only.
+
+Validation passed **101 selected product cases**, **five compile-fail doctests**,
+all-target compilation, format, strict all-target Clippy and the Mac build. The
+case set is 47 library admission/setup/recovery cases, 11 menu, 15 parity,
+26 artifact-trust and two genuine preserved public-proof cases. Seven negative
+controls were caught: restoring blanket refusal; bypassing retained proof or the
+native runner; cancelling too late; fixture plan/result leakage; and delivery-role
+confusion. Exact source restoration was checked. Final affected eligibility,
+cancellation, presentation and all 11 menu cases plus the five doctests/lint/build
+passed again after the wording update. All temporary fixtures were cleaned.
+Commands/results: `.scratch/acceptance/rust-native-enable/{checks,mutations,final-affected}.json`.
+
+An initial broad native-name filter was interrupted at startup before any case
+results when review found unrelated serving cases in the match; its temporary
+root remained empty. Final validation used the inspected exact targets above.
+No denied listener/ps/private-scratch or CI-closeout action was retried. The
+approved source edit was admitted; the previous approval blocker is resolved.
+No deployment or complete genuine current Rust native-admission positive is
+claimed. The remaining checks require actual current Linux/musl artifacts and a
+genuine signed candidate set, followed by separately authorized packaged effects.

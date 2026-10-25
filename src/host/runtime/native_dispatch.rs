@@ -10,7 +10,8 @@ use crate::{
 use std::time::Instant;
 pub struct NativePrivateRuntime;
 fn released_build() -> Result<&'static str, Error> {
-    // Retained identity must not activate unqualified native roles.
+    // Build prerequisites do not grant startup: exact pair, role, sandbox,
+    // cancellation and retained start-lock admission below remain mandatory.
     super::super::require_live_adapter().map_err(refused)?;
     crate::build_identity::compiled_commit().ok_or(Error::Refused)
 }

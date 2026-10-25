@@ -67,7 +67,8 @@ impl RestoredFinisher {
     }
     /// Replace this process with the exact restored finisher, preserving the
     /// interactive terminal. Never spawn a competing Owner while locks are held.
-    /// The public native adapter gate remains closed in this increment.
+    /// Native execution additionally requires the controlled build/platform and
+    /// rechecks the authenticated exact descriptor and committed removal authority.
     pub fn exec_native_unreleased(self) -> Result<std::convert::Infallible, HostError> {
         super::require_live_adapter()?;
         if self.host.fs.path() != Path::new("/") {

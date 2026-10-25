@@ -1,5 +1,5 @@
-//! Concrete installed native Owner sources. Public entry remains closed while
-//! native recovery, auxiliary cleanup and exact-candidate qualification are incomplete.
+//! Concrete native Owner sources behind authenticated installed/current admission.
+//! Local implementation and tests do not establish packaged live qualification.
 use super::{HostError, filesystem::ProtectedFs};
 use crate::{
     proxyinstallation::{

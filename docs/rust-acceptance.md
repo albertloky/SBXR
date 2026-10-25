@@ -6,6 +6,12 @@ older Rust handoff checklists that treated every historical Go feature as a new
 Rust release requirement. Local implementation/checks are distinct from native
 and exact-candidate deployment qualification.
 
+Current native source composition is described in
+[conditional native setup](#conditional-native-setup-base-594add9). The earlier
+closed-gate increment notes describe their named revisions, not an additional
+current blanket refusal. Conditional code availability does not authorize or
+establish a live installation or stable release.
+
 ## Scope reconciliation
 
 Current supported creation is clean install, Standard VLESS/REALITY, optional
@@ -38,18 +44,19 @@ issuance or a new upgrade writer to this clean-install release.
 
 | Path | Intended supported result | Explicit refusal / exclusion | Qualification still needed |
 |---|---|---|---|
-| Clean install / Standard | Verified installed pair; Review/default-No; cleanup before commitment, forward setup afterward | Remaining foreign installation, wrong platform/root/package/configuration, unqualified native effects | Ubuntu package/systemd/firewall and exact packaged installation |
+| Clean install / Standard | Verified installed pair; Review/default-No; cleanup before commitment, forward setup afterward | Remaining foreign installation, wrong platform/root/package/configuration, unauthenticated or stale native effects | Ubuntu package/systemd/firewall and exact packaged installation |
 | HTTP subscriptions | Enable, rotate, repair, ordinary restart and interrupted recovery; independent bearer and Client Identity | New HTTPS/ACME/renewal integration; stale/foreign authority and unsafe publication | Actual native HTTP/firewall/cgroup and outside/Karing behavior |
 | Client Identity / disclosure | Sequential VLESS+VMess rotation; source never restored after revocation; confirmed disclosure | Unknown keys/identity, stale review, unproved shutdown, foreign target | Native revocation, sessions and disclosure qualification |
 | Tunnel | Protected Owner token/binary, dedicated connector, ordered WS/TLS/authenticated VMess probe; pending distinct from verified | Shared connector adoption, account/DNS mutation, direct-traffic fallback | Actual Linux connector/cgroup/WS and VMess-only outside egress |
 | Removal / retained authority | Exact ownership, forward-only retry, current artifacts, active/retired HTTPS cleanup and exact finisher restoration | Foreign resources; new conversion writer; unsupported historical states must remain explicit | Native removal, actual restored-finisher exec and crash durability |
 | Lifecycle Status / Check | Protected local pair/lock/transaction inspection; authenticated qualified Latest; same-release current; newer clean-install refusal | No Update action; unverified release, concurrent change and incomplete pair | Current Linux observation and public acquisition qualification |
 | Lifecycle Recover | No-op when Ready; review/default-No and exact committed-removal finisher restoration, preserving proxy journal | Unknown/unproved direction, legacy Go update transaction (requires its original exact release), stale review or conflicting pair | Native exact-inode takeover; legacy transaction mutation is not offered by this Rust release |
-| Public entry / release | Zero arguments compose the existing Owner and lifecycle; private-role argument contract stays fixed | Unsupported/unqualified native entry never falls back to simulation | Native current-source verification of cancellation and retained ELF identity, actual builds for both musl architectures, execution of the integrated bootstrap/CI definitions and five exact-candidate live journeys |
+| Public entry / release | Zero arguments compose the existing Owner and lifecycle; private-role argument contract stays fixed | Unsupported host/build or unproved/stale pair never falls back to simulation | Native current-source verification of cancellation and retained ELF identity, actual builds for both musl architectures, execution of the integrated bootstrap/CI definitions and five exact-candidate live journeys |
 
 The implementation and validation status of this increment is recorded in the
-Rust handoff and `.scratch/acceptance/rust-entry/`. Production dispatch remains
-closed. No source fixture, simulated result or Mac build is a deployment pass.
+Rust handoff and its named run directories. Production dispatch requires the
+controlled native build and the applicable authenticated/local startup proof.
+No source fixture, simulated result or Mac build is a deployment pass.
 
 ## Increment evidence
 
@@ -320,9 +327,9 @@ a copied Installed Record cannot replace it. The snapshot still cannot issue
 cryptographic delivery authority. Structural test fixtures never construct a
 positive authenticated current Rust admission.
 
-This bounded hardening does **not** enable native setup. The global
-`require_live_adapter` refusal, private startup gate and native
-`LinuxHost::effects_available == false` remain unchanged. Required follow-up is
+That bounded hardening alone did **not** enable native setup. At `594add9`, the
+global `require_live_adapter` refusal, private startup gate and native
+`LinuxHost::effects_available == false` were unchanged. Its required follow-up was
 conditional public/private composition and native effect availability behind the
 real existing admission, plus honest native Standard presentation. Unsupported
 platform/build, unsigned/stale admission, read-only/injected-root restrictions,
@@ -335,3 +342,47 @@ The parent reports that exact baseline `f824c1fac8e61708947984122895da4400ddd012
 passed 596 distinct isolated Linux cases (333 library, 259 integration, four
 compile-fail doctests), zero failed/ignored/uncovered. That is baseline evidence,
 not coverage of this later hardening or native root execution.
+
+
+## Conditional native setup (base 594add9)
+
+The Owner explicitly approved source changes allowing setup after signed-release
+and ownership checks, with no installation or host/release effects authorized.
+The former unconditional refusal is now a native platform/controlled-build
+prerequisite, not delivery trust. Public zero-argument entry still authenticates
+the exact candidate or qualified stable release and binds the installed/current
+inode, bytes and loaded Rust statement before constructing `NativeOwnerSources`.
+Stable remains the default; protected candidate input and its expiry/role checks
+are unchanged. No new switch, untrusted verifier, trust root or dependency exists.
+
+Native Standard effects additionally require a native runner and the retained
+concrete `NativeAdmission` snapshot, with exact root/record/process identity and
+cancellation. An unauthenticated native constructor has no retained guard and
+cannot gain effects. Admission is rechecked after host-lock acquisition, before
+native writes are authorized; setup effects continue to recheck proof, journal,
+configuration/package material and ownership. Existing before-commit cleanup,
+after-commit forward completion, removal finalization and intentionally lent-lock
+semantics remain intact. Native Review/result wording describes real host actions
+and local checks, while leaving outside traffic `CannotBeVerified`.
+
+Ordinary private startup remains offline: the controlled build prerequisite does
+not replace exact pair/current-process, role, sandbox, start-lock and handoff
+checks. Renewal/private legacy roles, new Update/HTTPS/migration, read-only
+mutation adapters, missing material, unsafe parents/inodes and foreign/unknown
+resources retain their refusals. Candidate delivery never becomes qualified stable
+authority. Successful compilation is not cryptographic or deployment evidence.
+
+Eligibility positives use explicit unsigned structural snapshots and a fake
+runner solely to test the predicate; they never construct `NativeAdmission` or
+execute native changes. Presentation tests forbid effect calls. Genuine preserved
+public signature tests and the actual candidate/stable authentication refusals
+remain independent. A genuine current Rust signed manifest/artifact set is still
+required to test the complete native admission positive path; none was fabricated.
+
+Remaining verification is finite: current-source Linux and both native musl
+build/package checks; genuine exact candidate/installed-process positive admission;
+then separately approved packaged root setup/recovery/startup, outside HTTP and
+proxy traffic, client/Karing identity/link rotation, restart and complete cleanup.
+The 596-case `f824c1f` result is baseline only. Source push, CI dispatch, signing,
+VPS/security/trust/credential changes and publication remain separately approved
+actions. Stable publication still requires its explicit post-qualification gate.

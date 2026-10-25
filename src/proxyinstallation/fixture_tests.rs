@@ -456,3 +456,75 @@ fn broader_record_decoding_never_expands_the_standard_fixture_adapters_authority
         );
     }
 }
+
+// Native wording only over the explicit filesystem fixture. Applying an effect
+// through this presentation host is forbidden; it never claims native admission.
+struct NativePresentation(FixtureHost);
+impl crate::host::SetupHost for NativePresentation {
+    fn root(&self) -> &std::path::Path {
+        self.0.root()
+    }
+    fn uid(&self) -> u32 {
+        self.0.uid()
+    }
+    fn public_ipv4(&self) -> &str {
+        "8.8.8.8"
+    }
+    fn configuration_sha256(&self) -> String {
+        crate::records::sha256_hex(crate::host::FIXTURE_CONFIGURATION)
+    }
+    fn effects_available(&self) -> bool {
+        true
+    }
+    fn is_native_system(&self) -> bool {
+        true
+    }
+    fn inspect_setup(&self, release: &ReleaseIdentity) -> Result<SetupObservation, HostError> {
+        crate::host::SetupHost::inspect_setup(&self.0, release)
+    }
+    fn apply_setup(&mut self, _: Operation, _: &OwnershipRecord) -> Result<(), HostError> {
+        panic!("presentation test must never apply native effects")
+    }
+}
+#[test]
+fn native_standard_review_and_results_never_use_fixture_or_qualification_claims() {
+    for (action, phase) in [
+        (Action::StartSetup, None),
+        (Action::FinishCleanup, Some(SetupPhase::AptSourceInstalled)),
+        (Action::FinishSetup, Some(SetupPhase::ActivationCommitted)),
+    ] {
+        let root = Fixture::new();
+        let mut fixture = root.create();
+        if let Some(phase) = phase {
+            fixture
+                .host_mut()
+                .set_fault(Some(FixtureFault::InterruptAfter(phase)));
+            perform(&mut fixture, Action::StartSetup);
+        }
+        let journey =
+            StandardInstallation::new(NativePresentation(fixture.into_host()), release()).unwrap();
+        let review = journey.review(action);
+        assert!(review.prepared.is_some());
+        let plan = review.plan.join(" ");
+        assert!(!plan.is_empty() && !plan.contains("FIXTURE") && !plan.contains("INJECTED"));
+        assert!(
+            review
+                .details
+                .join(" ")
+                .contains("Native Ubuntu setup phase")
+        );
+        for outcome in [
+            Outcome::Cancelled,
+            Outcome::Refused,
+            Outcome::SetupComplete,
+            Outcome::NeedsCleanup,
+            Outcome::NeedsCompletion,
+            Outcome::CleanedUp,
+        ] {
+            let result = journey.result(outcome, "Fixture marker must not escape");
+            assert!(!result.message.contains("Fixture"));
+            assert!(result.message.contains("Native"));
+            assert_eq!(result.proxy_traffic, Availability::CannotBeVerified);
+        }
+    }
+}

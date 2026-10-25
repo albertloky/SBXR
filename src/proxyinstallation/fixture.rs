@@ -127,20 +127,38 @@ impl<H: SetupHost> StandardInstallation<H> {
             Action::FinishSetup=>vec!["FIXTURE ONLY: finish the committed activation forward using fresh exact resource checks.".into()],
             _=>vec![],
         };
-        if self.host.is_injected_system() && !plan.is_empty() {
+        if self.host.is_native_system() && !plan.is_empty() {
+            plan = match action {
+                Action::StartSetup => vec![
+                    "Install the authenticated pinned sing-box package and private Standard VLESS/REALITY configuration on this Ubuntu host.".into(),
+                    "Create the owned package hold, state and services, then start the TCP 443 proxy after exact resource checks.".into(),
+                    "Before Activation committed, recover with Finish cleanup. After commitment, only Finish setup is legal.".into(),
+                ],
+                Action::FinishCleanup => vec!["Finish cleanup of only exact recorded proxy resources; preserve foreign files and retain the installed SBXR pair.".into()],
+                Action::FinishSetup => vec!["Finish the committed native setup forward using fresh exact resource checks; do not reverse activation.".into()],
+                _ => vec![],
+            };
+        } else if self.host.is_injected_system() && !plan.is_empty() {
             plan=vec!["INJECTED LINUX HOST: only the supplied runner and protected test-root files may change. Native deployment remains unavailable.".into(),"Keep cleanup before activation commitment and forward completion afterward; these checks do not qualify Ubuntu, traffic or Karing.".into()];
         }
         Review {
             mode: self.mode(),
-            details: vec![format!(
-                "{} durable phase: {:?}. Injected or synthetic host facts prove no real runtime or release qualification.",
-                if self.host.is_injected_system() {
-                    "Injected Linux host"
-                } else {
-                    "Fixture"
-                },
-                state.snapshot.current.as_ref().map(|r| r.record.phase())
-            )],
+            details: vec![if self.host.is_native_system() {
+                format!(
+                    "Native Ubuntu setup phase: {:?}. Outside proxy traffic requires an independent check.",
+                    state.snapshot.current.as_ref().map(|r| r.record.phase())
+                )
+            } else {
+                format!(
+                    "{} durable phase: {:?}. Injected or synthetic host facts prove no real runtime or release qualification.",
+                    if self.host.is_injected_system() {
+                        "Injected Linux host"
+                    } else {
+                        "Fixture"
+                    },
+                    state.snapshot.current.as_ref().map(|r| r.record.phase())
+                )
+            }],
             status: state.status,
             legal_actions,
             plan,
@@ -414,7 +432,27 @@ impl<H: SetupHost> StandardInstallation<H> {
         }
     }
     fn result(&self, outcome: Outcome, message: &'static str) -> ActionResult {
-        let message = if self.host.is_injected_system() {
+        let message = if self.host.is_native_system() {
+            match outcome {
+                Outcome::Cancelled => "Native setup action cancelled; no changes made.",
+                Outcome::Refused => {
+                    "Native setup authority is incomplete, unsafe or stale. Preserve it and review again before effects."
+                }
+                Outcome::SetupComplete => {
+                    "Native Standard setup completed with local owned-resource checks. Outside proxy traffic requires an independent check."
+                }
+                Outcome::NeedsCleanup => {
+                    "Native setup requires Finish cleanup; activation has not been committed."
+                }
+                Outcome::NeedsCompletion => {
+                    "Native activation is committed. Only Finish setup is legal."
+                }
+                Outcome::CleanedUp => {
+                    "Native setup cleanup completed; exact recorded proxy resources are absent and foreign files are preserved."
+                }
+                _ => message,
+            }
+        } else if self.host.is_injected_system() {
             match outcome {
                 Outcome::RemovalComplete
                 | Outcome::RemovalNeedsCompletion

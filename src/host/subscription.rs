@@ -1,5 +1,5 @@
 //! Current HTTP protected effects. Only an explicit injected root is admitted;
-//! native Owner dispatch remains closed pending full host qualification.
+//! native Owner dispatch requires authenticated process admission and exact authority.
 mod effects;
 pub(in crate::host) mod material;
 use super::{

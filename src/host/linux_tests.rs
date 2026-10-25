@@ -121,6 +121,7 @@ struct Fake {
     configuration_owner: bool,
     install_default: bool,
     effects: Vec<Operation>,
+    native_capable: bool,
 }
 impl Fake {
     fn new(root: &Path) -> Self {
@@ -139,10 +140,14 @@ impl Fake {
             configuration_owner: true,
             install_default: false,
             effects: vec![],
+            native_capable: false,
         }
     }
 }
 impl CommandRunner for Fake {
+    fn native_effects(&self) -> bool {
+        self.native_capable
+    }
     fn bind_configuration(&mut self, hash: &str) -> Result<(), HostError> {
         if hash.len() == 64 {
             Ok(())
@@ -2203,13 +2208,14 @@ fn owner_cancellation_preserves_durable_setup_direction_and_releases_locks() {
 }
 
 #[test]
-fn native_retained_guard_requires_same_root_pair_and_fresh_snapshot_without_enabling_effects() {
+fn native_eligibility_requires_runner_and_fresh_retained_guard() {
     let root = Root::new();
     let mut host = root.host();
     assert_eq!(host.native_authorized(), Err(HostError::Foreign));
     let source = crate::host::admission::tests::Fixture::new();
-    // Structural guard fixture only: no NativeAdmission, cryptographic proof or
-    // native effect capability is manufactured by this test.
+    // Eligibility predicate only: private fields carry an unsigned structural
+    // guard and fake runner. No NativeAdmission or genuine signed positive proof
+    // is constructed and no native begin_change/effect is ever invoked.
     let guard = Arc::new(source.capture().unwrap());
     host.authenticated = Some(guard.record().clone());
     host.native_guard = Some(guard);
@@ -2224,9 +2230,18 @@ fn native_retained_guard_requires_same_root_pair_and_fresh_snapshot_without_enab
     assert_eq!(host.native_authorized(), Err(HostError::Foreign));
     host.authenticated = record;
     host.native_mode = true;
-    assert!(!host.effects_available(), "production gate remains closed");
+    assert!(!host.effects_available(), "injected runner is not native");
+    host.runner.native_capable = true;
+    assert!(host.effects_available(), "all eligibility conditions hold");
+    let guard = host.native_guard.take();
+    assert!(!host.effects_available(), "record alone is not admission");
+    host.native_guard = guard;
     source.write("usr/local/bin/sbxr", b"foreign", 0o755);
     assert!(host.native_authorized().is_err());
+    assert!(
+        !host.effects_available(),
+        "stale admission cannot enable effects"
+    );
     assert!(host.runner.effects.is_empty());
 }
 
@@ -2254,4 +2269,17 @@ fn native_retained_guard_keeps_cancellation_and_record_namespace_checks() {
     host.stop.cancel();
     assert_eq!(host.native_authorized(), Err(HostError::Cancelled));
     assert!(host.runner.effects.is_empty());
+}
+
+#[test]
+fn cancelled_native_begin_refuses_before_lock_or_command_even_without_proof() {
+    let root = Root::new();
+    let mut host = root.host();
+    host.native_mode = true;
+    host.runner.native_capable = true;
+    host.stop.cancel();
+    assert_eq!(host.begin_change(), Err(HostError::Cancelled));
+    assert!(host.lock.is_none());
+    assert!(host.runner.effects.is_empty());
+    assert!(!host.effects_available());
 }

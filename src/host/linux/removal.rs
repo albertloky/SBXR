@@ -1,5 +1,5 @@
 //! Concrete removal with exact current and retained HTTPS/renewal ownership.
-//! All native execution remains behind the closed production entry.
+//! Native execution requires authenticated process admission and exact removal authority.
 mod auxiliary;
 mod client_subscription;
 mod historical;

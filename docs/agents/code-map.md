@@ -15,7 +15,7 @@ setup/recovery is `src/proxyinstallation/fixture.rs` (`StandardInstallation<H>`)
 injected-root effects are in `src/host/linux.rs` and its small submodules; bounded
 process transport is `src/host/process.rs`. Retained locks, direct TLS/bind
 admission and fixed native command effects are `src/host/{locks,network,system}.rs`;
-the public frontend uses closed native admission, with no simulator fallback. `build.rs` retains the canonical structural `.sbxr.rust` statement through a
+the public frontend requires the controlled native build and authenticated process admission, with no simulator fallback. `build.rs` retains the canonical structural `.sbxr.rust` statement through a
 linker script for explicitly selected pinned Linux musl release builds;
 `src/build_identity.rs` checks the loaded statement independently of authentication.
 Identity generation, structural
@@ -36,7 +36,7 @@ and loaded Rust statement, and guards selected Owner journeys. The sealed
 `InstalledEvidence` interface retains candidate/stable roles throughout concrete
 runtime effects and handoff. `host::admission_private` owns the separate offline
 private exact-pair/role/start-lock proof; it never performs release acquisition.
-Public/private activation remains closed. The private-root, fixed-route
+Public entry requires genuine delivery/current-process admission; private startup keeps its exact offline pair/role/lock checks. The private-root, fixed-route
 `release_https::CandidateGatewayTransport` composes the retained qualification
 gateway without changing public/system TLS trust or artifact authentication.
 Archive decoding is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
@@ -68,7 +68,7 @@ The injected constructors reject `/`; typed native constructors now use
 The composed Interface is `src/proxyinstallation/owner.rs`; native authenticated
 sources are `src/host/owner.rs`. Only one selected journey retains its writer and
 prepared authority. `src/host/owner.rs` composes zero-argument native Owner/lifecycle dispatch behind
-the existing closed qualification gate. `src/host/entry_input.rs` reads only the
+the controlled native build and genuine delivery/current-process admission. `src/host/entry_input.rs` reads only the
 retained fixed protected qualification handoff; full absence selects stable and
 partial/stale input refuses. It binds real staged/delivered candidate proofs and
 retains input freshness through the process guard; no environment/CLI switch is
@@ -76,7 +76,7 @@ supported. `src/software_lifecycle.rs` and
 `src/host/lifecycle.rs` own Status/Check, clean-install Update refusal and reviewed
 exact-finisher recovery; `src/host/filesystem/lifecycle.rs` is its read-only lock
 probe. `terminal::run_with_lifecycle` supplies the two-module menu. Native public
-Owner effects remain closed. Fixed cgroup
+Owner effects require the concrete retained admission and exact ownership. Fixed cgroup
 virtual reads use `src/host/filesystem/runtime.rs` without changing ordinary
 record/file validation. `src/disclosure.rs` and `src/tunnel_setup.rs` hold the
 completed orchestration modules. Disclosure now uses the protected Host in
@@ -92,7 +92,7 @@ The fixed initial setup start in `ServiceController` is separate from ordinary
 private startup. The exact pinned public conffile is recognized only at
 pre-configuration setup checkpoints by `src/host/linux/package_default.rs`; its protected atomic private
 replacement is `src/host/filesystem/package_default.rs`. Native gates remain
-closed pending Linux and packaged installation qualification.
+conditional on genuine admission; Linux and packaged installation qualification remain separate.
 Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
 model in `src/removal.rs` and shared Interface bridge in
 `src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using

@@ -1,6 +1,6 @@
 //! Read-only native admission: cryptographic delivery role plus a retained,
 //! freshly checked protected installed/current process and loaded Rust statement.
-//! This proof alone does not open the independently closed activation gate.
+//! Native effects also require platform/build admission, retained ownership and locks.
 use super::{
     HostError,
     filesystem::{Evidence, ProtectedFs},

@@ -1,6 +1,6 @@
 //! Proxy Installation owns review, confirmation, setup direction, and recovery.
 //! Explicit simulation and filesystem-fixture adapters share Review/Execute.
-//! Public native setup remains unavailable. Native library adapters and private
+//! Public native setup requires authenticated process admission. Native adapters and private
 //! dispatch require their explicit installed/release prerequisites.
 mod tunnel;
 pub use tunnel::TunnelOwnerInstallation;
@@ -63,8 +63,8 @@ pub enum ExecutionMode {
 }
 
 impl ExecutionMode {
-    /// Reuse the existing closed native qualification boundary. This mode is
-    /// presentation only; every concrete host retains its own effect guards.
+    /// Native build/platform presentation only; this is not delivery trust or
+    /// effect authority. Concrete hosts retain their independent proof guards.
     pub(crate) fn native_unreleased() -> Self {
         if crate::host::require_live_adapter().is_ok() {
             Self::Native
