@@ -134,6 +134,9 @@ impl<I: OwnerIo> d::Host for ProtectedDisclosureHost<'_, I> {
                 regular: true,
                 uid: self.fs.uid,
                 gid: proof.gid,
+                #[cfg(target_os = "linux")]
+                mode,
+                #[cfg(not(target_os = "linux"))]
                 mode: u32::from(mode),
                 links: 1,
                 protected_ancestry: true,
