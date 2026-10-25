@@ -307,3 +307,31 @@ No push/upload, CI dispatch, tag/release mutation, signing/attestation/burn,
 VPS access, system trust/security/credential change or publication is performed
 or authorized by this local increment. Stop source expansion at the frozen entry
 increment; prepare the concrete approved candidate boundary before live work.
+
+
+## Retained native setup guard (base f824c1f)
+
+Native Standard and offline cleanup/removal factory arguments now require the
+concrete `NativeAdmission`, rather than authenticated archive bytes alone. They
+retain the existing process snapshot, including exact root, installed/current
+file descriptors, raw record/inodes, loaded Rust identity, candidate handoff
+freshness and cancellation. Native setup inspection rechecks that retained guard;
+a copied Installed Record cannot replace it. The snapshot still cannot issue
+cryptographic delivery authority. Structural test fixtures never construct a
+positive authenticated current Rust admission.
+
+This bounded hardening does **not** enable native setup. The global
+`require_live_adapter` refusal, private startup gate and native
+`LinuxHost::effects_available == false` remain unchanged. Required follow-up is
+conditional public/private composition and native effect availability behind the
+real existing admission, plus honest native Standard presentation. Unsupported
+platform/build, unsigned/stale admission, read-only/injected-root restrictions,
+foreign resources and excluded legacy Update/HTTPS/renewal routes must still
+refuse. Do not dispatch a candidate from this incomplete source merely to advance
+the workflow. The absence of a complete signed current Rust positive set limits
+runtime verification; it does not justify a test signature bypass.
+
+The parent reports that exact baseline `f824c1fac8e61708947984122895da4400ddd012`
+passed 596 distinct isolated Linux cases (333 library, 259 integration, four
+compile-fail doctests), zero failed/ignored/uncovered. That is baseline evidence,
+not coverage of this later hardening or native root execution.

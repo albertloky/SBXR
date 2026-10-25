@@ -2214,3 +2214,36 @@ remote/blocked closeout or live system operation ran. The first attempted combin
 integration command named a nonexistent test target and ran no integration tests;
 the corrected explicit target set above passed. No tool action was denied in this
 increment. Source work stops at this frozen protected-entry composition.
+
+
+### Native setup proof retention (base f824c1f)
+
+The native Standard factories now accept only concrete `NativeAdmission` and keep
+its existing snapshot through shared close-on-exec descriptors. Read-side setup
+admission rechecks the exact root, record, current process/files, candidate input
+and cancellation rather than retaining only a copied Installed Record. The added
+compile-fail contract refuses archive-only byte proofs. Tests use structural
+snapshots without creating authentic candidate/native authority.
+
+Native enablement remains incomplete: global/private and native setup-effects
+refusals are byte-unchanged. The planned conditional enablement edit was rejected
+before execution by automatic approval review; its single reviewed retry after
+the new Linux baseline result was also rejected before execution. No alternate
+activation route was added. Resolve that action authorization before modifying
+those gates. No artifact absence prevents writing the conditional code, but a
+genuine current Rust signed artifact/manifest set is still required to verify its
+complete authenticated positive path. The [current matrix](rust-acceptance.md#retained-native-setup-guard-base-f824c1f)
+keeps this distinction and the unfinished source path explicit.
+
+The admitted hardening passed 24 selected product cases, five compile-fail
+doctests, four negative mutations, format, strict all-target Clippy, compile-only
+all-target checking and the Mac build. Cases cover the retained guard, existing
+public/private admission, protected entry, injected Standard setup, cancellation,
+precommit cleanup/postcommit forward recovery, foreign files and the genuine
+preserved public proof set. Mutations bypassing root, record, freshness and
+cancellation checks were caught; source bytes were restored. The complete genuine
+current Rust native admission positive path is not claimed. Logs and commands:
+`.scratch/acceptance/rust-native-guard/{checks,mutations,unchanged-gates}.json`.
+All temporary fixtures were cleaned. No live effect, VPS access, listener/ps,
+blocked CI closeout, upload/push, signing, trust/credential change or publication
+ran. The 596-case Linux result belongs only to f824c1f and was not rerun here.

@@ -112,6 +112,7 @@ pub struct LinuxHost<R> {
     lock: Option<Arc<super::locks::HostLock>>,
     native_mode: bool,
     authenticated: Option<InstalledRecord>,
+    native_guard: Option<Arc<super::admission::Snapshot>>,
 }
 impl<R: CommandRunner> LinuxHost<R> {
     pub fn injected(
@@ -134,6 +135,7 @@ impl<R: CommandRunner> LinuxHost<R> {
             lock: None,
             native_mode: false,
             authenticated: None,
+            native_guard: None,
         })
     }
     /// Authenticated installed bytes must also match this newly observed root.
@@ -152,20 +154,27 @@ impl<R: CommandRunner> LinuxHost<R> {
         host.authenticated = Some(authenticated.record().clone());
         Ok(host)
     }
+    /// Native construction requires the bound process proof, not authenticated
+    /// archive bytes or a locally decoded Installed Record. Effects stay closed.
+    /// ```compile_fail
+    /// use sbxr::host::{linux::{LinuxHost, SetupMaterial}, network::NetworkAdmission, process::CommandRunner};
+    /// fn bypass<R: CommandRunner>(runner: R, material: SetupMaterial, network: NetworkAdmission, proof: &sbxr::release_acquisition::AuthenticatedInstalled) {
+    ///     LinuxHost::native_authenticated_unreleased(runner, material, network, proof);
+    /// }
+    /// ```
     pub fn native_authenticated_unreleased(
         runner: R,
         material: SetupMaterial,
         network: super::network::NetworkAdmission,
-        authenticated: &dyn crate::release_acquisition::InstalledEvidence,
+        authenticated: &super::admission::NativeAdmission,
     ) -> Result<Self, HostError> {
-        authenticated
-            .verify_binding()
-            .map_err(|_| HostError::Foreign)?;
+        authenticated.verify()?;
         let mut host = Self::native_unreleased(runner, material, network)?;
         if observation::read_installed(&host.fs)?.as_ref() != Some(authenticated.record()) {
             return Err(HostError::Foreign);
         }
         host.authenticated = Some(authenticated.record().clone());
+        host.native_guard = Some(authenticated.retain_snapshot());
         Ok(host)
     }
     /// Offline recovery/removal construction consumes no network observation or
@@ -174,12 +183,10 @@ impl<R: CommandRunner> LinuxHost<R> {
         runner: R,
         material: SetupMaterial,
         public_ipv4: &str,
-        authenticated: &dyn crate::release_acquisition::InstalledEvidence,
+        authenticated: &super::admission::NativeAdmission,
     ) -> Result<Self, HostError> {
         require_native_environment()?;
-        authenticated
-            .verify_binding()
-            .map_err(|_| HostError::Foreign)?;
+        authenticated.verify()?;
         let fs = ProtectedFs::native()?;
         if !runner.native_effects()
             || !material.offline
@@ -205,6 +212,7 @@ impl<R: CommandRunner> LinuxHost<R> {
             lock: None,
             native_mode: true,
             authenticated: Some(authenticated.record().clone()),
+            native_guard: Some(authenticated.retain_snapshot()),
         })
     }
     pub fn native_unreleased(
@@ -246,6 +254,7 @@ impl<R: CommandRunner> LinuxHost<R> {
             lock: None,
             native_mode: true,
             authenticated: None,
+            native_guard: None,
         })
     }
     pub fn runner(&self) -> &R {
@@ -271,7 +280,20 @@ impl<R: CommandRunner> LinuxHost<R> {
             Facts::query(&self.runner, &self.stop)
         }
     }
+    fn native_authorized(&self) -> Result<(), HostError> {
+        if self.stop.cancelled() {
+            return Err(HostError::Cancelled);
+        }
+        let guard = self.native_guard.as_ref().ok_or(HostError::Foreign)?;
+        if guard.root() != self.fs.path() || self.authenticated.as_ref() != Some(guard.record()) {
+            return Err(HostError::Foreign);
+        }
+        guard.verify()
+    }
     fn admission(&self, facts: &Facts) -> Result<(), HostError> {
+        if self.native_mode {
+            self.native_authorized()?;
+        }
         if !super::lifecycle::transactions_absent(&self.fs)? {
             return Err(HostError::Foreign);
         }

@@ -92,6 +92,12 @@ fn read(file: &File, stop: &Cancellation) -> Result<Vec<u8>, HostError> {
     Ok(bytes)
 }
 impl Snapshot {
+    pub(in crate::host) fn record(&self) -> &InstalledRecord {
+        &self.record
+    }
+    pub(in crate::host) fn root(&self) -> &Path {
+        self.fs.path()
+    }
     fn capture(
         fs: ProtectedFs,
         current: File,
@@ -213,7 +219,7 @@ fn require_delivery(
 /// fn admit(p: sbxr::release_acquisition::AuthenticatedInstalled) -> sbxr::host::admission::NativeAdmission { p }
 /// ```
 pub struct NativeAdmission {
-    snapshot: Snapshot,
+    snapshot: std::sync::Arc<Snapshot>,
     proof: Box<dyn InstalledEvidence>,
 }
 impl std::fmt::Debug for NativeAdmission {
@@ -324,7 +330,10 @@ impl NativeAdmission {
         if proof.record() != &snapshot.record {
             return Err(HostError::Foreign);
         }
-        let value = Self { snapshot, proof };
+        let value = Self {
+            snapshot: std::sync::Arc::new(snapshot),
+            proof,
+        };
         value.verify()?;
         budget.check().map_err(acquisition_error)?;
         Ok(value)
@@ -338,6 +347,9 @@ impl NativeAdmission {
     }
     pub(in crate::host) fn snapshot_guard(&self) -> &Snapshot {
         &self.snapshot
+    }
+    pub(in crate::host) fn retain_snapshot(&self) -> std::sync::Arc<Snapshot> {
+        std::sync::Arc::clone(&self.snapshot)
     }
     pub fn record(&self) -> &InstalledRecord {
         self.proof.record()

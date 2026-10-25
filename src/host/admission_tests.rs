@@ -130,7 +130,7 @@ impl Fixture {
         std::fs::write(&p, b).unwrap();
         std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
     }
-    fn capture(&self) -> Result<Snapshot, HostError> {
+    pub(in crate::host) fn capture(&self) -> Result<Snapshot, HostError> {
         Snapshot::capture(
             ProtectedFs::open(&self.0)?,
             File::open(self.0.join(EXECUTABLE)).map_err(refused)?,

@@ -2201,3 +2201,57 @@ fn owner_cancellation_preserves_durable_setup_direction_and_releases_locks() {
         );
     }
 }
+
+#[test]
+fn native_retained_guard_requires_same_root_pair_and_fresh_snapshot_without_enabling_effects() {
+    let root = Root::new();
+    let mut host = root.host();
+    assert_eq!(host.native_authorized(), Err(HostError::Foreign));
+    let source = crate::host::admission::tests::Fixture::new();
+    // Structural guard fixture only: no NativeAdmission, cryptographic proof or
+    // native effect capability is manufactured by this test.
+    let guard = Arc::new(source.capture().unwrap());
+    host.authenticated = Some(guard.record().clone());
+    host.native_guard = Some(guard);
+    assert_eq!(
+        host.native_authorized(),
+        Err(HostError::Foreign),
+        "foreign root"
+    );
+    host.fs = ProtectedFs::open(&source.0).unwrap();
+    host.native_authorized().unwrap();
+    let record = host.authenticated.take();
+    assert_eq!(host.native_authorized(), Err(HostError::Foreign));
+    host.authenticated = record;
+    host.native_mode = true;
+    assert!(!host.effects_available(), "production gate remains closed");
+    source.write("usr/local/bin/sbxr", b"foreign", 0o755);
+    assert!(host.native_authorized().is_err());
+    assert!(host.runner.effects.is_empty());
+}
+
+#[test]
+fn native_retained_guard_keeps_cancellation_and_record_namespace_checks() {
+    let root = Root::new();
+    let mut host = root.host();
+    let source = crate::host::admission::tests::Fixture::new();
+    let guard = Arc::new(source.capture().unwrap());
+    host.authenticated = Some(guard.record().clone());
+    host.native_guard = Some(guard);
+    host.fs = ProtectedFs::open(&source.0).unwrap();
+    host.native_authorized().unwrap();
+    let original = fs::read(source.0.join("var/lib/sbxr/installed.json")).unwrap();
+    source.write("replacement", &original, 0o600);
+    fs::rename(
+        source.0.join("replacement"),
+        source.0.join("var/lib/sbxr/installed.json"),
+    )
+    .unwrap();
+    assert!(
+        host.native_authorized().is_err(),
+        "same bytes in another inode are stale"
+    );
+    host.stop.cancel();
+    assert_eq!(host.native_authorized(), Err(HostError::Cancelled));
+    assert!(host.runner.effects.is_empty());
+}
