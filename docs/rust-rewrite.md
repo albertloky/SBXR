@@ -1965,3 +1965,56 @@ suite alone cannot open the gates. Native APT/systemd/firewall effects, outside
 traffic, exact recovery and the five current HTTP journeys still require the
 proper exact-candidate qualification. Legacy HTTPS creation, incoming Update and
 automatic migration remain intentionally excluded.
+
+
+## Candidate delivery and failed setup Review (base 01f1bd4)
+
+`release_acquisition::AuthenticatedCandidateArchive::acquire` now consumes the
+retained gateway's fixed Latest metadata, authenticates its exact raw manifest
+through the real pinned Sigstore candidate verifier, and validates current
+approval/decision, workflow/release/native-evidence and full four-asset bindings.
+Only the clean-install-only HTTP attempt with empty incoming sources is admitted.
+The downloaded index must match the signed raw index and its sequence/support;
+the existing bounded digest/archive/ELF/trailer checks still bind executable and
+Installed Record bytes. New candidate construction requires Rust. `bind_current`
+returns `AuthenticatedCandidateInstalled`, a distinct type that cannot be passed
+as stable `AuthenticatedInstalled` authority. No signature fixture constructor,
+TLS override, public/private gate change or new dependency was introduced.
+
+Standard failed Review now emits `PROXY-INSTALLATION-ACTION-REFUSED` and the
+retained Retry/Back/Cancel prompt. Retry re-reviews, Back returns to connection
+selection, and Cancel/EOF emits the existing cancellation code without effects.
+Repeated failure, stale held authority, invalid yes/blank input, input/read
+interruption and actual finite driver parsing are covered. The three new menu
+regressions failed before the repair and passed afterward; before/after evidence
+is in `.scratch/acceptance/rust-candidate/`. Driver tests bypass its process-owning
+constructor and never invoke process cleanup, ps, listeners or real host effects.
+
+Final local validation passed **77 selected product tests**: 15 acquisition,
+9 terminal, 10 menu, 15 independent parity, 26 artifact-trust and 2 genuine public
+proof tests. Both compile-fail doctests, format, strict all-target Clippy and the
+Mac build passed. Seven targeted mutations were caught: exact raw-manifest
+signature binding, approval, workflow ref, asset metadata binding, current support,
+fresh Retry and Cancel code. Sources were restored byte-for-byte. The asset
+mutation first survived the narrower release-field test filter; the existing
+metadata regression caught it when selected. That first result remains preserved.
+Final commands/results and mutation logs are under
+`.scratch/acceptance/rust-candidate/`; its temporary directory is empty.
+
+The genuine candidate bundle's exact matching raw manifest is absent. Semantic
+positive fixtures are explicitly untrusted and never construct authenticated
+candidate authority. The genuine bundle verifies independently and refuses their
+different raw bytes before any asset request. A complete positive authenticated
+candidate/archive path remains unverified until the matching signed manifest and
+artifacts are available. No signing, public retrieval, new fixture credentials or
+qualification result was manufactured. Current source has not been tested on
+Linux/musl here; prior parent-reported checks bind their named older source.
+
+The [acceptance matrix](rust-acceptance.md#signed-candidate-semantics-and-failed-setup-review-base-01f1bd4)
+records the remaining two source blockers: protected candidate gateway TLS
+composition, and evidence-bound public/private activation using explicitly scoped
+candidate/stable proofs and native prerequisites. Both gates remain closed.
+Legacy HTTPS creation, incoming Update and automatic migration remain excluded.
+No full listener-dependent suite, denied listener/ps/private-scratch operation,
+blocked CI closeout, source transfer, push, VPS/root effect, signing or publication
+was attempted in this increment.

@@ -1,6 +1,7 @@
 //! Exact-tag native release acquisition, authentication and installed-byte binding.
 //! No network transport, extraction, update/migration or production authorization.
 mod acceptance;
+mod candidate;
 use crate::{
     artifact_trust::{
         self as trust, AcquisitionRequest, AcquisitionTransport, ExpectedRelease, SelectionBudget,
@@ -12,6 +13,7 @@ use crate::{
         RELEASE_ASSET_NAMES, REPOSITORY, ReleaseIdentity, ReleaseIndex, SupportScope,
     },
 };
+pub use candidate::{AuthenticatedCandidateArchive, AuthenticatedCandidateInstalled};
 use serde::Deserialize;
 use std::{collections::BTreeMap, fmt};
 type Result<T> = std::result::Result<T, TrustError>;
@@ -59,10 +61,23 @@ impl Metadata {
     fn decode_exact(bytes: &[u8], selected: &ReleaseIdentity) -> Result<Self> {
         let value = trust::json_object(bytes, MAX_INDEX_BYTES)?;
         let wire: WireRelease = serde_json::from_value(value).map_err(|_| TrustError::Refused)?;
+        if wire.sbxr_qualification.is_some() {
+            return Err(TrustError::Refused);
+        }
+        let assets = Self::assets(&wire, selected)?;
+        let identity = selected.clone();
+        let proofs: Vec<_> = assets.values().map(|a| a.proof.clone()).collect();
+        let sequence = acceptance::check(&wire.body, &identity, &proofs)?;
+        Ok(Self {
+            identity,
+            sequence,
+            assets,
+        })
+    }
+    fn assets(wire: &WireRelease, selected: &ReleaseIdentity) -> Result<BTreeMap<String, Asset>> {
         if wire.draft
             || wire.prerelease
             || !wire.immutable
-            || wire.sbxr_qualification.is_some()
             || wire.tag_name != selected.tag()
             || wire.target_commitish != selected.commit()
             || wire.assets.len() != 4
@@ -70,7 +85,7 @@ impl Metadata {
             return Err(TrustError::Refused);
         }
         let mut assets = BTreeMap::new();
-        for asset in wire.assets {
+        for asset in &wire.assets {
             if !RELEASE_ASSET_NAMES.contains(&asset.name.as_str()) || asset.state != "uploaded" {
                 return Err(TrustError::Refused);
             }
@@ -94,7 +109,7 @@ impl Metadata {
             if number == 0
                 || number.to_string() != id
                 || assets
-                    .insert(asset.name, Asset { id: number, proof })
+                    .insert(asset.name.clone(), Asset { id: number, proof })
                     .is_some()
             {
                 return Err(TrustError::Refused);
@@ -105,18 +120,10 @@ impl Metadata {
             .ok_or(TrustError::Refused)?
             .proof
             .sha256();
-        let identity = ReleaseIdentity::new(&wire.tag_name, &wire.target_commitish, hash)
-            .map_err(|_| TrustError::Refused)?;
         if hash != selected.index_sha256() {
             return Err(TrustError::Refused);
         }
-        let proofs: Vec<_> = assets.values().map(|a| a.proof.clone()).collect();
-        let sequence = acceptance::check(&wire.body, &identity, &proofs)?;
-        Ok(Self {
-            identity,
-            sequence,
-            assets,
-        })
+        Ok(assets)
     }
     fn expected(&self) -> Result<ExpectedRelease> {
         ExpectedRelease::new(
@@ -315,21 +322,61 @@ fn acquire_archive(
     architecture: Architecture,
     budget: &SelectionBudget,
 ) -> Result<AuthenticatedArchive> {
+    acquire_with_proof(
+        transport,
+        metadata,
+        ArchiveProof::Stable(claims),
+        architecture,
+        budget,
+    )
+}
+enum ArchiveProof<'a> {
+    Stable(&'a VerifiedNativeReleaseClaims),
+    Candidate(&'a candidate::VerifiedManifest),
+}
+impl ArchiveProof<'_> {
+    fn identity(&self) -> &ReleaseIdentity {
+        match self {
+            Self::Stable(p) => p.identity(),
+            Self::Candidate(p) => &p.metadata.identity,
+        }
+    }
+    fn asset(&self, name: &str) -> Option<&AssetProof> {
+        match self {
+            Self::Stable(p) => p.asset(name),
+            Self::Candidate(p) => p.metadata.assets.get(name).map(|p| &p.proof),
+        }
+    }
+    fn check_index(&self, bytes: &[u8]) -> Result<()> {
+        match self {
+            Self::Stable(_) => Ok(()),
+            Self::Candidate(p) if bytes == p.index => Ok(()),
+            _ => Err(TrustError::Refused),
+        }
+    }
+}
+fn acquire_with_proof(
+    transport: &mut impl AcquisitionTransport,
+    metadata: &Metadata,
+    authority: ArchiveProof<'_>,
+    architecture: Architecture,
+    budget: &SelectionBudget,
+) -> Result<AuthenticatedArchive> {
     budget.check()?;
-    if claims.identity() != &metadata.identity {
+    if authority.identity() != &metadata.identity {
         return Err(TrustError::Refused);
     }
     let asset = metadata
         .assets
         .get("release-index.json")
         .ok_or(TrustError::Refused)?;
-    let proof = claims
+    let proof = authority
         .asset("release-index.json")
         .ok_or(TrustError::Refused)?;
     let bytes = trust::acquire_digest_checked_asset(transport, asset.id, proof, budget)?;
     let proofs: Vec<_> = RELEASE_ASSET_NAMES
         .iter()
-        .map(|name| claims.asset(name).cloned().ok_or(TrustError::Refused))
+        .map(|name| authority.asset(name).cloned().ok_or(TrustError::Refused))
         .collect::<Result<_>>()?;
     let index = identity::verify_release_index(
         REPOSITORY,
@@ -346,6 +393,7 @@ fn acquire_archive(
     {
         return Err(TrustError::Refused);
     }
+    authority.check_index(&bytes)?;
     let name = match architecture {
         Architecture::Amd64 => "sbxr-linux-amd64.tar.gz",
         Architecture::Arm64 => "sbxr-linux-arm64.tar.gz",
@@ -354,7 +402,7 @@ fn acquire_archive(
     let bytes = trust::acquire_digest_checked_asset(
         transport,
         asset.id,
-        claims.asset(name).ok_or(TrustError::Refused)?,
+        authority.asset(name).ok_or(TrustError::Refused)?,
         budget,
     )?;
     let executable = crate::release_archive::unpack(&bytes, budget)?;

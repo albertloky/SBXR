@@ -50,3 +50,14 @@ threshold collector. Genuine SBXR native proofs and the complete positive acquis
 live in `tests/testdata/public_release/`. The exact raw manifest bytes for the
 candidate fixture remain absent. Neither fixture set claims a fresh positive
 qualification or deployment result.
+
+
+`src/release_acquisition/candidate_tests.rs` exercises current manifest approval,
+workflow, decision-chain, full release/asset, support and exact index semantics
+with synthetic JSON that cannot issue authenticated proof. The genuine candidate
+bundle above rejects these different manifest bytes through the actual public
+acquisition API before any asset request. Metadata-read cancellation likewise
+cannot grant late authority. The role-separation compile-fail check prevents a
+candidate installed result from substituting for a stable installed result.
+A complete positive signed-candidate acquisition is not claimed without the
+missing matching raw manifest and its exact artifacts.

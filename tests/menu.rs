@@ -320,3 +320,6 @@ assert writes==['2\n','n\n','0\n'],writes
         );
     }
 }
+
+#[path = "menu/setup_retry.rs"]
+mod setup_retry;

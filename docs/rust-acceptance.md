@@ -118,27 +118,49 @@ fixture/unavailable labels and all production/private gates remain unchanged.
 The finite parser checks do not run the driver's process controller or native
 host effects. See the latest Rust handoff for exact local checks.
 
-The first authentic packaged Rust journey is still blocked by missing source
-composition, not by a need to repeat the already reported unit suite:
+## Signed-candidate semantics and failed setup Review (base 01f1bd4)
 
-- `release_acquisition::Metadata::decode_exact` rejects `sbxr_qualification`.
-  Existing candidate-manifest Sigstore verification does not validate its
-  approval/decision/release/support semantics or issue authenticated candidate
-  installation authority. Candidate delivery must remain distinct from a stable
-  Acceptance Record. Do not synthesize a live pass to satisfy the public route.
-- `release_https::HttpsTransport::new` uses embedded public roots. The retained
-  qualification gateway installs a temporary system CA and host routes, so that
-  transport is not currently compatible with Rust acquisition. A reviewed,
-  protected candidate transport/trust composition is missing; replacing strict
-  TLS or artifact checks with a fixture verifier/URL override is not a solution.
-- `require_live_adapter` unconditionally refuses; both public Owner entry and
-  private startup reach it. Implemented adapters cannot execute through the
-  packaged public/private entry until the real authentication and native startup
-  prerequisites are composed and qualified. Removing that refusal alone is unsafe.
-- The Standard failed-review branch still returns directly after its safety
-  message. It lacks the retained driver's refusal code plus Retry/Back/Cancel
-  protocol. The repaired read-only frames and declined recovery checks do not
-  establish that unimplemented branch or an actual applied setup/recovery pass.
+Candidate delivery now has a separate authenticated acquisition result. Its only
+constructor verifies the exact raw manifest through the existing pinned-root,
+issuer/workflow, DSSE subject, Rekor and observer-time verifier. It then validates
+approval, ordered decision hashes, selected release/commit, all four asset proofs,
+native evidence paths, the current empty-source HTTP attempt and byte-identical
+candidate index. Downloads still pass bounded digest, archive, ELF, retained
+metadata and installed/current-byte checks. New candidate construction requires
+Rust. Neither a structural inspector nor a candidate result can become stable
+installation authority; stable acquisition continues to require the qualified
+Acceptance Record and native release-service proofs.
+
+Failed Standard setup Review now emits the retained refusal code and offers
+Retry/Back/Cancel. Retry performs a fresh Review; Back returns to connection
+selection; Cancel/EOF cannot approve effects. Repeated refusal, stale authority
+and interrupted input/response are covered by offline regressions. All public
+and private production gates and the public TLS root store remain unchanged.
+
+Two source composition blockers remain before an authentic packaged journey:
+
+1. `release_https::HttpsTransport::new` still uses embedded public roots. The
+   retained qualification gateway uses a temporary system CA and host routes.
+   Compose a reviewed protected candidate transport for its authenticated fixed
+   destinations, preserving hostname/TLS validation, redirect rules, bounds and
+   all artifact signatures. Do not replace public trust or add arbitrary URL/CA
+   overrides. No system trust-store changes follow from local implementation.
+2. `host::require_live_adapter` still unconditionally refuses in public Owner
+   and private startup. Compose explicitly scoped candidate versus stable
+   installation/current-process proof through protected native observation,
+   Owner/runtime startup, retained locks and cancellation; bind admission to the
+   actual reviewed candidate and qualified prerequisites. A candidate manifest
+   is delivery authority, not a stable/live Acceptance Record. Removing the
+   gate alone or coercing its proof into stable authority is insufficient.
+
+The existing genuine candidate bundle verifies, but its matching raw manifest
+(digest `0add26026bed41b9bebd770353e6d4249cf30bbf3090c618e59f619b0c30d476`)
+is absent from the preserved fixtures. Semantic positives use clearly untrusted
+synthetic JSON; the public acquisition refusal uses the genuine signature and
+wrong raw bytes and proves no asset GET. A complete positive signed candidate
+acquisition remains unverified until exact matching signed manifest/artifact
+bytes are available. No test-only signature constructor was added. This is an
+evidence prerequisite, not permission to sign or retrieve a new candidate.
 
 After those source paths are complete, prepare one reviewed exact clean-install
 candidate with all four asset digests, authentic workflow/signature/native proofs,

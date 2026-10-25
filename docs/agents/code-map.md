@@ -27,8 +27,12 @@ prepared-builder commands. The workflow definitions build native archives once
 per architecture, reuse them for independent assembly checks and retain signed
 qualification/manual publication gates. No workflow/provisioning follows from
 local fixture success.
-Exact installed-byte acquisition is `src/release_acquisition.rs`; archive decoding
-is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
+Exact installed-byte acquisition is `src/release_acquisition.rs`; its
+`candidate.rs` submodule authenticates the signed empty-source HTTP candidate
+manifest and keeps candidate archive/installed authority distinct from stable
+proof. It shares bounded asset/archive/ELF verification with the stable route;
+public/private native admission and protected gateway TLS remain closed work.
+Archive decoding is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
 public proofs and the repository evidence example cover actual acquisition.
 Runtime-start descriptor lending and serving composition are `src/runtime_handoff.rs`.
 Concrete proxy-start checks, protected material and scoped cutover publication are

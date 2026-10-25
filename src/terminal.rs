@@ -371,57 +371,78 @@ fn setup(
                 )?,
             }
         }
-        writeln!(
-            output,
-            "Setup 2 — Review\nConnection: Standard — no domain needed"
-        )?;
-        let review = installation.review(Action::StartSetup);
-        let Some(prepared) = review.prepared else {
+        'review: loop {
             writeln!(
                 output,
-                "Failed safety check: {}",
-                review
-                    .refusal
-                    .unwrap_or("Setup is no longer legal. Review again.")
+                "Setup 2 — Review\nConnection: Standard — no domain needed"
             )?;
-            return Ok(());
-        };
-        for line in review.plan {
-            writeln!(output, "{line}")?;
-        }
-        writeln!(
-            output,
-            "b Back to edit, c Cancel. Only y applies these changes."
-        )?;
-        loop {
-            match prompt(input, output, "Apply setup? [y/N]")?.as_deref() {
-                Some("y") => {
-                    match review.mode {
-                        ExecutionMode::Native => writeln!(output, "Setup 3 — Install and check")?,
-                        ExecutionMode::NativeUnavailable => {
-                            writeln!(output, "Native setup is unavailable.")?;
-                            return Ok(());
-                        }
-                        ExecutionMode::InjectedHost => {
-                            writeln!(output, "Setup 3 — Apply injected host effects and check")?
-                        }
-                        ExecutionMode::Simulation => {
-                            writeln!(output, "Setup 3 — Simulate install and check")?
-                        }
-                        ExecutionMode::Fixture => {
-                            writeln!(output, "Setup 3 — Apply fixture install and check")?
-                        }
-                    }
-                    let result = installation.execute(prepared, Confirmation::Approved);
-                    write_result(output, &result)?;
-                    return Ok(());
-                }
-                None | Some("") | Some("n") | Some("c") => return cancelled(output),
-                Some("b") => break,
-                _ => writeln!(
+            let review = installation.review(Action::StartSetup);
+            let Some(prepared) = review.prepared else {
+                writeln!(
                     output,
-                    "Enter y to apply, n to cancel, b to go back, or c to cancel."
-                )?,
+                    "Failed safety check: {}",
+                    review
+                        .refusal
+                        .unwrap_or("Setup is no longer legal. Review again.")
+                )?;
+                writeln!(output, "Code: {}", Outcome::Refused.code())?;
+                loop {
+                    match prompt(
+                        input,
+                        output,
+                        "Setup is not ready. r Retry checks, b Back, c Cancel:",
+                    )?
+                    .as_deref()
+                    {
+                        Some("r") => continue 'review,
+                        Some("b") => continue 'profile,
+                        Some("c") | None => return cancelled(output),
+                        _ => writeln!(
+                            output,
+                            "Enter r to retry checks, b to go back, or c to cancel."
+                        )?,
+                    }
+                }
+            };
+            for line in review.plan {
+                writeln!(output, "{line}")?;
+            }
+            writeln!(
+                output,
+                "b Back to edit, c Cancel. Only y applies these changes."
+            )?;
+            loop {
+                match prompt(input, output, "Apply setup? [y/N]")?.as_deref() {
+                    Some("y") => {
+                        match review.mode {
+                            ExecutionMode::Native => {
+                                writeln!(output, "Setup 3 — Install and check")?
+                            }
+                            ExecutionMode::NativeUnavailable => {
+                                writeln!(output, "Native setup is unavailable.")?;
+                                return Ok(());
+                            }
+                            ExecutionMode::InjectedHost => {
+                                writeln!(output, "Setup 3 — Apply injected host effects and check")?
+                            }
+                            ExecutionMode::Simulation => {
+                                writeln!(output, "Setup 3 — Simulate install and check")?
+                            }
+                            ExecutionMode::Fixture => {
+                                writeln!(output, "Setup 3 — Apply fixture install and check")?
+                            }
+                        }
+                        let result = installation.execute(prepared, Confirmation::Approved);
+                        write_result(output, &result)?;
+                        return Ok(());
+                    }
+                    None | Some("") | Some("n") | Some("c") => return cancelled(output),
+                    Some("b") => continue 'profile,
+                    _ => writeln!(
+                        output,
+                        "Enter y to apply, n to cancel, b to go back, or c to cancel."
+                    )?,
+                }
             }
         }
     }
