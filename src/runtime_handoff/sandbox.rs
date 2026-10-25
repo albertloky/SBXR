@@ -61,6 +61,7 @@ pub fn acquire_serving_start(
                     file,
                     path: LockPath::open(root, uid)?,
                     borrowed: true,
+                    owns_exclusion: false,
                 };
                 lock.path.held()?;
                 lock.verify()?;

@@ -103,6 +103,33 @@ fn ordinary_starts_serialize_without_creating_or_trusting_unsafe_locks() {
 }
 
 #[test]
+fn ordinary_start_drop_releases_its_exclusion_with_a_retained_descriptor() {
+    let f = Fixture::new();
+    let owner = f.lock();
+    // Model a fork retaining this description until exec closes CLOEXEC FDs.
+    let retained = owner.descriptor().unwrap();
+    assert!(
+        rustix::io::fcntl_getfd(&retained)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
+    assert!(matches!(
+        StartLock::existing(&f.0, f.uid()),
+        Err(Error::Busy)
+    ));
+    drop(owner);
+    let next = StartLock::existing(&f.0, f.uid())
+        .expect("ordinary startup authority must end with its guard");
+    drop(retained);
+    assert!(matches!(
+        StartLock::existing(&f.0, f.uid()),
+        Err(Error::Busy)
+    ));
+    drop(next);
+    drop(f.lock());
+}
+
+#[test]
 fn descriptor_handoff_is_one_use_and_borrower_never_unlocks_owner() {
     let f = Fixture::new();
     let owner = f.lock();
@@ -379,6 +406,7 @@ struct ServingFixture {
     watcher_started: AtomicBool,
     watcher_ended: AtomicBool,
     fail_public: AtomicBool,
+    retained_start: Mutex<Option<std::os::fd::OwnedFd>>,
 }
 impl ServingFixture {
     fn new(fault: &'static str) -> Self {
@@ -394,19 +422,25 @@ impl ServingFixture {
             watcher_started: AtomicBool::new(false),
             watcher_ended: AtomicBool::new(false),
             fail_public: AtomicBool::new(false),
+            retained_start: Mutex::new(None),
         }
     }
 }
 impl ServingHost for ServingFixture {
     fn acquire_start(&self, _: &StartContext) -> Result<StartLock, Error> {
-        StartLock::existing(&self.fixture.0, self.fixture.uid())
+        let lock = StartLock::existing(&self.fixture.0, self.fixture.uid())?;
+        if self.fault == "retained" {
+            // Model an incidental descriptor surviving until a concurrent exec.
+            *self.retained_start.lock().unwrap() = Some(lock.descriptor()?);
+        }
+        Ok(lock)
     }
     fn installed_identity(
         &self,
         _: &StartLock,
         _: &StartContext,
     ) -> Result<ReleaseIdentity, Error> {
-        if self.fault == "installed" {
+        if matches!(self.fault, "installed" | "retained") {
             ReleaseIdentity::new("v3.0.1", &"a".repeat(40), &"b".repeat(64))
                 .map_err(|_| Error::Refused)
         } else {
@@ -529,6 +563,7 @@ fn sandbox_requires_every_independent_observation() {
 #[test]
 fn every_failed_startup_proof_refuses_before_binding_or_serving() {
     for fault in [
+        "retained",
         "installed",
         "pending",
         "material",
@@ -679,6 +714,8 @@ fn malformed_ancillary_data_and_wrong_inodes_close_every_received_descriptor() {
     };
     use std::mem::MaybeUninit;
     for case in [
+        "valid",
+        "valid-sandbox",
         "absent",
         "two",
         "many",
@@ -687,7 +724,22 @@ fn malformed_ancillary_data_and_wrong_inodes_close_every_received_descriptor() {
         "extra-byte",
     ] {
         let f = Fixture::new();
-        let owner = f.lock();
+        // Raw close-only ownership keeps this a descriptor-leak oracle even
+        // though an ordinary StartLock now explicitly releases its exclusion.
+        let retained: std::os::fd::OwnedFd = fs::File::open(f.0.join("run/lock/sbxr.lock"))
+            .unwrap()
+            .into();
+        rustix::fs::flock(
+            &retained,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .unwrap();
+        let owner = StartLock::from_owner_duplicate(
+            &f.0,
+            f.uid(),
+            rustix::io::fcntl_dupfd_cloexec(&retained, 3).unwrap(),
+        )
+        .unwrap();
         fs::write(f.0.join("foreign"), []).unwrap();
         fs::set_permissions(f.0.join("foreign"), fs::Permissions::from_mode(0o600)).unwrap();
         let foreign = fs::File::open(f.0.join("foreign")).unwrap();
@@ -743,24 +795,48 @@ fn malformed_ancillary_data_and_wrong_inodes_close_every_received_descriptor() {
                     payload.len()
                 );
             });
-            assert!(
-                matches!(
-                    borrow(
-                        client,
-                        &f.0,
-                        Role::SubscriptionServing,
-                        &lender,
-                        &observations,
-                        &context
-                    ),
-                    Err(Error::Refused)
-                ),
-                "case {case}"
-            );
+            let received = if case == "valid-sandbox" {
+                let mut client = Some(client);
+                let mut process = sandbox().process;
+                process.uid = f.uid();
+                acquire_serving_start(
+                    &f.0,
+                    f.uid(),
+                    &context,
+                    || Ok(process.clone()),
+                    || Ok((client.take().ok_or(Error::Refused)?, f.uid())),
+                )
+            } else {
+                borrow(
+                    client,
+                    &f.0,
+                    Role::SubscriptionServing,
+                    &lender,
+                    &observations,
+                    &context,
+                )
+            };
+            if case.starts_with("valid") {
+                let borrowed = received.unwrap();
+                assert!(borrowed.is_borrowed());
+                assert!(borrowed.descriptor().is_err());
+                drop(borrowed);
+            } else {
+                assert!(matches!(received, Err(Error::Refused)), "case {case}");
+            }
             sender.join().unwrap();
         });
+        assert!(matches!(
+            StartLock::existing(&f.0, f.uid()),
+            Err(Error::Busy)
+        ));
         drop(owner_descriptor);
         drop(owner);
+        assert!(matches!(
+            StartLock::existing(&f.0, f.uid()),
+            Err(Error::Busy)
+        ));
+        drop(retained);
         drop(f.lock()); // A leaked shared-description fd would leave this busy.
     }
 }

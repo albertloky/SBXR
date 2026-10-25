@@ -388,12 +388,14 @@ fn lock_error(error: Errno) -> Error {
     }
 }
 
-/// Every descriptor is close-on-exec. Drop only closes: explicitly unlocking a
-/// duplicate would release the Owner's shared open-file-description lock.
+/// Every descriptor is close-on-exec. Ordinary guards own exclusion and release
+/// it on Drop; Owner duplicates and received borrowers only close their copies.
 pub struct StartLock {
     file: OwnedFd,
     path: LockPath,
     borrowed: bool,
+    // An Owner duplicate is a lender, not a borrower, but does not own release.
+    owns_exclusion: bool,
 }
 impl StartLock {
     pub fn existing(root: &Path, owner_uid: u32) -> Result<Self, Error> {
@@ -406,12 +408,14 @@ impl StartLock {
             Mode::empty(),
         )
         .map_err(refused)?;
-        let lock = Self {
+        let mut lock = Self {
             file,
             path,
             borrowed: false,
+            owns_exclusion: false,
         };
         lock.verify()?;
+        lock.owns_exclusion = true;
         Ok(lock)
     }
     /// Core integration hook: consume a CLOEXEC duplicate of an already-held
@@ -421,6 +425,7 @@ impl StartLock {
             file,
             path: LockPath::open(root, owner_uid)?,
             borrowed: false,
+            owns_exclusion: false,
         };
         rio::fcntl_setfd(&lock.file, rio::FdFlags::CLOEXEC).map_err(refused)?;
         lock.path.held()?;
@@ -442,6 +447,14 @@ impl StartLock {
         }
         self.verify()?;
         rio::fcntl_dupfd_cloexec(&self.file, 3).map_err(refused)
+    }
+}
+impl Drop for StartLock {
+    fn drop(&mut self) {
+        if self.owns_exclusion {
+            // Closing alone can leave an incidental fork-held description locked.
+            let _ = fs::flock(&self.file, FlockOperation::Unlock);
+        }
     }
 }
 impl fmt::Debug for StartLock {
@@ -734,6 +747,7 @@ pub fn borrow(
         file,
         path: LockPath::open(root, uid)?,
         borrowed: true,
+        owns_exclusion: false,
     };
     lock.path.held()?;
     lock.verify()?;

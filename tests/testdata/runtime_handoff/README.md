@@ -41,6 +41,11 @@ workers' host modules. Core must:
    `StartLock::from_owner_duplicate`. It verifies both existing exclusion and the
    exact protected inode. Ordinary starts use `StartLock::existing` and never
    create a missing lock; borrowed guards close without unlocking the Owner.
+   Ordinary guards explicitly unlock on Drop, so a fork-retained descriptor
+   cannot extend their exclusion after refusal or completed startup. Owner
+   duplicates and received borrowers remain close-only; lender/borrower role is
+   separate from ownership of lock release. Descriptor-leak fixtures retain a
+   raw close-only lock owner so an explicit ordinary unlock cannot mask leaks.
 3. Bind/connect the fixed `runtime_start_address` abstract Linux socket. Use
    `Handoff::new` plus `with_runtime_start` around the bounded fixed service start.
    The expected peer identity must come from authenticated installed bytes and
