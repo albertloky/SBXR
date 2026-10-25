@@ -210,16 +210,7 @@ fn native_constructor_refuses_development_before_transport_or_activation() {
     assert!(super::super::require_live_adapter().is_err());
     let mut input = File::open("/dev/null").unwrap();
     let mut output = Vec::new();
-    assert!(
-        crate::host::owner::run_public_delivery_unreleased(
-            &mut input,
-            &mut output,
-            crate::host::owner::PublicDelivery::Candidate {
-                reviewed_ca_sha256: "untrusted"
-            }
-        )
-        .is_err()
-    );
+    assert!(crate::host::owner::run_public_unreleased(&mut input, &mut output).is_err());
     assert!(output.is_empty());
 }
 #[test]
@@ -280,4 +271,44 @@ fn delivery_source_cannot_promote_stable_to_candidate_and_cancel_is_preserved() 
         NativeAdmission::candidate("untrusted pin", &budget, Cancellation::new()),
         Err(HostError::Cancelled)
     ));
+}
+
+#[test]
+fn candidate_entry_input_remains_part_of_each_selected_journey_guard() {
+    let f = Fixture::new();
+    let stage = super::super::entry_input::tests::Fixture::new();
+    let (identity, sequence) = crate::release_acquisition::inspect_candidate_handoff(
+        &crate::release_acquisition::fixture_candidate_manifest(),
+    )
+    .unwrap();
+    let record = InstalledRecord::new(
+        identity,
+        sequence,
+        "amd64",
+        &crate::records::sha256_hex(&executable()),
+    )
+    .unwrap();
+    f.write(
+        "var/lib/sbxr/installed.json",
+        &record.encode().unwrap(),
+        0o600,
+    );
+    let mut snapshot = f.capture().unwrap();
+    // Structural freshness only: this does not construct NativeAdmission or
+    // fabricate the missing matching signed candidate positive evidence.
+    snapshot.candidate_input = Some(stage.candidate());
+    snapshot.verify().unwrap();
+    use crate::{
+        domain::*,
+        proxyinstallation::{Installation, Interface},
+    };
+    let mut journey = BoundJourney::new(&snapshot, Box::new(Installation::simulation()));
+    let prepared = journey.review(Action::StartSetup).prepared.unwrap();
+    stage.write("staging-owned", b"1234-2\n", 0o600);
+    assert!(snapshot.verify().is_err());
+    assert!(journey.review(Action::StartSetup).prepared.is_none());
+    assert_eq!(
+        journey.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
 }

@@ -146,7 +146,7 @@ fn protected_roots(
     }
     roots(&bytes)
 }
-fn roots(bytes: &[u8]) -> Result<rustls::RootCertStore> {
+pub(super) fn roots(bytes: &[u8]) -> Result<rustls::RootCertStore> {
     if bytes.is_empty() || bytes.len() > MAX_CA_BYTES {
         return Err(TrustError::Refused);
     }

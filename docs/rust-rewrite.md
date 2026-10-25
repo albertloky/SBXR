@@ -2175,3 +2175,42 @@ outside and applicable Karing observations, recovery and complete owned cleanup.
 Existing working proxies, optional tunnel/account changes, system trust changes
 and stable publication are not implied. The [acceptance matrix](rust-acceptance.md#evidence-bound-native-admission-base-c084520)
 keeps these prerequisites distinct from implemented local proof composition.
+
+
+### Protected zero-argument handoff (base f767df3)
+
+The entry-only increment closes the earlier explicit-composition gap above.
+`main` still accepts zero public arguments and calls the same native entry behind
+unchanged closed gates. `host::entry_input` selects only the retained fixed root
+qualification handoff or ordinary stable delivery when staging is wholly absent.
+It retains bounded nofollow descriptors, exact modes/ownership/inodes, run/attempt
+markers and unchanged absolute/monotonic deadlines. Partial or stale staging is a
+refusal, never a stable fallback. The actual pinned Sigstore verifier must verify
+the staged raw manifest before networking; installed identity/sequence and the
+independently authenticated delivered manifest digest must match it. Retained
+snapshot guards recheck the handoff before reviewed Owner effects. No new public
+config, environment selector, test signature constructor, root effect or live gate
+was introduced. Candidate proof still cannot become qualified stable authority.
+
+The [acceptance matrix](rust-acceptance.md#protected-zero-argument-selection-base-f767df3)
+records exact fixture scope and the finite frozen-candidate request. The existing
+candidate workflow is not preparation-only: it includes root VPS readiness,
+keyless signing, draft/tag mutations, live transport and failure/burn publication.
+No part of that workflow, source push or upload was run by this increment.
+
+Final local checks passed **89 selected product tests**, **4 compile-fail doctests**,
+format, strict all-target Clippy and the Mac build. The selection was 6 protected
+input, 7 native admission, 15 release acquisition, 7 in-memory gateway TLS,
+11 menu, 15 parity, 26 artifact-trust and 2 genuine public-proof tests. Eight
+mutations were caught: partial staging fallback, run marker, absolute expiry,
+retained file/inode freshness, installed identity, delivered manifest digest,
+staged signature and selected-journey freshness. Exact source bytes were restored
+before final checks. Commands, results and mutations are retained in
+`.scratch/acceptance/rust-entry-input/{final-checks,mutations}.json`; the fixture
+directory is empty. An initial Mac mode-type compile mismatch and a deliberately
+inconsistent installed-record fixture were corrected without weakening production
+checks. No listener-dependent suite, Linux build/runtime, real gateway route,
+remote/blocked closeout or live system operation ran. The first attempted combined
+integration command named a nonexistent test target and ran no integration tests;
+the corrected explicit target set above passed. No tool action was denied in this
+increment. Source work stops at this frozen protected-entry composition.

@@ -286,3 +286,7 @@ fn initial(raw: &str) -> Result<Url> {
 #[cfg(test)]
 #[path = "release_https_tests.rs"]
 mod tests;
+
+pub(crate) fn inspect_gateway_ca(bytes: &[u8]) -> Result<()> {
+    gateway::roots(bytes).map(|_| ())
+}

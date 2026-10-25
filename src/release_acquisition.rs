@@ -533,3 +533,12 @@ pub(crate) fn fixture_archive_with_capabilities() -> AuthenticatedArchive {
         executable,
     }
 }
+pub(crate) fn inspect_candidate_handoff(
+    bytes: &[u8],
+) -> Result<(crate::records::ReleaseIdentity, u64)> {
+    candidate::handoff_identity(bytes)
+}
+#[cfg(test)]
+pub(crate) fn fixture_candidate_manifest() -> Vec<u8> {
+    candidate::semantic_fixture()
+}

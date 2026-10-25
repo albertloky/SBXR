@@ -389,3 +389,6 @@ fn interrupted_candidate_response_cannot_grant_late_authority() {
     );
     assert_eq!(t.calls, 1);
 }
+pub(super) fn semantic_fixture() -> Vec<u8> {
+    serde_json::to_vec(&Fixture::new().manifest).unwrap()
+}

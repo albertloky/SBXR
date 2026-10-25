@@ -323,3 +323,29 @@ assert writes==['2\n','n\n','0\n'],writes
 
 #[path = "menu/setup_retry.rs"]
 mod setup_retry;
+
+#[test]
+fn candidate_arguments_and_ambient_overrides_cannot_bypass_protected_zero_argument_entry() {
+    // These names are deliberately unsupported input. No process-wide environment
+    // changes, protected-root writes or native effects occur in this regression.
+    for args in [vec![], vec!["--candidate"], vec!["--ca", "synthetic.pem"]] {
+        let result = Command::new(env!("CARGO_BIN_EXE_sbxr"))
+            .args(&args)
+            .env("SBXR_CHANNEL", "candidate")
+            .env("SBXR_CANDIDATE_MANIFEST", "synthetic.json")
+            .env("SBXR_CANDIDATE_CA_SHA256", "a".repeat(64))
+            .env("SSL_CERT_FILE", "synthetic.pem")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+        let error = String::from_utf8(result.stderr).unwrap();
+        if args.is_empty() {
+            assert!(!error.is_empty());
+            assert!(!error.contains("synthetic") && !error.contains(&"a".repeat(64)));
+        } else {
+            assert!(error.contains("SBXR accepts no arguments"));
+        }
+    }
+}

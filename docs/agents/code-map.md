@@ -68,7 +68,11 @@ The injected constructors reject `/`; typed native constructors now use
 The composed Interface is `src/proxyinstallation/owner.rs`; native authenticated
 sources are `src/host/owner.rs`. Only one selected journey retains its writer and
 prepared authority. `src/host/owner.rs` composes zero-argument native Owner/lifecycle dispatch behind
-the existing closed qualification gate. `src/software_lifecycle.rs` and
+the existing closed qualification gate. `src/host/entry_input.rs` reads only the
+retained fixed protected qualification handoff; full absence selects stable and
+partial/stale input refuses. It binds real staged/delivered candidate proofs and
+retains input freshness through the process guard; no environment/CLI switch is
+supported. `src/software_lifecycle.rs` and
 `src/host/lifecycle.rs` own Status/Check, clean-install Update refusal and reviewed
 exact-finisher recovery; `src/host/filesystem/lifecycle.rs` is its read-only lock
 probe. `terminal::run_with_lifecycle` supplies the two-module menu. Native public

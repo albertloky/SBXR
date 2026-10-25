@@ -391,18 +391,20 @@ pub fn run_public_unreleased(
     input: &mut impl std::os::fd::AsFd,
     output: &mut impl std::io::Write,
 ) -> Result<(), PublicEntryError> {
-    run_public_delivery_unreleased(input, output, PublicDelivery::Stable)
+    super::require_live_adapter()?;
+    let root = ProtectedFs::native()?;
+    let selected = super::entry_input::select(&root, super::entry_input::now()?)?;
+    match selected {
+        super::entry_input::EntryInput::Stable => run_public_selected(input, output, None),
+        super::entry_input::EntryInput::Candidate(reviewed) => {
+            run_public_selected(input, output, Some(&reviewed))
+        }
+    }
 }
-/// Explicit repository composition input, never inferred from an environment,
-/// unsigned metadata or an unverified candidate response. No CLI is added.
-pub enum PublicDelivery<'a> {
-    Stable,
-    Candidate { reviewed_ca_sha256: &'a str },
-}
-pub fn run_public_delivery_unreleased(
+fn run_public_selected(
     input: &mut impl std::os::fd::AsFd,
     output: &mut impl std::io::Write,
-    delivery: PublicDelivery<'_>,
+    reviewed: Option<&std::sync::Arc<super::entry_input::ProtectedCandidateInput>>,
 ) -> Result<(), PublicEntryError> {
     super::require_live_adapter()?;
     let commit = crate::build_identity::compiled_commit().ok_or(HostError::LiveUnavailable)?;
@@ -412,15 +414,19 @@ pub fn run_public_delivery_unreleased(
     let mut input = super::input::InterruptibleInput::new(input, stop.clone())?;
     let mut output = super::input::InterruptibleOutput::new(output, stop.clone());
     let observer = super::linux::NativeObserver::open()?;
-    let budget = crate::artifact_trust::SelectionBudget::new().with_cancellation(stop.clone());
-    let proof = match delivery {
-        PublicDelivery::Stable => {
+    let budget = match reviewed {
+        Some(i) => crate::artifact_trust::SelectionBudget::until(i.selection_deadline()),
+        None => crate::artifact_trust::SelectionBudget::new(),
+    }
+    .with_cancellation(stop.clone());
+    let proof = match reviewed {
+        None => {
             let mut authentication =
                 crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
             observer.authenticate_current(&mut authentication, &budget, stop.clone())?
         }
-        PublicDelivery::Candidate { reviewed_ca_sha256 } => {
-            observer.authenticate_candidate_current(reviewed_ca_sha256, &budget, stop.clone())?
+        Some(input) => {
+            super::admission::NativeAdmission::reviewed_candidate(input, &budget, stop.clone())?
         }
     };
     if proof.record().release_identity().commit() != commit {

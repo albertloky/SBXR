@@ -43,6 +43,7 @@ pub(super) struct Snapshot {
     stamp: Stamp,
     loaded: Vec<u8>,
     stop: Cancellation,
+    candidate_input: Option<std::sync::Arc<super::entry_input::ProtectedCandidateInput>>,
 }
 #[derive(Clone, PartialEq, Eq)]
 struct Stamp {
@@ -122,6 +123,7 @@ impl Snapshot {
             stamp: original,
             loaded,
             stop,
+            candidate_input: None,
         };
         value.verify()?;
         Ok(value)
@@ -129,6 +131,9 @@ impl Snapshot {
     pub(super) fn verify(&self) -> Result<(), HostError> {
         if self.stop.is_cancelled() {
             return Err(HostError::Cancelled);
+        }
+        if let Some(input) = &self.candidate_input {
+            input.verify_record(&self.record, super::entry_input::now()?)?;
         }
         let s = &self.stamp;
         if s.uid != self.fs.uid
@@ -255,8 +260,28 @@ impl NativeAdmission {
         budget: &SelectionBudget,
         stop: Cancellation,
     ) -> Result<Self, HostError> {
+        Self::candidate_bound(ca_sha256, None, budget, stop)
+    }
+    pub(in crate::host) fn reviewed_candidate(
+        input: &std::sync::Arc<super::entry_input::ProtectedCandidateInput>,
+        budget: &SelectionBudget,
+        stop: Cancellation,
+    ) -> Result<Self, HostError> {
+        input.authenticate(budget)?;
+        Self::candidate_bound(input.ca_sha256(), Some(input), budget, stop)
+    }
+    fn candidate_bound(
+        ca_sha256: &str,
+        input: Option<&std::sync::Arc<super::entry_input::ProtectedCandidateInput>>,
+        budget: &SelectionBudget,
+        stop: Cancellation,
+    ) -> Result<Self, HostError> {
         budget.check().map_err(acquisition_error)?;
-        let snapshot = Self::snapshot(stop)?;
+        let mut snapshot = Self::snapshot(stop)?;
+        if let Some(i) = input {
+            i.verify_record(&snapshot.record, super::entry_input::now()?)?;
+            snapshot.candidate_input = Some(std::sync::Arc::clone(i));
+        }
         let mut transport = crate::release_https::CandidateGatewayTransport::from_retained_gateway(
             ca_sha256, budget,
         )
@@ -273,6 +298,9 @@ impl NativeAdmission {
             budget,
         )
         .map_err(acquisition_error)?;
+        if let Some(i) = input {
+            i.verify_manifest(archive.manifest_sha256(), super::entry_input::now()?)?;
+        }
         let proof = archive
             .bind_current(
                 &snapshot.executable,
@@ -280,6 +308,9 @@ impl NativeAdmission {
                 budget,
             )
             .map_err(acquisition_error)?;
+        if let Some(i) = input {
+            i.verify(super::entry_input::now()?)?;
+        }
         Self::bind(snapshot, Box::new(proof), DeliveryRole::Candidate, budget)
     }
     fn bind(

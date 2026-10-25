@@ -483,3 +483,55 @@ fn attempt_index(attempt: &Value, workflow: &Workflow, release: &Release) -> Res
 #[cfg(test)]
 #[path = "candidate_tests.rs"]
 mod tests;
+
+/// Structural handoff inspection only. No signature or installation authority.
+pub(super) fn handoff_identity(bytes: &[u8]) -> Result<(crate::records::ReleaseIdentity, u64)> {
+    let m: Manifest = serde_json::from_value(trust::json_object(bytes, MAX_INDEX_BYTES)?)
+        .map_err(|_| TrustError::Refused)?;
+    let release = m
+        .releases
+        .first()
+        .filter(|_| m.releases.len() == 1)
+        .ok_or(TrustError::Refused)?;
+    let selected = &release.release_identity;
+    let mut assets = Vec::new();
+    for (i, name) in RELEASE_ASSET_NAMES.iter().enumerate() {
+        let p = release
+            .assets
+            .iter()
+            .find(|p| p.name() == *name)
+            .ok_or(TrustError::Refused)?;
+        assets.push(WireAsset {
+            name: name.to_string(),
+            size: p.size(),
+            digest: format!("sha256:{}", p.sha256()),
+            state: "uploaded".into(),
+            url: format!(
+                "https://api.github.com/repos/{REPOSITORY}/releases/assets/{}",
+                i + 1
+            ),
+        });
+    }
+    let wire = WireRelease {
+        tag_name: selected.tag().into(),
+        target_commitish: selected.commit().into(),
+        body: String::new(),
+        draft: false,
+        prerelease: false,
+        immutable: true,
+        assets,
+        sbxr_qualification: None,
+    };
+    inspect(bytes, &wire, selected)?;
+    let id = crate::records::ReleaseIdentity::new(
+        selected.tag(),
+        selected.commit(),
+        selected.index_sha256(),
+    )
+    .map_err(|_| TrustError::Refused)?;
+    Ok((id, release.sequence))
+}
+#[cfg(test)]
+pub(super) fn semantic_fixture() -> Vec<u8> {
+    tests::semantic_fixture()
+}

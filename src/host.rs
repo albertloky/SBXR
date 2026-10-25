@@ -4,6 +4,7 @@
 pub mod admission;
 mod admission_private;
 pub mod disclosure;
+mod entry_input;
 mod filesystem;
 mod fixture;
 pub mod historical;

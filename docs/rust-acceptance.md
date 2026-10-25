@@ -183,14 +183,10 @@ without its lender cannot silently become ordinary-start authority. This local
 private proof cannot be used as authenticated acquisition evidence.
 
 Both `require_live_adapter` and private released-build activation still refuse.
-The explicit repository entry composition
-`run_public_delivery_unreleased(..., PublicDelivery::Candidate { reviewed_ca_sha256 })`
-uses real candidate admission behind the same gate. Normal zero-argument entry
-still selects stable delivery; no ambient/environment candidate selector was
-introduced. Binding the independently reviewed candidate input to the actual
-zero-argument qualification invocation remains a precise coordinator/driver
-integration prerequisite. A different wrapper executable cannot stand in for
-qualification of the exact packaged SBXR executable.
+The initial explicit repository composition was not sufficient for the actual
+zero-argument executable. The protected handoff composition below closes that
+source wiring gap without changing those activation gates. A different wrapper
+executable cannot stand in for qualification of the exact packaged SBXR executable.
 
 Before any activation, obtain a complete genuine signed current Rust candidate
 manifest/artifact positive set and validate the current source on Linux. The
@@ -224,3 +220,90 @@ client credentials and revocation/disclosure, outside-client checks and complete
 cleanup. Optional tunnel/Karing/account or existing working-proxy changes are not
 implied. No such live action, source transfer, signing or publication occurred in
 this inspection.
+
+## Protected zero-argument selection (base f767df3)
+
+The actual `main` → `run_public_unreleased` path now reads the existing fixed
+`/root/sbxr-qualification-v3` handoff. No new command, argument, environment switch,
+CA path or selector file was introduced. Genuinely absent staging selects ordinary
+stable delivery; any existing incomplete, expired or unsafe staging refuses rather
+than falling back to stable. Development/native activation still refuses first.
+
+The seven required inputs are `qualification-manifest.json`,
+`qualification.bundle`, `ca.crt`, `staging-owned`, `transport-owned`, `deadline`
+and `runtime-deadline`. The manifest must describe the approved current
+clean-install HTTP scope, one candidate identity/sequence and all four assets;
+its workflow run/attempt must match the staging marker. The transport marker is
+empty. Canonical epoch deadlines must keep the original six-hour bound and
+60-second early runtime cutoff. Absolute and monotonic checks prevent renewal of
+the loaded deadline. Root ownership, safe nonsymlink parents, 0700 staging,
+single-link regular files, exact contract permissions, bounded bytes and retained
+inodes are mandatory. Only CA and staging marker allow 0644 as well as 0600,
+matching the retained producer; all other selected inputs require 0600.
+
+Selection is untrusted structural data. Before candidate networking, the real
+pinned Sigstore verifier authenticates the exact staged raw manifest and bundle.
+The protected Installed Record must name that same full identity and sequence.
+The fixed gateway then authenticates its own delivered manifest and all assets;
+its raw signed manifest digest must equal the staged digest. The private TLS
+client pins the selected CA bytes and keeps full hostname/certificate checks and
+fixed destinations. The native process snapshot retains the selected handoff and
+rechecks expiry/files/identity before existing guarded Owner effects. No unsigned
+fixture or structural inspector can create installed/candidate authority, convert
+candidate to stable or open a production gate. Software Lifecycle keeps its
+existing qualified-stable discovery contract; candidate selection is not a stable
+qualification or incoming-update authorization.
+
+Offline fixtures cover absent/stale/partial/duplicate/unapproved/foreign input,
+wrong identity/sequence/raw digest, cancellation, absolute and monotonic expiry,
+unsafe links/permissions/parents, replaced identical-byte inodes, changed markers,
+stale prepared actions and refusal of ambient/argument bypass. Synthetic semantic
+positives select a source only; the unchanged genuine bundle rejects those
+unsigned bytes. The missing genuine *current Rust* positive set and current-source
+Linux/packaged qualification remain explicit prerequisites. No root handoff,
+trust store, gateway, credential or service was changed by these checks.
+
+### Frozen candidate preparation request, not authorization
+
+1. Propose the exact frozen reviewed commit to
+   `https://github.com/albertloky/SBXR.git`, `refs/heads/main`, only after a fresh
+   ancestry/main-divergence review permits a normal fast-forward. Do not push to
+   this isolated checkout's `origin`, which is the local retained Go checkout.
+   A main push triggers `.github/workflows/verify.yml` native verification. Neither
+   that push nor a workflow dispatch is authorized by local test approval.
+2. The existing manual candidate workflow is `.github/workflows/candidate.yml`
+   (`Construct qualified drafts`) on main, with fresh reviewed `b_tag`,
+   `b_sequence` and canonical schema-v3 `v3_attempt`: empty incoming sources,
+   clean-install HTTP support, all five required journeys and no exception or
+   correction. Its exact four assets are `install.sh`, `release-index.json`,
+   `sbxr-linux-amd64.tar.gz` and `sbxr-linux-arm64.tar.gz`. Bind native musl/static
+   ELF checks, loaded build identity, index/installer/archive sizes and hashes,
+   signed workflow/raw manifest and authentic native proofs to the same commit.
+3. **This workflow has no preparation-only mode.** It creates tags/draft releases
+   and assets; `sign` contacts the Acceptance VPS as root *before* keyless signing
+   and attestation. `acceptance-vps` creates the protected handoff/ephemeral gateway
+   keys and runs the retained root transport, including service, hosts/NAT and
+   system-CA effects. Failure finalization can sign burn evidence, publish failed
+   prereleases and delete unsigned drafts/tags. Cancelling after signing is not
+   an artifact-only boundary. Before dispatch, either review a separate bounded
+   preparation-only change or obtain explicit permission for those exact combined
+   effects. Stable publication remains a separate approved `stable.yml` dispatch.
+4. Before any VPS root action, require current-source Linux checks and both native
+   musl/package/bootstrap results, exact asset identities/digests, a reviewed fresh
+   tag/sequence/attempt and baseline, an identified disposable Ubuntu 24.04 amd64
+   host with inventory/SSH preservation and a working exact-release recovery and
+   cleanup route. Signing currently requires root readiness *before* it can yield
+   the complete current signed set; do not claim that set exists beforehand.
+   Before enabling installation, additionally require the genuine signed positive
+   set to pass acquisition/admission, reviewed narrow activation policy, protected
+   input/CA/deadline agreement and exact-candidate private startup/cgroup/handoff
+   qualification. Approvals must name root packages/hold, user/group/services,
+   firewall/ports, temporary routing/trust/cutoff, disposable credentials and their
+   revocation/disclosure, outside-client checks, applicable Karing observations
+   and complete owned cleanup. Existing proxies and account/tunnel resources are
+   excluded unless separately named.
+
+No push/upload, CI dispatch, tag/release mutation, signing/attestation/burn,
+VPS access, system trust/security/credential change or publication is performed
+or authorized by this local increment. Stop source expansion at the frozen entry
+increment; prepare the concrete approved candidate boundary before live work.
