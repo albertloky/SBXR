@@ -98,3 +98,54 @@ authentication/qualification activation, Rust live-driver compatibility and the
 five exact-candidate HTTP journeys are not established by fixture tests or YAML
 syntax checks. Source-only archive creation and manifest verification are local;
 transfer/upload remains separately authorized. See the latest handoff increment.
+
+
+## Native driver framing inspection (base 98e0dc43)
+
+The parent reports all 556 distinct automated GNU cases for `98e0dc43` passing on
+an unprivileged disposable Ubuntu 24.04 runner (303 library, 252 integration and
+one compile-fail doctest). The approved CI run also reported both native musl
+builds/static ELF/package checks. Its later closeout verification was blocked by
+the platform and was not retried here. These named-source results are automated
+validation, not an authenticated root installation or an exact-candidate live pass.
+
+A concrete retained-driver mismatch was reproduced locally: native Rust frames
+and lifecycle labels could not be consumed, and interrupted setup confirmation
+prompts differed. Native presentation now repeats the retained frame, preserves
+plain status fields, emits lifecycle result codes, uses Check/Recover labels and
+the details continuation, and matches the two setup recovery prompts. Explicit
+fixture/unavailable labels and all production/private gates remain unchanged.
+The finite parser checks do not run the driver's process controller or native
+host effects. See the latest Rust handoff for exact local checks.
+
+The first authentic packaged Rust journey is still blocked by missing source
+composition, not by a need to repeat the already reported unit suite:
+
+- `release_acquisition::Metadata::decode_exact` rejects `sbxr_qualification`.
+  Existing candidate-manifest Sigstore verification does not validate its
+  approval/decision/release/support semantics or issue authenticated candidate
+  installation authority. Candidate delivery must remain distinct from a stable
+  Acceptance Record. Do not synthesize a live pass to satisfy the public route.
+- `release_https::HttpsTransport::new` uses embedded public roots. The retained
+  qualification gateway installs a temporary system CA and host routes, so that
+  transport is not currently compatible with Rust acquisition. A reviewed,
+  protected candidate transport/trust composition is missing; replacing strict
+  TLS or artifact checks with a fixture verifier/URL override is not a solution.
+- `require_live_adapter` unconditionally refuses; both public Owner entry and
+  private startup reach it. Implemented adapters cannot execute through the
+  packaged public/private entry until the real authentication and native startup
+  prerequisites are composed and qualified. Removing that refusal alone is unsafe.
+- The Standard failed-review branch still returns directly after its safety
+  message. It lacks the retained driver's refusal code plus Retry/Back/Cancel
+  protocol. The repaired read-only frames and declined recovery checks do not
+  establish that unimplemented branch or an actual applied setup/recovery pass.
+
+After those source paths are complete, prepare one reviewed exact clean-install
+candidate with all four asset digests, authentic workflow/signature/native proofs,
+a signed empty-source HTTP attempt, a fresh disposable amd64 host inventory and a
+working exact-release recovery/cleanup route. Concrete permission must name the
+host/candidate and root package/service/firewall/prerequisite changes, disposable
+client credentials and revocation/disclosure, outside-client checks and complete
+cleanup. Optional tunnel/Karing/account or existing working-proxy changes are not
+implied. No such live action, source transfer, signing or publication occurred in
+this inspection.

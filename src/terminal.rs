@@ -28,7 +28,7 @@ fn run_inner(
     mut lifecycle: Option<&mut dyn crate::software_lifecycle::Interface>,
 ) -> io::Result<()> {
     match installation.review(Action::Status).mode {
-        ExecutionMode::Native => writeln!(output, "SBXR")?,
+        ExecutionMode::Native => {}
         ExecutionMode::NativeUnavailable => {
             writeln!(output, "SBXR Rust — native installation unavailable")?;
             writeln!(
@@ -67,15 +67,31 @@ fn run_inner(
             ExecutionMode::InjectedHost => "injected host",
             ExecutionMode::NativeUnavailable => "native unavailable",
         };
-        writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
-        writeln!(
-            output,
-            "Subscription status: {} ({qualifier})",
-            installation.subscription_status()
-        )?;
+        if current.mode == ExecutionMode::Native {
+            // Retained public driver frame. Fixture modes must never emit it.
+            writeln!(output, "SBXR V3")?;
+            writeln!(output, "Proxy status: {}", current.status)?;
+            writeln!(
+                output,
+                "Subscription status: {}",
+                installation.subscription_status()
+            )?;
+        } else {
+            writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
+            writeln!(
+                output,
+                "Subscription status: {} ({qualifier})",
+                installation.subscription_status()
+            )?;
+        }
         if let Some(module) = &mut lifecycle {
-            let state = module.status().state;
-            writeln!(output, "Software Lifecycle status: {state}")?;
+            let status = module.status();
+            let state = status.state;
+            if current.mode == ExecutionMode::Native {
+                lifecycle_result(output, &status)?;
+            } else {
+                writeln!(output, "Software Lifecycle status: {state}")?;
+            }
             if state != crate::software_lifecycle::State::Ready {
                 current.prepared = None;
                 current.legal_actions.retain(|a| *a == Action::ViewDetails);
@@ -86,9 +102,7 @@ fn run_inner(
             }
         } else {
             match current.mode {
-                ExecutionMode::Native => {
-                    writeln!(output, "Software Lifecycle status: Not inspected")?
-                }
+                ExecutionMode::Native => writeln!(output, "Software Lifecycle: Not inspected")?,
                 ExecutionMode::NativeUnavailable => writeln!(
                     output,
                     "Software Lifecycle status: Native authentication incomplete"
@@ -115,8 +129,13 @@ fn run_inner(
             writeln!(output, "{}. {action}", index + 1)?;
         }
         if lifecycle.is_some() {
-            writeln!(output, "{}. Check SBXR", current.legal_actions.len() + 1)?;
-            writeln!(output, "{}. Recover SBXR", current.legal_actions.len() + 2)?;
+            let (check, recover) = if current.mode == ExecutionMode::Native {
+                ("Check", "Recover")
+            } else {
+                ("Check SBXR", "Recover SBXR")
+            };
+            writeln!(output, "{}. {check}", current.legal_actions.len() + 1)?;
+            writeln!(output, "{}. {recover}", current.legal_actions.len() + 2)?;
         }
         writeln!(output, "0. Exit")?;
         let Some(line) = prompt(input, output, "Choose:")? else {
@@ -157,6 +176,11 @@ fn run_inner(
                     "Standard uses VLESS REALITY Vision. No domain is needed."
                 )?;
                 installation.write_details(output)?;
+                if current.mode == ExecutionMode::Native
+                    && prompt(input, output, "Press Enter to return to the menu.")?.is_none()
+                {
+                    return Ok(());
+                }
             }
             Action::StartSetup => setup(input, output, installation)?,
             Action::CheckVmessTunnel => {
@@ -180,7 +204,15 @@ fn run_inner(
                     writeln!(output, "Action refused. Review again.")?;
                     continue;
                 };
-                let question = format!("{action}? [y/N]");
+                let question = match (review.mode, action) {
+                    (ExecutionMode::Native, Action::FinishCleanup) => {
+                        "Finish proxy cleanup? [y/N]".into()
+                    }
+                    (ExecutionMode::Native, Action::FinishSetup) => {
+                        "Finish proxy setup? [y/N]".into()
+                    }
+                    _ => format!("{action}? [y/N]"),
+                };
                 let confirmation = confirmation(input, output, &question)?;
                 let result = installation.execute(prepared, confirmation);
                 write_result(output, &result)?;

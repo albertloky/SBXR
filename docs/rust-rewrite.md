@@ -1924,3 +1924,44 @@ actual musl builds and packaged qualification remain unverified; all production
 and publication gates stay closed. The local source archive for `6eb134b` remains
 unchanged and is stale for the repaired source. No upload, push, signing, live
 credential/security or host/VPS effect occurred.
+
+
+## Native public-driver framing (base 98e0dc43)
+
+The retained public driver rejected the Rust native menu with `label-missing`;
+its setup-recovery parser also reproduced `prompt-mismatch`. Native frames now
+repeat `SBXR V3`, expose the retained plain proxy/subscription fields and existing
+lifecycle status/result codes, use Check/Recover labels, wait for the details
+continuation and preserve the exact Finish proxy cleanup/setup prompts. The
+changes are limited to native presentation. Simulation, fixture, injected and
+unavailable modes retain their explicit labels and cannot emit a native frame.
+No host or private-role gate was changed, and no new CLI argument was introduced.
+
+Three regressions feed actual Rust transcripts to the retained Python driver's
+finite parser methods. They deliberately bypass its process-owning constructor
+and therefore never invoke its process cleanup, ps, signals, listeners or native
+host effects. Read-only interfaces cover Check, no-op Recover and details/EOF;
+explicit in-memory interrupted setup states allow only Declined execution and
+prove unchanged phase/effect counts. This is driver-protocol evidence, not a
+server installation, credential mutation or live recovery pass.
+
+Local checks passed 7 menu, 9 terminal, 15 independent parity and one acquisition
+refusal test (32 total), plus format, strict all-target Clippy and the Mac build.
+Five targeted mutations were caught: native frame, lifecycle labels, details
+continuation and each setup recovery confirmation. Source bytes were restored
+and the changed menu checks were rerun afterward.
+The refusal check still rejects candidate metadata on the public release path.
+Before-fix parser failures and exact checks are retained under
+`.scratch/acceptance/rust-driver-frame/`. The parent-reported 556 GNU checks and
+native musl build result bind their named prior source; no blocked CI closeout
+verification or denied listener/ps/private-scratch access was repeated here.
+
+The [acceptance matrix](rust-acceptance.md#native-driver-framing-inspection-base-98e0dc43)
+now separates implemented adapters from the actual missing candidate acquisition,
+protected gateway TLS/semantic proof composition, evidence-bound public/private
+activation and failed-review Retry/Back/Cancel protocol. Those remain source
+work before a meaningful packaged-root installation approval; a completed unit
+suite alone cannot open the gates. Native APT/systemd/firewall effects, outside
+traffic, exact recovery and the five current HTTP journeys still require the
+proper exact-candidate qualification. Legacy HTTPS creation, incoming Update and
+automatic migration remain intentionally excluded.
