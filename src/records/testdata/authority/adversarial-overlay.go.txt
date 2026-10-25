@@ -1,0 +1,23 @@
+package proxyinstallation
+
+import("encoding/json";"os";"path/filepath";"strconv";"strings";"testing")
+func TestRustAdversarialAuthority(t *testing.T){
+ root:=os.Getenv("SBXR_AUTHORITY_FIXTURES")
+ body,err:=os.ReadFile(filepath.Join(root,"adversarial.vectors"));if err!=nil{t.Fatal(err)}
+ var cases []struct{Name,Fixture,Path,Operation string;Value any}
+ if json.Unmarshal(body,&cases)!=nil{t.Fatal("vectors")}
+ for _,c:=range cases{t.Run(c.Name,func(t *testing.T){
+  body,err:=os.ReadFile(filepath.Join(root,c.Fixture+".json"));if err!=nil{t.Fatal(err)}
+  if strings.Contains(c.Operation,"duplicate") {
+   key:=strconv.Quote(c.Path);alias:=key;if c.Operation=="escaped_duplicate"{alias="\"\\u"+strconv.FormatInt(int64(c.Path[0]),16)+c.Path[1:]+"\"";alias=strings.Replace(alias,"\\u","\\u00",1)}
+   body=[]byte(strings.Replace(string(body),key+":",alias+":null,"+key+":",1))
+  }else{
+   var value any;if json.Unmarshal(body,&value)!=nil{t.Fatal("fixture")}
+   parts:=strings.Split(strings.TrimPrefix(c.Path,"/"),"/");target:=value
+   for _,part:=range parts[:len(parts)-1]{switch v:=target.(type){case map[string]any:target=v[part];case []any:i,e:=strconv.Atoi(part);if e!=nil{t.Fatal(e)};target=v[i];default:t.Fatal("path")}}
+   key:=parts[len(parts)-1];switch v:=target.(type){case map[string]any:if c.Operation=="remove"{delete(v,key)}else{v[key]=c.Value};case []any:i,e:=strconv.Atoi(key);if e!=nil{t.Fatal(e)};v[i]=c.Value;default:t.Fatal("parent")}
+   body,err=json.Marshal(value);if err!=nil{t.Fatal(err)}
+  }
+  if _,accepted:=decodeOwnership(body);accepted{t.Error("Go accepted adversarial mutation")}
+ })}
+}

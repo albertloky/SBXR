@@ -1,0 +1,9 @@
+HTTP/1.1 429 Too Many Requests
+Content-Type: text/plain; charset=utf-8
+Cache-Control: no-store
+X-Content-Type-Options: nosniff
+Retry-After: 10
+Content-Length: 18
+Connection: close
+
+Too Many Requests

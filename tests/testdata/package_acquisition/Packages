@@ -1,0 +1,17 @@
+Architecture: amd64
+Bug: https://github.com/SagerNet/sing-box/issues
+Description: The universal proxy platform.
+Homepage: https://sing-box.sagernet.org/
+Installed-Size: 89893
+License: GPL-3.0-or-later
+Maintainer: nekohasekai <contact-git@sekai.icu>
+Package: sing-box
+Priority: optional
+Section: net
+Vendor: SagerNet
+Version: 1.14.3
+Size: 32297878
+MD5sum: 9a79f02f0a1683785131039e327afa05
+SHA256: ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e
+SHA1: f11456ce2bc1c8e06be50ae2cd380fe5eac10550
+Filename: files/ver_Gz0vP/sing-box_1.14.3_linux_amd64.deb

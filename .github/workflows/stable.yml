@@ -40,6 +40,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  CARGO_BUILD_JOBS: "2"
   ARCHIVE_TAG: archive/full-product-v1.0.15
   CHECKLIST: docs/acceptance/installer-updater-vps.md
 
@@ -67,6 +68,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
       - name: Verify the successful signed qualification
         id: eligibility
         run: |
@@ -116,8 +119,8 @@ jobs:
             jq -cnS --argjson expected "$release" --slurpfile assets assets.json --slurpfile metadata "$metadata" '{assets:$assets[0],body:$metadata[0].body,commit:$metadata[0].target_commitish,draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),prerelease:$metadata[0].prerelease,release_id:$metadata[0].id,release_identity:$expected.release_identity,sequence:$expected.sequence,tag:$metadata[0].tag_name}' > observation.json
             jq -cS --slurpfile observation observation.json '. + $observation' verified/releases.json > verified/releases.next
             mv verified/releases.next verified/releases.json
-            go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
-            go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture amd64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture arm64
             if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
               for architecture in amd64 arm64; do
                 python3 .github/scripts/live89-correction-review.py payload "$directory/sbxr-linux-$architecture.tar.gz" "$run_sha" > "$directory/live89-$architecture-payload.json"
@@ -144,7 +147,7 @@ jobs:
           jq -cnS --slurpfile acceptance_decision candidate/acceptance/acceptance-vps-result-decision.json --slurpfile acceptance_facts candidate/acceptance/acceptance-vps-result-facts.json --argjson archive "$archive" --slurpfile burned verified/burned.json --slurpfile candidate_run candidate-run.json --arg checklist_sha256 "$(sha256sum "$checklist" | cut -d' ' -f1)" --argjson latest_release_id "$latest_release_id" --argjson latest_tag "$latest_tag" --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile releases verified/releases.json --arg remote_main "$(git rev-parse origin/main)" --slurpfile signed_manifest verified/qualification-manifest.json '{acceptance_decision:$acceptance_decision[0],acceptance_facts:$acceptance_facts[0],archive:$archive,burned_identities:$burned[0],candidate_run:{conclusion:$candidate_run[0].conclusion,created_at:$candidate_run[0].created_at,event:$candidate_run[0].event,head_sha:$candidate_run[0].head_sha,id:($candidate_run[0].id|tostring),path:$candidate_run[0].path},checklist_sha256:$checklist_sha256,latest_release_id:$latest_release_id,latest_tag:$latest_tag,manifest_attested:true,observed_at:$observed_at,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$signed_manifest[0],stage:"stable-preflight"}' | tr -d '\n' > verified/stable-preflight-facts.json
           if test "$(jq -r .schema "$manifest")" = sbxr-qualification-manifest-v3; then
             bash .github/scripts/release-history.sh current-release-history.json
-            go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > current-source-verification.json
             jq -cS --slurpfile releases current-release-history.json --slurpfile latest current-source-verification.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' verified/stable-preflight-facts.json | tr -d '\n' > current-history-facts.json
             mv current-history-facts.json verified/stable-preflight-facts.json
           fi
@@ -269,6 +272,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: verified-stable-publication-input
@@ -325,7 +330,7 @@ jobs:
                 attestation="$(jq -cS --arg commit "$commit" '{commit:$commit,count:(.attestations|length),initiator:(if (.attestations|length) > 0 and all(.attestations[]; .initiator == "github") then "github" else "" end),predicate_type:"release"}' "$directory.attestation.json")"
               fi
               if curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh" -o "$directory.latest-install.sh"; then latest_install_sha256="$(sha256sum "$directory.latest-install.sh" | cut -d' ' -f1)"; fi
-              go run ./cmd/sbxr-release verify-public-latest > "$directory.public-verification.json" || return 1
+              cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > "$directory.public-verification.json" || return 1
               public_verification="$(cat "$directory.public-verification.json")"
             fi
             jq -cnS --slurpfile assets "$directory.assets.json" --argjson attestation "$attestation" --slurpfile downloads "$directory.downloads.json" --arg latest_install_sha256 "$latest_install_sha256" --argjson latest_release_id "$latest_release_id" --slurpfile metadata "$metadata" --argjson public_verification "$public_verification" --argjson release_identity "$release_identity" --argjson sequence "$sequence" '{assets:$assets[0],attestation:$attestation,body:$metadata[0].body,commit:$metadata[0].target_commitish,downloads:$downloads[0],draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),latest_install_sha256:$latest_install_sha256,latest_release_id:$latest_release_id,prerelease:$metadata[0].prerelease,public_verification:$public_verification,release_id:$metadata[0].id,release_identity:$release_identity,sequence:$sequence,tag:$metadata[0].tag_name}' | tr -d '\n'
@@ -333,8 +338,8 @@ jobs:
 
           verify_public_package() {
             local directory=$1 tag=$2
-            go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
-            go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture amd64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture arm64
             if test "$(jq -r .mode verified/qualification-manifest.json)" = v3; then return; fi
             sudo bash "$directory/install.sh" > "$tag-install.transcript"
             grep -Fx 'SOFTWARE-LIFECYCLE-INSTALL-INSTALLED' "$tag-install.transcript"
@@ -361,7 +366,7 @@ jobs:
             jq -cnS --argjson action_index "$action_index" --slurpfile approval approval.json --slurpfile observation stable-publication-observation.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile preflight_decision verified/stable-preflight-decision.json --slurpfile preflight_facts verified/stable-preflight-facts.json --arg prior_decision_sha256 "$prior_decision_sha256" --slurpfile prior_verification_decision prior-verification-decision.json --slurpfile prior_verification_facts prior-verification-facts.json '{action_index:$action_index,approval:$approval[0],observation:$observation[0],observed_at:$observed_at,preflight_decision:$preflight_decision[0],preflight_facts:$preflight_facts[0],prior_decision_sha256:$prior_decision_sha256,prior_verification_decision:$prior_verification_decision[0],prior_verification_facts:$prior_verification_facts[0],schema:"sbxr-release-qualification-facts-v1",stage:"stable-publication"}' | tr -d '\n' > stable-publication-facts.json
             if test "$(jq -r .schema verified/qualification-manifest.json)" = sbxr-qualification-manifest-v3; then
               bash .github/scripts/release-history.sh current-release-history.json
-              go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+              cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > current-source-verification.json
               jq -cS --slurpfile releases current-release-history.json --slurpfile latest current-source-verification.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' stable-publication-facts.json | tr -d '\n' > current-history-facts.json
               mv current-history-facts.json stable-publication-facts.json
             fi
@@ -599,6 +604,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
       - name: Recheck the signed qualification and obtain the failure decision
         id: failure
         run: |
@@ -627,7 +634,7 @@ jobs:
             if test "$(jq -r .state <<<"$release_observation")" = present; then
               .github/scripts/recheck-qualified-release.sh "failure/$tag.json" "failure/rechecked/$tag" failure/release.json
               publicly_verified=false
-              if test "$tag_commit" != null && jq -e '.draft == false and .prerelease == false and (.immutable // false) == true' failure/release.json >/dev/null && go run ./cmd/sbxr-release verify-public-release -tag "$tag" > "failure/$tag.public-verification.json" && jq -e --argjson expected "$release" '.outcome == "accepted" and .release_identity == $expected.release_identity and .sequence == $expected.sequence' "failure/$tag.public-verification.json" >/dev/null; then
+              if test "$tag_commit" != null && jq -e '.draft == false and .prerelease == false and (.immutable // false) == true' failure/release.json >/dev/null && cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-release -tag "$tag" > "failure/$tag.public-verification.json" && jq -e --argjson expected "$release" '.outcome == "accepted" and .release_identity == $expected.release_identity and .sequence == $expected.sequence' "failure/$tag.public-verification.json" >/dev/null; then
                 public_valid=true
                 mkdir -p -m 0700 "failure/public/$tag"
                 while read -r asset; do

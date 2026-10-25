@@ -1,0 +1,2 @@
+# Exact HTTP wire responses intentionally mix CRLF headers with LF bodies.
+tests/testdata/subscription_serving/*.txt -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

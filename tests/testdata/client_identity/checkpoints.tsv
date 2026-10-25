@@ -1,0 +1,11 @@
+rotation authorized	cleanup
+target prepared	cleanup
+startup integration published	cleanup
+systemd reloaded	cleanup
+startup route verified	cleanup
+cutover gated	cleanup
+source stopped	cleanup
+source quiescent	cleanup
+source revoked	forward
+target published	forward
+target started	forward

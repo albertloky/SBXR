@@ -1,0 +1,273 @@
+{
+  "identities": [
+    {
+      "name": "zero",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd"
+    },
+    {
+      "name": "sequential",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "FBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM",
+      "public_key": "oySw2eQ3osAkEZBjVK6vYNbOurTIvp-vbuzqyfHAmH8",
+      "short_id": "0102abcd"
+    },
+    {
+      "name": "rfc7748-alice",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo",
+      "public_key": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "short_id": "0102abcd"
+    },
+    {
+      "name": "rfc7748-bob",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "XasIfmJKikt54X-Lg4AO5m87sSkmGLb9HC-LJ_-I4Os",
+      "public_key": "3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08",
+      "short_id": "0102abcd"
+    },
+    {
+      "name": "all-ff",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "__________________________________________8",
+      "public_key": "hHwNLDdSNPNl5mCVUYejc1oPdhPRYJ06ak2MU66qWiI",
+      "short_id": "0102abcd"
+    }
+  ],
+  "validation": [
+    {
+      "name": "canonical",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": true
+    },
+    {
+      "name": "uppercase-short-id",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102ABCD",
+      "valid": true
+    },
+    {
+      "name": "private-crlf",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAA\r\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": true
+    },
+    {
+      "name": "public-crlf",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "\nL-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q\r\n",
+      "short_id": "0102abcd",
+      "valid": true
+    },
+    {
+      "name": "private-unused-bits",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": true
+    },
+    {
+      "name": "public-unused-bits",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3R",
+      "short_id": "0102abcd",
+      "valid": true
+    },
+    {
+      "name": "private-padding",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "public-padding",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q=",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "private-space",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": " AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "public-space",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q ",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "private-tab",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "\tAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "private-standard-alphabet",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "public-standard-alphabet",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "+-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "private-too-short",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "private-too-long",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "public-too-short",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "public-too-long",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3QA",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "mismatched-public-key",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "zero-public-key",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "uppercase-uuid",
+      "uuid": "12345678-1234-4234-8234-123456789ABC",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "wrong-uuid-version",
+      "uuid": "12345678-1234-3234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "wrong-uuid-variant",
+      "uuid": "12345678-1234-4234-c234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "uuid-trailing-lf",
+      "uuid": "12345678-1234-4234-8234-123456789abc\n",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "uuid-empty",
+      "uuid": "",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "uuid-unicode",
+      "uuid": "💣",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd",
+      "valid": false
+    },
+    {
+      "name": "short-id-too-short",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102ab",
+      "valid": false
+    },
+    {
+      "name": "short-id-too-long",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcd00",
+      "valid": false
+    },
+    {
+      "name": "short-id-invalid",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "0102abcg",
+      "valid": false
+    },
+    {
+      "name": "short-id-unicode",
+      "uuid": "12345678-1234-4234-8234-123456789abc",
+      "private_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "public_key": "L-V9o0fNYkMVKNqsX7spBzD_9oSvxM_C7ZCZX1jLO3Q",
+      "short_id": "💣💣",
+      "valid": false
+    }
+  ]
+}

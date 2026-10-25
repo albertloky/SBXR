@@ -39,7 +39,7 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 	const accepted = `{"outcome":"accepted","release_identity":{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","release_index_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"albertloky/SBXR","tag":"v3.1.0"},"sequence":83}`
 	const token = "preflight-test-token-must-stay-private"
 	const signedQuery = "sig=preflight-test-signature&token=private-query"
-	const declaration = `{"private_fixture":"` + token + ` https://release-assets.githubusercontent.com/fixture?` + signedQuery + `","schema":"sbxr-v3-qualification-attempt-v3","support":{"scope":"subscription-clean-install-repair"}}`
+	const declaration = `{"private_fixture":"` + token + ` https://release-assets.githubusercontent.com/fixture?` + signedQuery + `","schema":"sbxr-v3-qualification-attempt-v3","support":{"contract":"sbxr-subscription-update-v1","scope":"subscription-clean-install-only","sources":[]}}`
 	for _, fixture := range []struct {
 		name, result, operation, execution, outcome string
 		verifierStatus, wantStatus                  int
@@ -57,6 +57,9 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 		{"missing", "", "require accepted public-latest outcome", "completed", "missing", 0, 2},
 		{"declaration-missing", "", "require V3 declaration", "not started", "missing", 0, 1},
 		{"declaration-noncanonical", "", "check canonical V3 declaration", "not started", "missing", 0, 1},
+		{"declaration-sources", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
+		{"declaration-contract", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
+		{"declaration-exception", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"declaration-scope", accepted, "check V3 declaration scope", "completed", "accepted", 0, 1},
 		{"later-failure", accepted, "fetch source tags", "completed", "accepted", 0, 37},
 		{"diagnostic-write-failure", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
@@ -66,9 +69,9 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 			// Substitute only external commands. Bash, jq, redirection, traps,
 			// filesystem writes and the workflow's assertions run unchanged.
 			for name, source := range map[string]string{
-				"go": `#!/usr/bin/env bash
+				"cargo": `#!/usr/bin/env bash
 set -euo pipefail
-test "$*" = 'run ./cmd/sbxr-release verify-public-latest'
+test "$*" = 'run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest'
 printf 'called\n' >> verifier-called
 if test "$FIXTURE" = missing; then
   rm current-source-verification.json
@@ -92,13 +95,19 @@ exit "$VERIFIER_STATUS"
 			attempt := declaration
 			switch fixture.name {
 			case "clean-install-only":
-				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-repair", "subscription-clean-install-only")
+				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-only", "subscription-clean-install-only")
 			case "declaration-missing":
 				attempt = ""
 			case "declaration-noncanonical":
 				attempt += " "
+			case "declaration-sources":
+				attempt = strings.ReplaceAll(attempt, `"sources":[]`, `"sources":["unsupported"]`)
+			case "declaration-contract":
+				attempt = strings.ReplaceAll(attempt, "sbxr-subscription-update-v1", "unsupported")
+			case "declaration-exception":
+				attempt = strings.Replace(attempt, "{", `{"owner_exception":true,`, 1)
 			case "declaration-scope":
-				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-repair", "unknown")
+				attempt = strings.ReplaceAll(attempt, "subscription-clean-install-only", "unknown")
 			}
 			// Success must reach the next operation. The later-failure case
 			// runs the full step, stopping at the external git subprocess.
@@ -237,9 +246,11 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"gh attestation verify",
 		"ubuntu-24.04",
 		"ubuntu-24.04-arm",
-		"go run ./cmd/sbxr-release verify-package",
-		"sudo env TERM=xterm-256color LANG=C.UTF-8",
-		"SBXR requires root authority.",
+		"cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package",
+		"bash tooling/rust-package/closed_dispatch.sh",
+		"python3 tooling/rust-package/build_native.py",
+		"python3 tooling/rust-package/assemble.py",
+		"needs: [preflight, rust-native]",
 		"BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY",
 		"environment: acceptance-vps",
 		"Verify Acceptance VPS readiness before signing",

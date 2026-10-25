@@ -1,0 +1,37 @@
+# SBXR Acceptance Record
+Status: Qualified
+Repository: albertloky/SBXR
+Tag: {tag}
+Commit: {commit}
+Sequence: 192
+Release index SHA-256: {index}
+Module Verification: Passed
+Seam Verification: Passed
+Integrated Verification: Passed on live Ubuntu Server 24.04 amd64 and Karing macOS
+Codex Live Acceptance: Passed
+Owner Acceptance: Not required
+Stable result code: RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION
+Workflow evidence: https://github.com/albertloky/SBXR/actions/runs/123
+Runner: Ubuntu Server 24.04 linux/amd64
+Go toolchain: go1.26.6
+Public verifier: 1.3.0 26B3382D5700AFBCD84F980D1D5B6C52BFF743DC2A8EE86B8B44C8E1245CE485
+Secret-safe result: Passed
+Qualification role: Clean-installed subscription-capable V3 release
+Detailed evidence SHA-256: {hash}
+Proxy package: sing-box 1.14.3 amd64 ed7feaa6c2083d58a7195866bf25a2693abc2beaf5c0d192c9370ffa39e0fd6e
+Karing macOS: Passed
+Karing package: karing 1.2.3 macos-arm64 {hash}
+Natural timer firing and naturally due certificate renewal: Not observed
+Unsupported new or renamed renewal route: May execute before detection; historical outcomes unknown
+Release support: {"scope":"subscription-clean-install-only","sources":[],"contract":"sbxr-subscription-update-v1"}
+Evidence policy: mvp-http-live-v1
+Incoming source upgrades: Not applicable
+Two-release update/recovery: Not applicable
+Live acceptance coverage: Five normal product journeys; interruption, contention, drift, forced outage and scheduled-refresh variants not observed live
+Karing connectivity evidence: Real subscription import, one node, fresh per-node latency and manual refresh; selected connection preserved; no Karing browsing or automatic-refresh timing claim
+Subscription transport: HTTP; subscription credentials and configuration are exposed to interception and tampering
+Scenario: mvp-install {hash} https://github.com/albertloky/SBXR/actions/runs/123#artifacts
+Scenario: mvp-subscription {hash} https://github.com/albertloky/SBXR/actions/runs/123#artifacts
+Scenario: mvp-credentials {hash} https://github.com/albertloky/SBXR/actions/runs/123#artifacts
+Scenario: mvp-serving {hash} https://github.com/albertloky/SBXR/actions/runs/123#artifacts
+Scenario: mvp-removal {hash} https://github.com/albertloky/SBXR/actions/runs/123#artifacts

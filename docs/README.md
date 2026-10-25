@@ -6,12 +6,14 @@
 |---|---|---|
 | Use SBXR | [Product README](../README.md) | Supported host, installation and menu journey |
 | Set up optional VMess Tunnel | [VMess setup guide](setup-vmess-tunnel.md) | Your own domain/tunnel, protected token, dedicated connector and honest connection checks |
+| Continue isolated Rust rewrite | [Rust increment and handoff](rust-rewrite.md), [current acceptance matrix](rust-acceptance.md) | Implemented slices, intentional exclusions and separate qualification |
 | Change implementation | [Agent code map](agents/code-map.md) | Entry points, owning modules and focused checks |
 | Understand domain language | [CONTEXT.md](../CONTEXT.md) | One shared glossary, not a second specification |
 | Find an architectural or policy decision | [ADR index](adr/README.md) | Decisions grouped by scope and product era |
 | Plan current live qualification | [Acceptance guide](acceptance/README.md) | Current MVP procedure and bounded prerequisites |
 | Inspect a release or repair result | [Report index](acceptance/reports/README.md) | Dated observations, not present host readiness |
-| Operate release tooling | [Release stage map](../cmd/sbxr-release/README.md), [script map](../.github/scripts/README.md) | Qualification code and workflow/helper ownership |
+| Build/validate Rust release inputs locally | [Rust packaging/CI tooling](../tooling/rust-package/README.md), [prepared Linux commands](../tooling/rust-package/linux-validation.md) | Native musl inputs, strict artifact/bootstrap verification and source-only snapshot; no dispatch/publication |
+| Operate retained qualification tooling | [Release stage map](../cmd/sbxr-release/README.md), [script map](../.github/scripts/README.md) | Qualification code and workflow/helper ownership |
 | Investigate upstream behavior | [Research index](research/README.md) | Current dependency compatibility, not adopted policy |
 
 The latest publication recorded here is

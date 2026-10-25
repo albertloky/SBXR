@@ -1,0 +1,13 @@
+default_no	\n\n0\n	cancelled	1	1
+explicit_no	1\nn\n0\n	cancelled	1	1
+choice_cancel	c\n0\n	cancelled	0	1
+review_cancel	\nc\n0\n	cancelled	1	1
+choice_eof		cancelled	0	1
+review_eof	\n	cancelled	1	1
+unterminated_approval	\ny	cancelled	1	1
+back_then_cancel	\nb\nc\n0\n	cancelled	1	2
+back_default_apply	\nb\n\ny\n0\n	complete	2	2
+standard_default_apply	\ny\n0\n	complete	1	1
+explicit_standard_apply	1\ny\n0\n	complete	1	1
+help_invalid_no	h\n2\nx\n\nY\nyes\n y\nn\n0\n	cancelled	1	1
+crlf_no	\r\nn\r\n0\r\n	cancelled	1	1

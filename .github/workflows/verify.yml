@@ -13,6 +13,9 @@ concurrency:
   group: verify-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_BUILD_JOBS: "2"
+
 jobs:
   native-installer-updater:
     strategy:
@@ -26,86 +29,82 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
           cache: false
-      - name: Test current Installer-Updater seams
+      - name: Prepare pinned native Rust builder
+        run: bash tooling/rust-package/setup-ci.sh native
+      - name: Test Rust and retained repository qualification seams
         run: |
-          go test ./... -count=1
-          go test -race ./... -count=1
-          go vet ./...
-      - name: Build and verify the exact four release assets
+          set -euo pipefail
+          export TMPDIR="$PWD/.scratch/acceptance/ci-native/t"
+          mkdir -p -m 0700 "$TMPDIR"
+          cargo fmt --all -- --check
+          cargo clippy --locked --offline --all-targets -- -D warnings
+          cargo test --locked --offline
+          cargo test --locked --offline --manifest-path tooling/rust-package/Cargo.toml
+          python3 -m unittest discover -s tooling/rust-package/tests -p 'test_*.py'
+          # Retained Go fixtures construct their explicit foreign modes under 022.
+          (
+            umask 022
+            go test ./... -count=1
+            go test -race ./... -count=1
+            go vet ./...
+            go mod verify
+          )
+      - name: Build and inspect this native musl archive
         env:
-          RELEASE_TAG: v2.0.0
-          RELEASE_SEQUENCE: "17"
+          ARCHITECTURE: ${{ matrix.architecture }}
         run: |
-          mkdir -m 0700 dist inspect
-          for architecture in amd64 arm64; do
-            go run ./cmd/sbxr-release \
-              -tag "$RELEASE_TAG" \
-              -commit "$GITHUB_SHA" \
-              -sequence "$RELEASE_SEQUENCE" \
-              -architecture "$architecture" \
-              -output "dist/sbxr-linux-$architecture.tar.gz"
-          done
-          amd64_sha256="$(tar -xOzf dist/sbxr-linux-amd64.tar.gz sbxr | sha256sum | cut -d ' ' -f1)"
-          arm64_sha256="$(tar -xOzf dist/sbxr-linux-arm64.tar.gz sbxr | sha256sum | cut -d ' ' -f1)"
-          go run ./cmd/sbxr-release bootstrap \
-            -version 2.0.0 \
-            -tag "$RELEASE_TAG" \
-            -commit "$GITHUB_SHA" \
-            -sequence "$RELEASE_SEQUENCE" \
-            -amd64-executable-sha256 "$amd64_sha256" \
-            -arm64-executable-sha256 "$arm64_sha256" \
-            -output dist/install.sh
-          go run ./cmd/sbxr-release index \
-            -tag "$RELEASE_TAG" \
-            -commit "$GITHUB_SHA" \
-            -sequence "$RELEASE_SEQUENCE" \
-            -directory dist \
-            -output dist/release-index.json
-          test "$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
-          go run ./cmd/sbxr-release verify-package -directory dist -architecture '${{ matrix.architecture }}'
-          test "$(tar -tzf 'dist/sbxr-linux-${{ matrix.architecture }}.tar.gz')" = sbxr
+          set -euo pipefail
+          mkdir -p -m 0700 .scratch/acceptance/ci-native/native
+          python3 tooling/rust-package/build_native.py --tag v2.0.0 --commit "$GITHUB_SHA" --sequence 17 --architecture "$ARCHITECTURE" --output ".scratch/acceptance/ci-native/native/sbxr-linux-$ARCHITECTURE.tar.gz" > .scratch/acceptance/ci-native/native/build.json
+          mkdir -m 0700 native
+          cp ".scratch/acceptance/ci-native/native/sbxr-linux-$ARCHITECTURE.tar.gz" .scratch/acceptance/ci-native/native/build.json native/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-verify-${{ matrix.architecture }}
+          path: native
+          if-no-files-found: error
+          retention-days: 1
+
+  assembled-installer-updater:
+    needs: native-installer-updater
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: rust-verify-*
+          path: native-input
+      - name: Assemble and verify the exact four release assets
+        run: |
+          set -euo pipefail
+          cargo build --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml
+          python3 tooling/rust-package/assemble.py --tool "$PWD/target/release/sbxr-rust-package" --tag v2.0.0 --commit "$GITHUB_SHA" --sequence 17 --amd64 native-input/rust-verify-amd64/sbxr-linux-amd64.tar.gz --arm64 native-input/rust-verify-arm64/sbxr-linux-arm64.tar.gz --output dist
+          mkdir -m 0700 inspect
           tar -xzf 'dist/sbxr-linux-${{ matrix.architecture }}.tar.gz' -C inspect
-          machine="$(readelf -h inspect/sbxr | sed -n 's/^  Machine: *//p')"
-          case '${{ matrix.architecture }}' in
-            amd64) test "$machine" = 'Advanced Micro Devices X86-64' ;;
-            arm64) test "$machine" = 'AArch64' ;;
-          esac
-      - name: Exercise the packaged production command and menu
-        run: |
-          if inspect/sbxr >non-root.out 2>non-root.err; then
-            exit 1
-          fi
-          test ! -s non-root.out
-          grep -Fx 'SBXR requires root authority.' non-root.err
-          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 '$PWD/inspect/sbxr'" menu.transcript
-          grep -F 'SBXR V3' menu.transcript
-          grep -F 'Proxy status: Not set up' menu.transcript
-          grep -F 'Start setup' menu.transcript
-          grep -F 'View details' menu.transcript
-          grep -F 'Complete removal' menu.transcript
-          grep -F 'Exit' menu.transcript
-          index_sha256="$(sha256sum dist/release-index.json | cut -d ' ' -f1)"
-          executable_sha256="$(sha256sum inspect/sbxr | cut -d ' ' -f1)"
-          sudo install -m 0755 inspect/sbxr /usr/local/bin/sbxr
-          sudo install -d -m 0700 /var/lib/sbxr
-          printf '{"schema":1,"repository":"albertloky/SBXR","tag":"v2.0.0","commit":"%s","release_index_sha256":"%s","sequence":17,"architecture":"%s","executable_sha256":"%s"}\n' "$GITHUB_SHA" "$index_sha256" '${{ matrix.architecture }}' "$executable_sha256" | sudo tee /var/lib/sbxr/installed.json >/dev/null
-          sudo chmod 0600 /var/lib/sbxr/installed.json
-          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 /usr/local/bin/sbxr" ready.transcript
-          grep -F 'Version: v2.0.0' ready.transcript
-          grep -F 'Proxy status: Not set up' ready.transcript
-          grep -F 'PROXY-INSTALLATION-STATUS-NOT-SET-UP' ready.transcript
-          sudo rm /usr/local/bin/sbxr
-          sudo rm -r /var/lib/sbxr
+      - name: Verify closed dispatch without installation or root effects
+        run: bash tooling/rust-package/closed_dispatch.sh "$PWD/inspect/sbxr" captures
       - name: Refuse secret markers from package surfaces
         env:
           SECRET_PATTERN: 'SBXR_USER_TOKEN_MARKER_00000000000000abcd|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
         run: |
           summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-          if grep -aERq "$SECRET_PATTERN" dist inspect non-root.out non-root.err menu.transcript ready.transcript "$summary"; then
+          if grep -aERq "$SECRET_PATTERN" dist inspect captures captures/non-root.out captures/non-root.err captures/private.out captures/private.err "$summary"; then
             exit 1
           elif test $? -ne 1; then
             exit 1

@@ -90,7 +90,7 @@ func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *t
 		`stage:"stable-publication-verification"`,
 		"stable-publication-verification-facts.json",
 		"stable-publication-verification-decision.json",
-		"go run ./cmd/sbxr-release verify-public-latest",
+		"cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest",
 		"stable-publication-decisions-${{ github.run_id }}",
 		"path: publication-evidence",
 		`type == "observe-stable-release"`,

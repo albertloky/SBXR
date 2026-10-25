@@ -32,12 +32,12 @@ func TestContinuousVerificationScansProducedSurfacesAndRefusesSecretsOrMissingFi
 		lines[index] = strings.TrimPrefix(lines[index], "          ")
 	}
 	script = strings.Join(lines, "\n")
-	surfaces := []string{"dist/package", "inspect/sbxr", "non-root.out", "non-root.err", "menu.transcript", "ready.transcript", "summary"}
+	surfaces := []string{"dist/package", "inspect/sbxr", "captures/non-root.out", "captures/non-root.err", "captures/private.out", "captures/private.err", "summary"}
 	for _, fault := range append([]string{"clean", "missing"}, surfaces...) {
 		t.Run(fault, func(t *testing.T) {
 			directory := t.TempDir()
 			for _, surface := range surfaces {
-				if fault == "missing" && surface == "ready.transcript" {
+				if fault == "missing" && surface == "captures/private.err" {
 					continue
 				}
 				path := filepath.Join(directory, surface)

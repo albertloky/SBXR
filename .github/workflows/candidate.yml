@@ -23,6 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  CARGO_BUILD_JOBS: "2"
   ARCHIVE_TAG: archive/full-product-v1.0.15
   V3_CHECKLIST: docs/acceptance/v3-packaged-live.md
 
@@ -40,6 +41,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
       - name: Verify source state and unused release authority
         id: preflight
         env:
@@ -80,12 +83,12 @@ jobs:
           test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
           preflight_operation='execute verify-public-latest'
           public_latest_execution='did not complete'
-          go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+          cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > current-source-verification.json
           public_latest_execution='completed'
           preflight_operation='require accepted public-latest outcome'
           jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
           preflight_operation='check V3 declaration scope'
-          jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and (.support.scope == "first-subscription-clean-install" or .support.scope == "subscription-clean-install-repair" or .support.scope == "subscription-clean-install-only" or .support.scope == "recurring-subscription-upgrade")' <<<"$V3_ATTEMPT" >/dev/null
+          jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and .support == {scope:"subscription-clean-install-only",sources:[],contract:"sbxr-subscription-update-v1"} and .owner_exception == null and .live89_correction_review == null' <<<"$V3_ATTEMPT" >/dev/null
           preflight_operation='fetch source tags'
           git fetch --force --tags origin
           preflight_operation='collect release history'
@@ -168,8 +171,64 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build:
+  rust-native:
     needs: preflight
+    strategy:
+      fail-fast: true
+      matrix:
+        release: ${{ fromJSON(needs.preflight.outputs.build_releases) }}
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+        architecture: [amd64, arm64]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prepare pinned native Rust builder
+        run: bash tooling/rust-package/setup-ci.sh native
+      - name: Check and build one exact native musl archive
+        env:
+          TAG: ${{ matrix.release.tag }}
+          SEQUENCE: ${{ matrix.release.sequence }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          export TMPDIR="$PWD/.scratch/acceptance/ci-native/t"
+          mkdir -p -m 0700 "$TMPDIR" .scratch/acceptance/ci-native/native
+          cargo fmt --all -- --check
+          cargo clippy --locked --offline --all-targets -- -D warnings
+          cargo test --locked --offline
+          cargo test --locked --offline --manifest-path tooling/rust-package/Cargo.toml
+          # Retained Go fixtures construct their explicit foreign modes under 022.
+          (
+            umask 022
+            go test -p 1 -timeout 30m ./... -count=1
+            go test -race -p 1 -timeout 30m ./... -count=1
+            go vet ./...
+            go mod verify
+          )
+          python3 tooling/rust-package/build_native.py --tag "$TAG" --commit "$GITHUB_SHA" --sequence "$SEQUENCE" --architecture "$ARCHITECTURE" --output ".scratch/acceptance/ci-native/native/sbxr-linux-$ARCHITECTURE.tar.gz" > .scratch/acceptance/ci-native/native/build.json
+          mkdir -m 0700 native
+          cp ".scratch/acceptance/ci-native/native/sbxr-linux-$ARCHITECTURE.tar.gz" .scratch/acceptance/ci-native/native/build.json native/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-${{ matrix.release.tag }}-${{ matrix.architecture }}
+          path: native
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    needs: [preflight, rust-native]
     strategy:
       fail-fast: true
       matrix:
@@ -191,53 +250,26 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: rust-${{ matrix.release.tag }}-*
+          path: native-input
       - name: Build and natively verify the exact four-asset set
         env:
           TAG: ${{ matrix.release.tag }}
           SEQUENCE: ${{ matrix.release.sequence }}
           ARCHITECTURE: ${{ matrix.architecture }}
-          V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
-          if jq -e '.support.scope == "subscription-clean-install-repair" or .support.scope == "subscription-clean-install-only" or .support.scope == "recurring-subscription-upgrade"' <<<"$V3_ATTEMPT" >/dev/null; then
-            go test -p 1 -timeout 30m ./... -count=1
-            go test -race -p 1 -timeout 30m ./... -count=1
-            go vet ./...
-            go mod verify
-          fi
-          mkdir -m 0700 release evidence
-          for target in amd64 arm64; do
-            go run ./cmd/sbxr-release -tag "$TAG" -commit "$GITHUB_SHA" -sequence "$SEQUENCE" -architecture "$target" -output "release/sbxr-linux-$target.tar.gz"
-            if jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
-              python3 .github/scripts/live89-correction-review.py payload "release/sbxr-linux-$target.tar.gz" "$GITHUB_SHA" > "evidence/live89-$target-payload.json"
-            fi
-          done
-          amd64_sha256="$(tar -xOzf release/sbxr-linux-amd64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
-          arm64_sha256="$(tar -xOzf release/sbxr-linux-arm64.tar.gz sbxr | sha256sum | cut -d' ' -f1)"
-          go run ./cmd/sbxr-release bootstrap -version "${TAG#v}" -tag "$TAG" -commit "$GITHUB_SHA" -sequence "$SEQUENCE" -amd64-executable-sha256 "$amd64_sha256" -arm64-executable-sha256 "$arm64_sha256" -output release/install.sh
-          jq -cS .support <<<"$V3_ATTEMPT" | tr -d '\n' > release-support.json
-          go run ./cmd/sbxr-release index -support release-support.json -tag "$TAG" -commit "$GITHUB_SHA" -sequence "$SEQUENCE" -directory release -output release/release-index.json
-          test "$(find release -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
-          go run ./cmd/sbxr-release verify-package -directory release -architecture "$ARCHITECTURE"
-          mkdir -m 0700 inspect
+          mkdir -m 0700 evidence inspect
+          cargo build --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml
+          python3 tooling/rust-package/assemble.py --tool "$PWD/target/release/sbxr-rust-package" --tag "$TAG" --commit "$GITHUB_SHA" --sequence "$SEQUENCE" --amd64 "native-input/rust-$TAG-amd64/sbxr-linux-amd64.tar.gz" --arm64 "native-input/rust-$TAG-arm64/sbxr-linux-arm64.tar.gz" --output release
           tar -xzf "release/sbxr-linux-$ARCHITECTURE.tar.gz" -C inspect
-          machine="$(readelf -h inspect/sbxr | sed -n 's/^  Machine: *//p')"
-          case "$ARCHITECTURE" in
-            amd64) test "$machine" = 'Advanced Micro Devices X86-64' ;;
-            arm64) test "$machine" = AArch64 ;;
-          esac
-          if inspect/sbxr >non-root.out 2>non-root.err; then
-            exit 1
-          fi
-          test ! -s non-root.out
-          grep -Fx 'SBXR requires root authority.' non-root.err
-          printf '0\n' | script -qec "sudo env TERM=xterm-256color LANG=C.UTF-8 '$PWD/inspect/sbxr'" menu.transcript
-          grep -F 'SBXR V3' menu.transcript
-          grep -F 'Proxy status: Not set up' menu.transcript
-          grep -F 'Code: PROXY-INSTALLATION-STATUS-NOT-SET-UP' menu.transcript
-          grep -F 'Start setup' menu.transcript
+          bash tooling/rust-package/closed_dispatch.sh "$PWD/inspect/sbxr" captures
           secret_pattern='SBXR_USER_TOKEN_MARKER_00000000000000abcd|CLOUDFLARE-ROTATED-RUN-TOKEN-MARKER|profile-secret-marker|subscription-secret-marker|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer '
-          if grep -aERq "$secret_pattern" release inspect non-root.out non-root.err menu.transcript; then
+          if grep -aERq "$secret_pattern" release inspect captures; then
             exit 1
           elif test $? -ne 1; then
             exit 1
@@ -268,6 +300,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: native-*
@@ -362,8 +396,8 @@ jobs:
               cp "native/native-$tag-amd64/release/$name" "$directory/$name"
             done
             test "$(find "$directory" -maxdepth 1 -type f -printf '%f\n' | sort)" = "$(printf '%s\n' install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz | sort)"
-            go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture amd64
-            go run ./cmd/sbxr-release verify-package -directory "$directory" -architecture arm64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture amd64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture arm64
             index_sha256="$(sha256sum "$directory/release-index.json" | cut -d' ' -f1)"
             assets="$(for name in install.sh release-index.json sbxr-linux-amd64.tar.gz sbxr-linux-arm64.tar.gz; do jq -cn --arg name "$name" --argjson size "$(stat -c %s "$directory/$name")" --arg sha256 "$(sha256sum "$directory/$name" | cut -d' ' -f1)" '{name:$name,sha256:$sha256,size:$size}'; done | jq -cS -s 'sort_by(.name)')"
             target="$(jq -cnS --argjson assets "$assets" --arg commit "$GITHUB_SHA" --arg index_sha256 "$index_sha256" --arg repository "$GITHUB_REPOSITORY" --argjson sequence "$sequence" --arg tag "$tag" '{assets:$assets,commit:$commit,release_identity:{commit:$commit,release_index_sha256:$index_sha256,repository:$repository,tag:$tag},sequence:$sequence,tag:$tag}')"
@@ -463,6 +497,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: qualification-boundary-input
@@ -493,7 +529,7 @@ jobs:
           jq -cnS --argjson approval "$approval" --arg candidate_failure_state_sha256 "$(sha256sum candidate-failure-state.json | cut -d' ' -f1)" --arg checklist_sha256 "$checklist_sha256" --slurpfile draft_verification_decision candidate-draft-verification-decision.json --slurpfile draft_verification_facts candidate-draft-verification-facts.json --argjson native_evidence "$native_evidence" --arg prior_decision_sha256 "$(sha256sum candidate-draft-verification-decision.json | cut -d' ' -f1)" --slurpfile releases drafts.json --arg source_state "$(jq -r .source_state candidate-preflight-decision.json)" --arg commit "$GITHUB_SHA" --arg path '.github/workflows/candidate.yml' --arg ref "$GITHUB_WORKFLOW_REF" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{approval:$approval,candidate_failure_state_sha256:$candidate_failure_state_sha256,checklist_sha256:$checklist_sha256,draft_verification_decision:$draft_verification_decision[0],draft_verification_facts:$draft_verification_facts[0],native_evidence:$native_evidence,prior_decision_sha256:$prior_decision_sha256,releases:$releases[0],rescue:null,schema:"sbxr-release-qualification-facts-v1",source_state:$source_state,stage:"qualification-boundary",workflow:{commit:$commit,path:$path,ref:$ref,run_id:$run_id,run_url:$run_url}}' | tr -d '\n' > qualification-boundary-facts.json
           test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
           # Recheck Latest after builds and approval, not just at preflight.
-          go run ./cmd/sbxr-release verify-public-latest > current-source-verification.json
+          cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > current-source-verification.json
           jq -e --slurpfile current current-source-verification.json '.latest_tag == $current[0].release_identity.tag and $current[0].outcome == "accepted" and any(.releases[]; .tag == $current[0].release_identity.tag and .commit == $current[0].release_identity.commit and .index.sha256 == $current[0].release_identity.release_index_sha256)' candidate-preflight-facts.json >/dev/null
           if ! jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
             gh api repos/KaringX/karing/releases/latest > karing-latest.json || { printf '%s\n' 'Official Karing metadata lookup failed.' >&2; exit 1; }
