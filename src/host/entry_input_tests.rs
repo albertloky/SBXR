@@ -29,6 +29,8 @@ impl Fixture {
     }
     pub(in crate::host) fn new() -> Self {
         let f = Self::absent();
+        std::fs::create_dir_all(f.stage()).unwrap();
+        std::fs::set_permissions(f.stage(), std::fs::Permissions::from_mode(0o700)).unwrap();
         f.write(
             "qualification-manifest.json",
             &crate::release_acquisition::fixture_candidate_manifest(),
@@ -71,6 +73,20 @@ impl Drop for Fixture {
     }
 }
 #[test]
+fn fixture_staging_has_explicit_private_permissions() {
+    let f = Fixture::new();
+    for path in [f.path.clone(), f.stage()] {
+        assert_eq!(
+            std::fs::symlink_metadata(path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700
+        );
+    }
+}
+#[test]
 fn zero_argument_source_selection_defaults_to_stable_only_when_handoff_is_absent() {
     let f = Fixture::absent();
     assert!(matches!(
@@ -102,6 +118,7 @@ fn any_missing_required_input_refuses_instead_of_silently_selecting_stable() {
     }
     let f = Fixture::absent();
     std::fs::create_dir_all(f.stage()).unwrap();
+    std::fs::set_permissions(f.stage(), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(select(&f.root(), f.time).is_err());
 }
 #[test]
