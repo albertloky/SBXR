@@ -228,6 +228,7 @@ fn unresolved_dns_is_cancelled_before_any_socket_or_late_success() {
     .with_root_certificates(roots())
     .with_no_client_auth();
     let mut t = HttpsTransport {
+        scope: Scope::Public,
         runtime: tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

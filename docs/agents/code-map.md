@@ -31,7 +31,9 @@ Exact installed-byte acquisition is `src/release_acquisition.rs`; its
 `candidate.rs` submodule authenticates the signed empty-source HTTP candidate
 manifest and keeps candidate archive/installed authority distinct from stable
 proof. It shares bounded asset/archive/ELF verification with the stable route;
-public/private native admission and protected gateway TLS remain closed work.
+public/private native admission remains closed. The private-root, fixed-route
+`release_https::CandidateGatewayTransport` composes the retained qualification
+gateway without changing public/system TLS trust or artifact authentication.
 Archive decoding is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
 public proofs and the repository evidence example cover actual acquisition.
 Runtime-start descriptor lending and serving composition are `src/runtime_handoff.rs`.

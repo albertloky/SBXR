@@ -2018,3 +2018,75 @@ Legacy HTTPS creation, incoming Update and automatic migration remain excluded.
 No full listener-dependent suite, denied listener/ps/private-scratch operation,
 blocked CI closeout, source transfer, push, VPS/root effect, signing or publication
 was attempted in this increment.
+
+
+## Protected candidate gateway TLS (base 275c0c6)
+
+`release_https::CandidateGatewayTransport::from_retained_gateway(ca_sha256,
+&budget)` composes the retained gateway with private TLS roots, without changing
+ambient/public trust. The caller supplies the independently reviewed exact CA PEM
+SHA-256; it is never read from an environment flag or learned from the gateway.
+The native constructor is Linux/root-only and reads only
+`/root/sbxr-qualification-v3/ca.crt`, through safe nonsymlink parents and a protected
+0700 directory. Its single-link bounded regular 0600/0644 file is checked before
+and after reading, against its named inode and reopened directory, with exact
+bytes/digest and strict single-certificate PEM checks. No writer/CA installation,
+private key, arbitrary path/URL override, new dependency or system trust operation
+was added.
+
+The per-client resolver pins `api.github.com` to the retained `127.0.0.2:443`
+route, preserving the logical Host/SNI and ordinary chain, hostname, time and
+signature verification. It never falls back to public DNS for this destination.
+Only SBXR's exact Latest route and asset IDs 1–4 are admitted. Every redirect and
+unrelated public-IP probe refuses. Original selection expiry is enforced before,
+during and after transfer, even with a fresh longer caller budget; cancellation,
+HTTP byte/encoding/header bounds and all artifact signatures remain mandatory.
+The type implements the existing acquisition transport directly for
+`AuthenticatedCandidateArchive::acquire`; it issues no stable/process/host-change
+authority. Both native gates are unchanged.
+
+Final local checks passed **61 selected product tests**: 7 gateway, 1 existing
+pending-DNS/no-socket, 15 acquisition, 26 artifact-trust, 2 genuine public proof
+and 10 menu/gate regressions. Both compile-fail doctests, format, strict all-target
+Clippy and the Mac build passed. Seven mutations were caught: CA pin, file mode,
+single link, fixed route set, redirect refusal, original deadline and TLS-root
+wiring. Sources were restored byte-for-byte and checks ran on restored bytes.
+Initial fixture compilation warned about mutable const temporaries; local reader
+variables corrected this, and final strict Clippy passed without suppression.
+Evidence: `.scratch/acceptance/rust-gateway/final-checks.json`, `mutations.json` and
+individual logs. The temporary fixture directory is empty.
+
+TLS tests transfer records between real rustls client/server connections in
+memory using the unchanged existing public synthetic fixture keys. They verify a
+valid chain and refusal for wrong hostname, public-root mismatch, expired time
+and tampered certificate signature, with no listener or network socket. CA-file,
+permissions/link/parent, pin, deadline and cancelled-acquisition tests use temporary
+fixture directories. Real reqwest/gateway/NAT transfer, native root staging and
+Linux packaged startup are unverified here. Listener-dependent tests and the full
+product suite were not run; no denied listener/ps/private-scratch access or blocked
+CI closeout was retried. No production effects, credentials, signing, workflow,
+VPS contact, system trust/network changes, source upload/push or publication ran.
+
+The genuine preserved bundle authenticates manifest digest
+`0add26026bed41b9bebd770353e6d4249cf30bbf3090c618e59f619b0c30d476`, source
+`e1fa2a074a11c7dc11af4348845025901499a2cc`. The allowed read-only public inventory
+covered all 189 advertised releases in two bounded GitHub API pages. Matching
+[v2.0.12](https://github.com/albertloky/SBXR/releases/tag/v2.0.12) and
+[v2.0.13](https://github.com/albertloky/SBXR/releases/tag/v2.0.13) are failed
+prereleases exposing only the four product assets. No advertised manifest asset
+or matching local raw manifest was found. Their public notes refer to old Actions
+artifacts, which were not fetched; a complete positive signed-current-candidate
+acquisition remains unverified. This proves absence from checked sources, not
+absence everywhere. No manifest was reconstructed or paired with a false
+signature. Public response hashes, asset inventory and search scope are retained
+in `.scratch/acceptance/rust-gateway/manifest-search.json`.
+
+Remaining [activation prerequisites](rust-acceptance.md#protected-candidate-gateway-tls-base-275c0c6)
+are concrete: compose the reviewed CA pin and distinct candidate/stable proof
+with protected Installed Record, executable/current process and compiled identity
+in native observation/Owner admission; preserve offline exact-pair/handoff/lock/
+cancellation proof in private startup; obtain the matching current signed manifest
+and artifact positive evidence; then qualify the exact Linux packaged gateway,
+public/private startup and recovery before opening gates. Removing a refusal or
+accepting a structural proof alone cannot satisfy these prerequisites. The HTTP
+clean-install exclusions remain unchanged.

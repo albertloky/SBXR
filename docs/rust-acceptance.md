@@ -137,21 +137,43 @@ selection; Cancel/EOF cannot approve effects. Repeated refusal, stale authority
 and interrupted input/response are covered by offline regressions. All public
 and private production gates and the public TLS root store remain unchanged.
 
-Two source composition blockers remain before an authentic packaged journey:
+## Protected candidate gateway TLS (base 275c0c6)
 
-1. `release_https::HttpsTransport::new` still uses embedded public roots. The
-   retained qualification gateway uses a temporary system CA and host routes.
-   Compose a reviewed protected candidate transport for its authenticated fixed
-   destinations, preserving hostname/TLS validation, redirect rules, bounds and
-   all artifact signatures. Do not replace public trust or add arbitrary URL/CA
-   overrides. No system trust-store changes follow from local implementation.
-2. `host::require_live_adapter` still unconditionally refuses in public Owner
-   and private startup. Compose explicitly scoped candidate versus stable
-   installation/current-process proof through protected native observation,
-   Owner/runtime startup, retained locks and cancellation; bind admission to the
-   actual reviewed candidate and qualified prerequisites. A candidate manifest
-   is delivery authority, not a stable/live Acceptance Record. Removing the
-   gate alone or coercing its proof into stable authority is insufficient.
+`release_https::CandidateGatewayTransport::from_retained_gateway` now takes an
+independently reviewed CA-file SHA-256 and reads only
+`/root/sbxr-qualification-v3/ca.crt` on Linux/root. The snapshot requires safe
+nonsymlink parents, a 0700 root-owned staging directory and one bounded regular
+single-link 0600/0644 CA file, with inode/metadata/namespace and digest checks.
+Its private client uses that one explicit anchor, normal certificate/hostname/
+signature/time verification and the exact retained `127.0.0.2:443` route with
+`api.github.com` as URL/SNI identity. It permits only the fixed SBXR Latest path
+and asset IDs 1–4, rejects every redirect and unrelated probe, and cannot outlive
+the original selection deadline. Existing HTTP bounds, cancellation and all
+artifact authentication stay mandatory. Public roots, system trust stores and
+public/private activation gates are unchanged. Tests use in-memory TLS and
+protected temporary files; no listener or real gateway/NAT route is exercised.
+
+One source activation blocker remains before an authentic packaged journey:
+
+- Public Owner: `host::require_live_adapter` unconditionally refuses before
+  `host::owner::run_public_unreleased`. Compose protected native current/installed
+  observation with explicit candidate versus stable authenticated results;
+  `NativeObserver::authenticate_current` and `NativeOwnerSources` currently accept
+  stable proof only. Supply the independently reviewed CA digest to the scoped
+  gateway constructor and bind the selected release/index, Installed Record,
+  complete executable/current-process bytes and compiled build identity before
+  retaining Owner authority. A candidate manifest is delivery authority, not a
+  stable/live Acceptance Record. Removing the gate alone is insufficient.
+- Private startup: `host::runtime::native_dispatch::released_build` shares the
+  closed gate. Preserve its offline AF_UNIX-only sandbox contract: exact loaded
+  build/protected installed pair, same-release ownership, authenticated one-use
+  handoff, retained locks and cancellation must compose before effects. Do not
+  add online CA/release acquisition to ordinary private startup or treat a build
+  marker, environment flag or structural ELF proof as cryptographic trust.
+
+Activation also needs the complete positive signed current-candidate fixture and
+Linux packaged public/private startup, actual gateway HTTP/NAT, systemd/cgroup and
+recovery qualification. This local TLS increment grants none of those effects.
 
 The existing genuine candidate bundle verifies, but its matching raw manifest
 (digest `0add26026bed41b9bebd770353e6d4249cf30bbf3090c618e59f619b0c30d476`)
@@ -160,7 +182,14 @@ synthetic JSON; the public acquisition refusal uses the genuine signature and
 wrong raw bytes and proves no asset GET. A complete positive signed candidate
 acquisition remains unverified until exact matching signed manifest/artifact
 bytes are available. No test-only signature constructor was added. This is an
-evidence prerequisite, not permission to sign or retrieve a new candidate.
+evidence prerequisite, not permission to sign a new candidate. The allowed public
+release-asset inventory found the signature's source at failed v2.0.12/v2.0.13;
+all 189 advertised releases contained no qualification-manifest asset. Those
+public notes point to old Actions artifacts, which were not fetched. Searches of
+tracked fixtures and the relevant local acquisition evidence found no matching
+raw manifest. These findings establish absence from the checked sources, not
+absence everywhere. The old signature alone cannot authorize a current Rust
+clean-install manifest or turn those failed releases into qualified releases.
 
 After those source paths are complete, prepare one reviewed exact clean-install
 candidate with all four asset digests, authentic workflow/signature/native proofs,
