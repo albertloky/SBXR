@@ -155,8 +155,22 @@ def kill_adopted_children():
             os.close(descriptor)
 
 
+class PhaseTiming:
+    """Details-only bounded events; never transcript bytes or input values."""
+    def __init__(self, sink, deadline):
+        self.sink = sink
+        self.deadline = deadline
+
+    def __call__(self, event, input_class="none"):
+        now = time.monotonic()
+        print("SBXR_MENU_PHASE " + json.dumps({
+            "event": event, "class": input_class, "monotonic": round(now, 6),
+            "remaining_ms": round((self.deadline - now) * 1000, 3),
+        }, sort_keys=True), file=self.sink, flush=True)
+
+
 class LineStream:
-    def __init__(self, stream, sink, cancelled=None, owner_exited=None):
+    def __init__(self, stream, sink, cancelled=None, owner_exited=None, timing=None):
         self.stream = stream
         self.sink = sink
         self.buffer = bytearray()
@@ -164,6 +178,7 @@ class LineStream:
         self.cancelled = cancelled or (lambda: False)
         self.owner_exited = owner_exited or (lambda: False)
         self.last_code = None
+        self.timing = timing or (lambda *args: None)
 
     def line(self, deadline):
         if self.cancelled():
@@ -193,6 +208,9 @@ class LineStream:
         raw, _, rest = self.buffer.partition(b"\n")
         self.buffer = bytearray(rest)
         rendered = raw + b"\n"
+        details_prompt = raw.rstrip(b"\r") == DETAILS_PROMPT.encode("ascii")
+        if details_prompt:
+            self.timing("prompt-received", "details-continuation")
         self.sink.write(rendered)
         self.sink.flush()
         # A slow transcript write must not turn a late prompt/result into
@@ -201,6 +219,8 @@ class LineStream:
             raise InterruptedError("menu session interrupted")
         if time.monotonic() >= deadline:
             raise ProtocolError("output-deadline")
+        if details_prompt:
+            self.timing("prompt-accepted", "details-continuation")
         try:
             line = raw.rstrip(b"\r").decode("utf-8")
         except UnicodeDecodeError as error:
@@ -212,8 +232,9 @@ class LineStream:
 
 
 class MenuSession:
-    def __init__(self, executable, sink, deadline, cancelled=None, *, protected_wrapper=False):
+    def __init__(self, executable, sink, deadline, cancelled=None, *, protected_wrapper=False, timing=None):
         self.deadline = deadline
+        self.timing = timing or (lambda *args: None)
         self.protected_wrapper = protected_wrapper
         if protected_wrapper and not sys.platform.startswith("linux"):
             raise ProtocolError("protected-wrapper-requires-linux")
@@ -232,11 +253,14 @@ class MenuSession:
                 return child_exited(self.process.pid)
             except ChildProcessError:
                 return True
-        self.stream = LineStream(self.process.stdout, sink, self.cancelled, owner_exited)
+        self.stream = LineStream(self.process.stdout, sink, self.cancelled, owner_exited, self.timing)
         self.cleaned = False
         self.returncode = None
 
     def write(self, value):
+        input_class = ("continuation" if value == "\n" else "exit" if value == "0\n" else
+                       "selection" if re.fullmatch(r"[1-9][0-9]*\n", value) else "other")
+        self.timing("input-attempt", input_class)
         if self.cancelled():
             raise InterruptedError("menu session interrupted")
         # Covers selection, approval and continuation for every caller,
@@ -248,6 +272,7 @@ class MenuSession:
             self.process.stdin.flush()
         except (BrokenPipeError, OSError) as error:
             raise ProtocolError("input-closed") from error
+        self.timing("input-sent", input_class)
 
     def choose(self, label):
         selection = None
@@ -308,14 +333,17 @@ class MenuSession:
                 return
 
     def return_to_menu(self):
+        self.timing("return-wait")
         frame = False
         while True:
             line = self.stream.line(self.deadline)
             if line is None:
                 raise ProtocolError("exit-before-return")
             if line == "SBXR V3":
+                self.timing("return-frame")
                 frame = True
             elif frame and line == "0. Exit":
+                self.timing("return-ready")
                 self.write("0\n")
                 return
 
@@ -486,7 +514,8 @@ def drive(args, cancelled=None):
     if time.monotonic() >= deadline:
         raise ProtocolError("deadline-before-start")
     session = MenuSession(args.executable, sys.stdout.buffer, deadline, cancelled,
-                          protected_wrapper=args.protected_wrapper)
+                          protected_wrapper=args.protected_wrapper,
+                          timing=PhaseTiming(sys.stderr, deadline) if args.mode == "details" else None)
     try:
         session.choose(args.label)
         if args.mode == "action" and args.label == "Start setup":

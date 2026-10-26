@@ -146,7 +146,7 @@ data=json.load(sys.stdin)
 class Lines:
  def __init__(self):self.items=iter(data['transcript'].splitlines())
  def line(self,_):return next(self.items,None)
-s=object.__new__(driver.MenuSession);s.stream=Lines();s.deadline=0
+s=object.__new__(driver.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args:None
 writes=[];s.write=writes.append
 s.choose(data['label'])
 if data['label']=='View details':

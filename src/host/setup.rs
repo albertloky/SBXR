@@ -29,6 +29,45 @@ impl SetupObservation {
         self.stopped
     }
 }
+/// Closed diagnostic vocabulary: never contains command output, paths or secrets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetupGuard {
+    Effects,
+    OwnershipStore,
+    OwnershipRecord,
+    Recovery,
+    Observation,
+    Query(super::process::Query),
+    NativeAuthority,
+    Transactions,
+    Locks,
+    Network,
+    Platform,
+    Admission,
+    Clock,
+    InstalledPair,
+    ProxyResources,
+    Port443,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetupFailure {
+    pub(crate) guard: SetupGuard,
+    pub(crate) cause: HostError,
+}
+impl SetupFailure {
+    pub(crate) fn new(guard: SetupGuard, cause: HostError) -> Self {
+        Self { guard, cause }
+    }
+}
+impl std::fmt::Display for SetupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Readiness guard: {:?}; result: {:?}.",
+            self.guard, self.cause
+        )
+    }
+}
 pub trait SetupHost {
     fn root(&self) -> &Path;
     fn uid(&self) -> u32;
@@ -38,6 +77,13 @@ pub trait SetupHost {
         true
     }
     fn inspect_setup(&self, release: &ReleaseIdentity) -> Result<SetupObservation, HostError>;
+    fn inspect_setup_diagnostic(
+        &self,
+        release: &ReleaseIdentity,
+    ) -> Result<SetupObservation, SetupFailure> {
+        self.inspect_setup(release)
+            .map_err(|e| SetupFailure::new(SetupGuard::Observation, e))
+    }
     fn apply_setup(
         &mut self,
         operation: Operation,

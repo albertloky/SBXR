@@ -104,11 +104,122 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                 super().flush()
         read_fd, write_fd = os.pipe()
         with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0) as writer:
-            writer.write(b"Update SBXR? [y/N]\n")
-            stream = menu.LineStream(reader, Sink())
+            writer.write((menu.DETAILS_PROMPT + "\n").encode())
+            journal = io.StringIO()
+            stream = menu.LineStream(reader, Sink(), timing=menu.PhaseTiming(journal, 10.0))
             with patch.object(menu.time, "monotonic", side_effect=lambda: clock[0]):
                 with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
                     stream.line(10.0)
+            self.assertIn('"event": "prompt-received"', journal.getvalue())
+            self.assertNotIn('"event": "prompt-accepted"', journal.getvalue())
+
+    def test_details_receipt_before_at_after_deadline_keeps_timing_and_refuses_late_prompt(self):
+        for received in (9.0, 10.0, 11.0):
+            with self.subTest(received=received):
+                clock = [0.0]
+                journal = io.StringIO()
+                read_fd, write_fd = os.pipe()
+                with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0) as writer:
+                    writer.write((menu.DETAILS_PROMPT + "\n").encode())
+                    native_read = os.read
+                    def read(fd, count):
+                        block = native_read(fd, count)
+                        clock[0] = received
+                        return block
+                    stream = menu.LineStream(reader, io.BytesIO(), timing=menu.PhaseTiming(journal, 10.0))
+                    with patch.object(menu.time, "monotonic", side_effect=lambda: clock[0]), \
+                            patch.object(menu.os, "read", side_effect=read):
+                        if received < 10:
+                            self.assertEqual(stream.line(10.0), menu.DETAILS_PROMPT)
+                        else:
+                            with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
+                                stream.line(10.0)
+                events = [json.loads(line.removeprefix("SBXR_MENU_PHASE ")) for line in journal.getvalue().splitlines()]
+                self.assertEqual([e["event"] for e in events], ["prompt-received"] +
+                                 (["prompt-accepted"] if received < 10 else []))
+                self.assertEqual(events[0]["monotonic"], received)
+
+    def test_details_timing_distinguishes_sent_continuation_from_return_wait_timeout(self):
+        clock = [0.0]
+        journal = io.StringIO()
+        timing = menu.PhaseTiming(journal, 10.0)
+        child = ("import sys; print('" + menu.DETAILS_PROMPT + "',flush=True); "
+                 "sys.stdin.readline(); sys.stdin.read()")
+        session = None
+        try:
+            with patch.object(menu.time, "monotonic", side_effect=lambda: clock[0]):
+                session = menu.MenuSession([sys.executable, "-c", child], io.BytesIO(), 10.0, timing=timing)
+                session.wait_unconfirmed_marker(menu.DETAILS_PROMPT)
+                session.write("\n")
+                clock[0] = 11.0
+                with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
+                    session.return_to_menu()
+            events = [json.loads(line.removeprefix("SBXR_MENU_PHASE ")) for line in journal.getvalue().splitlines()]
+            self.assertEqual([e["event"] for e in events], ["prompt-received", "prompt-accepted",
+                             "input-attempt", "input-sent", "return-wait"])
+            self.assertEqual(events[3]["class"], "continuation")
+            self.assertLess(events[3]["monotonic"], events[4]["monotonic"])
+        finally:
+            if session is not None:
+                session.stop()
+                self.assertTrue(session.cleaned)
+                self.assertIsNotNone(session.process.returncode)
+                session.process.stdin.close()
+                session.process.stdout.close()
+
+    def test_delayed_return_frame_cannot_bypass_deadline_after_continuation(self):
+        for received in (9.0, 10.0, 11.0):
+            with self.subTest(received=received):
+                clock = [0.0]
+                journal, transcript = io.StringIO(), io.BytesIO()
+                child = ("import sys; print('" + menu.DETAILS_PROMPT + "',flush=True); "
+                         "sys.stdin.readline(); print('SBXR V3\\n0. Exit',flush=True); sys.stdin.read()")
+                session = None
+                native_read = os.read
+                def read(fd, count):
+                    block = native_read(fd, count)
+                    if b"SBXR V3" in block:
+                        clock[0] = received
+                    return block
+                try:
+                    with patch.object(menu.time, "monotonic", side_effect=lambda: clock[0]), \
+                            patch.object(menu.os, "read", side_effect=read):
+                        session = menu.MenuSession([sys.executable, "-c", child], transcript, 10.0,
+                                                   timing=menu.PhaseTiming(journal, 10.0))
+                        session.wait_unconfirmed_marker(menu.DETAILS_PROMPT)
+                        session.write("\n")
+                        if received < 10:
+                            session.return_to_menu()
+                        else:
+                            with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
+                                session.return_to_menu()
+                    events = [json.loads(line.removeprefix("SBXR_MENU_PHASE ")) for line in journal.getvalue().splitlines()]
+                    sent = [e["class"] for e in events if e["event"] == "input-sent"]
+                    self.assertEqual(sent, ["continuation"] + (["exit"] if received < 10 else []))
+                    self.assertIn(b"SBXR V3", transcript.getvalue())
+                    self.assertEqual(any(e["event"] == "return-frame" for e in events), received < 10)
+                finally:
+                    if session is not None:
+                        session.stop()
+                        self.assertTrue(session.cleaned)
+                        session.process.stdin.close()
+                        session.process.stdout.close()
+
+    def test_details_timing_does_not_record_input_payload(self):
+        journal = io.StringIO()
+        session = menu.MenuSession([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                                   io.BytesIO(), time.monotonic() + 5,
+                                   timing=menu.PhaseTiming(journal, time.monotonic() + 5))
+        try:
+            session.write("SECRET-SENTINEL /private/path\n")
+            self.assertNotIn("SECRET-SENTINEL", journal.getvalue())
+            self.assertNotIn("/private/path", journal.getvalue())
+            self.assertEqual([json.loads(line.removeprefix("SBXR_MENU_PHASE "))["class"]
+                              for line in journal.getvalue().splitlines()], ["other", "other"])
+        finally:
+            session.stop()
+            session.process.stdin.close()
+            session.process.stdout.close()
 
     def test_expiry_between_review_and_input_never_sends_confirmation(self):
         for label, answer in (("Update", "y\n"), ("Recover", "y\n"),
@@ -360,6 +471,23 @@ class MenuSessionDriverTest(unittest.TestCase):
                                   env=env,text=True,capture_output=True,timeout=10)
             events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()] if (root/"events.jsonl").exists() else []
             return result,events
+
+    def test_details_records_prompt_input_and_return_phases_without_input_values(self):
+        spec = {"label": "View details", "kind": "details"}
+        result, events = self.invoke(spec, "details", "View details")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events, [{"selected": "7"}, {"continue": ""}, {"exit": "0"}])
+        journal = [json.loads(line.removeprefix("SBXR_MENU_PHASE "))
+                   for line in result.stderr.splitlines() if line.startswith("SBXR_MENU_PHASE ")]
+        self.assertEqual([entry["event"] for entry in journal], [
+            "input-attempt", "input-sent", "prompt-received", "prompt-accepted",
+            "input-attempt", "input-sent", "return-wait", "return-frame", "return-ready",
+            "input-attempt", "input-sent",
+        ])
+        self.assertEqual([e["class"] for e in journal if e["event"] == "input-sent"],
+                         ["selection", "continuation", "exit"])
+        self.assertTrue(all(set(e) == {"event", "class", "monotonic", "remaining_ms"} for e in journal))
+        self.assertEqual(sorted(e["monotonic"] for e in journal), [e["monotonic"] for e in journal])
 
     def test_setup_requires_exact_prompt_then_exits_returned_frame(self):
         spec={"label":"Start setup","wizard":True,"prompt":"Apply setup? [y/N]","kind":"action","expected":"PROXY-INSTALLATION-SETUP-COMPLETE"}

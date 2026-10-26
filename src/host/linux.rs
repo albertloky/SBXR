@@ -18,7 +18,7 @@ pub use observation::{NativeObserver, ProtectedConfiguration, ReadOnlyObservatio
 use observation::{read_configuration, read_installed, read_ownership};
 
 use super::{
-    HostError, Operation, SetupHost, SetupObservation,
+    HostError, Operation, SetupFailure, SetupGuard, SetupHost, SetupObservation,
     filesystem::{Kind, ProtectedFs, Resource},
     process::{Cancellation, CommandOutput, CommandRunner, NativeReadOnly, Query},
 };
@@ -274,11 +274,10 @@ impl<R: CommandRunner> LinuxHost<R> {
         self.interruption = phase
     }
     fn facts(&self) -> Result<Facts, HostError> {
-        if self.material.offline {
-            Facts::removal(&self.runner, &self.stop)
-        } else {
-            Facts::query(&self.runner, &self.stop)
-        }
+        self.facts_guarded(&mut SetupGuard::Observation)
+    }
+    fn facts_guarded(&self, guard: &mut SetupGuard) -> Result<Facts, HostError> {
+        Facts::query_inner(&self.runner, &self.stop, !self.material.offline, guard)
     }
     fn native_authorized(&self) -> Result<(), HostError> {
         if self.stop.cancelled() {
@@ -290,18 +289,22 @@ impl<R: CommandRunner> LinuxHost<R> {
         }
         guard.verify()
     }
-    fn admission(&self, facts: &Facts) -> Result<(), HostError> {
+    fn admission(&self, facts: &Facts, guard: &mut SetupGuard) -> Result<(), HostError> {
+        *guard = SetupGuard::NativeAuthority;
         if self.native_mode {
             self.native_authorized()?;
         }
+        *guard = SetupGuard::Transactions;
         if !super::lifecycle::transactions_absent(&self.fs)? {
             return Err(HostError::Foreign);
         }
         let a = &self.admission;
+        *guard = SetupGuard::Locks;
         if let Some(lock) = &self.lock {
             lock.verify()?;
             lock.packages_available()?;
         }
+        *guard = SetupGuard::Network;
         if self.native_mode && !self.material.offline {
             let direction = observation::read_ownership(&self.fs)?.map(|r| r.recovery_direction());
             let require_bind = !matches!(
@@ -318,15 +321,20 @@ impl<R: CommandRunner> LinuxHost<R> {
                 return Err(HostError::Unsafe);
             }
         }
+        *guard = SetupGuard::Platform;
         if !a.root || a.architecture != "amd64" || !ubuntu(&self.fs)? {
             return Err(HostError::UnsupportedHost);
         }
+        *guard = SetupGuard::Admission;
         if !crate::records::ownership_public_ipv4(&a.public_ipv4)
             || !self.material.offline && !a.destination_compatible
             || !a.host_lock_held
             || !a.package_locks_held
-            || !self.material.offline && !facts.clock
         {
+            return Err(HostError::Unsafe);
+        }
+        *guard = SetupGuard::Clock;
+        if !self.material.offline && !facts.clock {
             return Err(HostError::Unsafe);
         }
         Ok(())

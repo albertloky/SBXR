@@ -53,6 +53,14 @@ preserved outside that cleanup authority. Absence checks
 treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
+Details mode writes bounded `SBXR_MENU_PHASE` events to stderr with monotonic
+receipt/acceptance times, input classes, and return-frame progress. `prompt-received`
+means a complete continuation line was extracted before transcript writing;
+`prompt-accepted` follows the existing post-write deadline check. `input-sent`
+means stdin write/flush completed, not that the product consumed it. No input
+value, transcript line, path, or credential enters these events. A captured late
+prompt still refuses; timing does not extend any deadline.
+
 The former `v3-clean` runner and forced-interruption procedure are retired;
 their source remains in Git history. The shared menu, identity and cleanup
 helpers remain available for current callers.

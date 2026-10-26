@@ -26,7 +26,7 @@ pub mod subscription;
 pub mod system;
 use crate::records::SetupPhase;
 pub use fixture::{FIXTURE_CONFIGURATION, FixtureHost, HostObservation};
-pub use setup::{SetupHost, SetupObservation};
+pub use setup::{SetupFailure, SetupGuard, SetupHost, SetupObservation};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

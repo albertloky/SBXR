@@ -4,7 +4,9 @@ use super::{ExecutionMode, Interface, PreparedAction, PreparedBasis, Review};
 use crate::{
     domain::{Action, Availability, Confirmation, Outcome, Result as ActionResult, Status},
     durable::{OwnershipStore, Recovery, Snapshot},
-    host::{FixtureHost, HostError, Operation, SetupHost, SetupObservation},
+    host::{
+        FixtureHost, HostError, Operation, SetupFailure, SetupGuard, SetupHost, SetupObservation,
+    },
     records::{OwnershipRecord, RecoveryDirection, ReleaseIdentity, SetupPhase},
 };
 #[cfg(test)]
@@ -59,12 +61,18 @@ impl<H: SetupHost> StandardInstallation<H> {
             ExecutionMode::Fixture
         }
     }
-    fn state(&self) -> Result<State, ()> {
+    fn state(&self) -> Result<State, SetupFailure> {
         if !self.host.effects_available() {
-            return Err(());
+            return Err(SetupFailure::new(
+                SetupGuard::Effects,
+                HostError::LiveUnavailable,
+            ));
         }
-        let snapshot = self.store.load().map_err(|_| ())?;
-        let observation = self.host.inspect_setup(&self.release).map_err(|_| ())?;
+        let snapshot = self
+            .store
+            .load()
+            .map_err(|_| SetupFailure::new(SetupGuard::OwnershipStore, HostError::Unsafe))?;
+        let observation = self.host.inspect_setup_diagnostic(&self.release)?;
         if snapshot.current.as_ref().is_some_and(|current| {
             current.record.schema() != 1
                 || current.record.tunnel_authority().is_some()
@@ -72,7 +80,10 @@ impl<H: SetupHost> StandardInstallation<H> {
                 || current.record.configuration_sha256() != self.host.configuration_sha256()
                 || current.record.lock_provisioning_sha256().is_none()
         }) {
-            return Err(());
+            return Err(SetupFailure::new(
+                SetupGuard::OwnershipRecord,
+                HostError::Foreign,
+            ));
         }
         let (status, action) = match snapshot.recovery() {
             Recovery::Absent if observation.empty() => (
@@ -83,16 +94,21 @@ impl<H: SetupHost> StandardInstallation<H> {
             ),
             Recovery::Cleanup => (Status::SetupIncomplete, Some(Action::FinishCleanup)),
             Recovery::FinishSetup if observation.ready_to_activate() => {
-                let phase = snapshot.current.as_ref().ok_or(())?.record.phase();
+                let phase = snapshot
+                    .current
+                    .as_ref()
+                    .ok_or(SetupFailure::new(SetupGuard::Recovery, HostError::Unsafe))?
+                    .record
+                    .phase();
                 if phase == SetupPhase::ServiceEnabled && !observation.service_enabled()
                     || phase == SetupPhase::ServiceStarted && !observation.running()
                 {
-                    return Err(());
+                    return Err(SetupFailure::new(SetupGuard::Recovery, HostError::Unsafe));
                 }
                 (Status::SetupIncomplete, Some(Action::FinishSetup))
             }
             Recovery::Running if observation.running() => (Status::Running, None),
-            _ => return Err(()),
+            _ => return Err(SetupFailure::new(SetupGuard::Recovery, HostError::Unsafe)),
         };
         Ok(State {
             snapshot,
@@ -103,8 +119,9 @@ impl<H: SetupHost> StandardInstallation<H> {
     }
     pub fn review(&self, action: Action) -> Review {
         *self.owner.borrow_mut() = Rc::new(());
-        let Ok(state) = self.state() else {
-            return Review{mode:self.mode(),details:vec!["Host authority could not be verified. Preserve unknown state; real deployment is unavailable.".into()],status:Status::ProblemDetected,legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("Host ownership or observations are unsafe or unsupported. No deployment action is available."),prepared:None};
+        let state = match self.state() {
+            Ok(state) => state,
+            Err(failure) => return Review{mode:self.mode(),details:vec!["Host authority could not be verified. Preserve unknown state; real deployment is unavailable.".into(), failure.to_string()],status:Status::ProblemDetected,legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("Host ownership or observations are unsafe or unsupported. No deployment action is available."),prepared:None},
         };
         let mut legal_actions = vec![Action::ViewDetails];
         legal_actions.extend(state.action);

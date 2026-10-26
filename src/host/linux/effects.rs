@@ -62,6 +62,14 @@ impl<R: CommandRunner> SetupHost for LinuxHost<R> {
     fn inspect_setup(&self, release: &ReleaseIdentity) -> Result<SetupObservation, HostError> {
         self.inspect_setup_profile(release, false)
     }
+    fn inspect_setup_diagnostic(
+        &self,
+        release: &ReleaseIdentity,
+    ) -> Result<SetupObservation, SetupFailure> {
+        let mut guard = SetupGuard::Observation;
+        self.inspect_setup_profile_guarded(release, false, &mut guard)
+            .map_err(|cause| SetupFailure::new(guard, cause))
+    }
     fn apply_setup(
         &mut self,
         operation: Operation,
@@ -76,9 +84,18 @@ impl<R: CommandRunner> LinuxHost<R> {
         release: &ReleaseIdentity,
         tunnel: bool,
     ) -> Result<SetupObservation, HostError> {
+        self.inspect_setup_profile_guarded(release, tunnel, &mut SetupGuard::Observation)
+    }
+    fn inspect_setup_profile_guarded(
+        &self,
+        release: &ReleaseIdentity,
+        tunnel: bool,
+        guard: &mut SetupGuard,
+    ) -> Result<SetupObservation, HostError> {
         if self.stop.cancelled() {
             return Err(HostError::Cancelled);
         }
+        *guard = SetupGuard::OwnershipRecord;
         let bound = observation::read_ownership(&self.fs)?;
         if bound
             .as_ref()
@@ -96,8 +113,9 @@ impl<R: CommandRunner> LinuxHost<R> {
         {
             return Err(HostError::Foreign);
         }
-        let facts = self.facts()?;
-        self.admission(&facts)?;
+        let facts = self.facts_guarded(guard)?;
+        self.admission(&facts, guard)?;
+        *guard = SetupGuard::InstalledPair;
         let (installed, record_proof) = self
             .fs
             .raw(
@@ -132,6 +150,7 @@ impl<R: CommandRunner> LinuxHost<R> {
             "{}:{record_proof:?}:{exec_proof:?}:{:?}",
             facts.fingerprint, self.admission
         );
+        *guard = SetupGuard::ProxyResources;
         let key = self.hashed_file(KEY, &self.material.key_sha256, 0o644, &mut fingerprint)?;
         let source = self.file(SOURCE, APT_SOURCE, 0o644, &mut fingerprint)?;
         let package_default = self.package_default(bound.as_ref(), &facts, &mut fingerprint)?;
@@ -299,6 +318,7 @@ impl<R: CommandRunner> LinuxHost<R> {
         if self.material.offline && bound.is_none() && !empty {
             return Err(HostError::Foreign);
         }
+        *guard = SetupGuard::Port443;
         if empty && !self.material.offline && !self.admission.tcp443_available {
             return Err(HostError::Unsafe);
         }

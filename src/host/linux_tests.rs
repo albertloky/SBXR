@@ -118,6 +118,7 @@ struct Fake {
     fail_after: bool,
     cancel_after: Option<Operation>,
     queries_fail: bool,
+    query_override: Option<(Query, i32, Vec<u8>)>,
     configuration_owner: bool,
     install_default: bool,
     effects: Vec<Operation>,
@@ -137,6 +138,7 @@ impl Fake {
             fail_after: false,
             cancel_after: None,
             queries_fail: false,
+            query_override: None,
             configuration_owner: true,
             install_default: false,
             effects: vec![],
@@ -158,6 +160,11 @@ impl CommandRunner for Fake {
     fn query(&self, q: Query, stop: &Cancellation) -> Result<CommandOutput, HostError> {
         if self.queries_fail || stop.cancelled() {
             return Err(HostError::Unsafe);
+        }
+        if let Some((query, code, bytes)) = &self.query_override
+            && *query == q
+        {
+            return CommandOutput::completed(*code, bytes.clone());
         }
         let metadata = fs::metadata(&self.root).unwrap();
         let (code, text) = match q {
@@ -2283,3 +2290,6 @@ fn cancelled_native_begin_refuses_before_lock_or_command_even_without_proof() {
     assert!(host.runner.effects.is_empty());
     assert!(!host.effects_available());
 }
+
+#[path = "linux/readiness_tests.rs"]
+mod readiness;

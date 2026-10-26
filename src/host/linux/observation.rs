@@ -253,22 +253,24 @@ impl Facts {
         runner: &impl CommandRunner,
         stop: &Cancellation,
     ) -> Result<Self, HostError> {
-        Self::query_inner(runner, stop, true)
+        Self::query_inner(runner, stop, true, &mut SetupGuard::Observation)
     }
     pub(super) fn removal(
         runner: &impl CommandRunner,
         stop: &Cancellation,
     ) -> Result<Self, HostError> {
-        Self::query_inner(runner, stop, false)
+        Self::query_inner(runner, stop, false, &mut SetupGuard::Observation)
     }
-    fn query_inner(
+    pub(super) fn query_inner(
         runner: &impl CommandRunner,
         stop: &Cancellation,
         clock: bool,
+        guard: &mut SetupGuard,
     ) -> Result<Self, HostError> {
         let values = QUERIES
             .iter()
             .map(|q| {
+                *guard = SetupGuard::Query(*q);
                 if *q == Query::Clock && !clock {
                     CommandOutput::completed(0, b"yes".to_vec())
                 } else {
@@ -284,6 +286,7 @@ impl Facts {
                 sha256_hex(value.bytes())
             ))
         }
+        *guard = SetupGuard::Query(Query::Package);
         let package = presence(&values[0], 1)?;
         let mut held_package = false;
         if package {
@@ -311,6 +314,7 @@ impl Facts {
             }
             held_package = crate::package_acquisition::exact_held_package(values[0].text()?);
         }
+        *guard = SetupGuard::Query(Query::Hold);
         if values[1].code() != 0 {
             return Err(HostError::Unsafe);
         }
@@ -318,9 +322,12 @@ impl Facts {
             .text()?
             .split_whitespace()
             .any(|v| v == "sing-box");
+        *guard = SetupGuard::Query(Query::User);
         let user = presence(&values[2], 2)?;
+        *guard = SetupGuard::Query(Query::Group);
         let group = presence(&values[3], 2)?;
         let (mut uid, mut user_gid, mut gid) = (None, None, None);
+        *guard = SetupGuard::Query(Query::User);
         if user {
             let u: Vec<_> = values[2].text()?.split(':').collect();
             if u.len() != 7 || u[0] != "sing-box" {
@@ -329,6 +336,7 @@ impl Facts {
             uid = Some(u[2].parse::<u32>().map_err(|_| HostError::Unsafe)?);
             user_gid = Some(u[3].parse::<u32>().map_err(|_| HostError::Unsafe)?);
         }
+        *guard = SetupGuard::Query(Query::Group);
         if group {
             let g: Vec<_> = values[3].text()?.split(':').collect();
             if g.len() != 4 || g[0] != "sing-box" {
@@ -336,9 +344,11 @@ impl Facts {
             }
             gid = Some(g[2].parse::<u32>().map_err(|_| HostError::Unsafe)?);
         }
+        *guard = SetupGuard::Query(Query::Group);
         if user && group && user_gid != gid {
             return Err(HostError::Unsafe);
         }
+        *guard = SetupGuard::Query(Query::Process);
         let process = presence(&values[4], 1)?;
         if process
             && !values[4]
@@ -348,28 +358,46 @@ impl Facts {
         {
             return Err(HostError::Unsafe);
         }
+        *guard = SetupGuard::Query(Query::Enabled);
         let enabled = values[5].text()?;
+        *guard = SetupGuard::Query(Query::Active);
         let active = values[6].text()?;
+        *guard = SetupGuard::Query(Query::Enabled);
         if !matches!(enabled, "enabled" | "disabled" | "masked" | "not-found")
-            || !matches!(active, "active" | "inactive" | "failed")
             || values[5].code()
                 != match enabled {
                     "enabled" => 0,
                     "not-found" => 4,
                     _ => 1,
                 }
+        {
+            return Err(HostError::Unsafe);
+        }
+        *guard = SetupGuard::Query(Query::Active);
+        if !matches!(active, "active" | "inactive" | "failed")
             || values[6].code() != if active == "active" { 0 } else { 3 }
         {
             return Err(HostError::Unsafe);
         }
-        if !matches!(values[9].code(), 0 | 1)
-            || values[7].code() != 0
-            || !matches!(values[7].text()?, "loaded" | "masked" | "not-found")
-            || values[8].code() != 0
-            || values[10].code() != 0
-        {
-            return Err(HostError::Unsafe);
+        for (index, query, valid) in [
+            (9, Query::UnitOwner, matches!(values[9].code(), 0 | 1)),
+            (7, Query::LoadState, values[7].code() == 0),
+            (8, Query::Listener, values[8].code() == 0),
+            (10, Query::Clock, values[10].code() == 0),
+        ] {
+            *guard = SetupGuard::Query(query);
+            if !valid
+                || index == 7 && !matches!(values[index].text()?, "loaded" | "masked" | "not-found")
+            {
+                return Err(HostError::Unsafe);
+            }
         }
+        *guard = SetupGuard::Query(Query::Listener);
+        let listener = values[8].text()?.into();
+        *guard = SetupGuard::Query(Query::UnitOwner);
+        let provenance = values[9].code() == 0 && values[9].text()?.starts_with("sing-box:");
+        *guard = SetupGuard::Query(Query::Clock);
+        let clock = values[10].text()? == "yes";
         Ok(Self {
             package,
             held,
@@ -381,9 +409,9 @@ impl Facts {
             active: active == "active",
             masked: enabled == "masked",
             process,
-            listener: values[8].text()?.into(),
-            provenance: values[9].code() == 0 && values[9].text()?.starts_with("sing-box:"),
-            clock: values[10].text()? == "yes",
+            listener,
+            provenance,
+            clock,
             fingerprint,
         })
     }
