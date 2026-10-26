@@ -2,7 +2,23 @@
 use super::*;
 impl ProtectedFs {
     pub(in crate::host) fn lifecycle_lock_held(&self) -> Result<bool, HostError> {
-        let Some((parent, name)) = self.parent(super::super::locks::MUTATION_LOCK, false)? else {
+        self.lifecycle_lock_probe(
+            #[cfg(test)]
+            |_| {},
+        )
+    }
+    fn lifecycle_lock_probe(
+        &self,
+        #[cfg(test)] mut checkpoint: impl FnMut(u8),
+    ) -> Result<bool, HostError> {
+        self.check_root()?;
+        let Some((parent, name)) = super::super::locks::lock_parent(
+            &self.root,
+            self.uid,
+            super::super::locks::MUTATION_LOCK,
+            false,
+        )?
+        else {
             return Ok(false);
         };
         let fd = match fs::openat(
@@ -24,6 +40,8 @@ impl ProtectedFs {
                 && s.st_mode & 0o7777 == 0o600
                 && (0..=4096).contains(&s.st_size)
         };
+        #[cfg(test)]
+        checkpoint(0);
         let fresh =
             fs::statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW).map_err(failure)?;
         if !valid(&opened)
@@ -37,6 +55,8 @@ impl ProtectedFs {
             Err(Errno::AGAIN) => Ok(true),
             Err(e) => Err(failure(e)),
             Ok(()) => {
+                #[cfg(test)]
+                checkpoint(1);
                 let result = fs::statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(failure)
                     .and_then(|s| {
@@ -54,3 +74,7 @@ impl ProtectedFs {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;

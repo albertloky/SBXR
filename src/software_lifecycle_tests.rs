@@ -24,7 +24,13 @@ impl Root {
         fs::create_dir(&p).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o700)).unwrap();
         let r = Self(p);
-        for p in ["usr/local/bin", "var/lib", "var/lib/sbxr", "run/lock"] {
+        for p in [
+            "usr/local/bin",
+            "var/lib",
+            "var/lib/sbxr",
+            "run",
+            "run/lock",
+        ] {
             fs::create_dir_all(r.0.join(p)).unwrap();
             fs::set_permissions(
                 r.0.join(p),
@@ -114,23 +120,165 @@ fn local_ready_and_check_are_independent_from_proxy_configuration_and_do_not_cre
     assert!(!root.0.join("run/lock/sbxr.lock").exists());
 }
 #[test]
-fn active_mutation_probe_never_releases_the_real_owner_lock() {
-    let root = Root::new();
-    let a = crate::release_acquisition::fixture_archive();
-    root.pair(&a);
-    let owner = HostLock::provision(&root.0, fs::metadata(&root.0).unwrap().uid()).unwrap();
+fn sticky_coordination_parent_allows_read_only_ready_probe_without_creating_or_changing_lock() {
+    for existing in [false, true] {
+        let root = Root::new();
+        let a = crate::release_acquisition::fixture_archive();
+        root.pair(&a);
+        let parent = root.0.join("run/lock");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o1777)).unwrap();
+        let path = parent.join("sbxr.lock");
+        let body = b"retained coordination bytes";
+        if existing {
+            root.write("run/lock/sbxr.lock", body, 0o600);
+        }
+        let before = fs::symlink_metadata(&path).ok();
+        let mut m = root.module();
+        assert_eq!(m.status().code, Code::StatusReady);
+        assert_eq!(m.check().code, Code::CheckReleaseUnavailable);
+        assert_eq!(
+            m.recover(Confirmation::Approved).code,
+            Code::RecoverNotRequired
+        );
+        assert_eq!(fs::metadata(&parent).unwrap().mode() & 0o7777, 0o1777);
+        if let Some(before) = before {
+            let after = fs::symlink_metadata(&path).unwrap();
+            assert_eq!(
+                (after.dev(), after.ino(), after.mode()),
+                (before.dev(), before.ino(), before.mode())
+            );
+            assert_eq!(fs::read(&path).unwrap(), body);
+            HostLock::existing(&root.0, fs::metadata(&root.0).unwrap().uid()).unwrap();
+        } else {
+            assert!(!path.exists());
+        }
+    }
+}
+#[test]
+fn active_mutation_probe_never_releases_the_real_owner_or_lent_lock() {
+    for mode in [0o755, 0o1777] {
+        let root = Root::new();
+        let a = crate::release_acquisition::fixture_archive();
+        root.pair(&a);
+        fs::set_permissions(root.0.join("run/lock"), fs::Permissions::from_mode(mode)).unwrap();
+        let uid = fs::metadata(&root.0).unwrap().uid();
+        let owner = HostLock::provision(&root.0, uid).unwrap();
+        let lent = owner.runtime_start_lock().unwrap();
+        let path = root.0.join("run/lock/sbxr.lock");
+        let before = fs::metadata(&path).unwrap();
+        let mut m = root.module();
+        assert_eq!(m.status().code, Code::StatusUpdateInProgress);
+        assert_eq!(m.check().code, Code::CheckNotReady);
+        assert_eq!(
+            m.recover(Confirmation::Approved).code,
+            Code::RecoverConcurrentMutation
+        );
+        assert_eq!(m.transport.calls, 0);
+        // Verify contention before either guard can reacquire its flock.
+        assert!(matches!(
+            HostLock::existing(&root.0, uid),
+            Err(crate::host::HostError::Busy)
+        ));
+        drop(lent);
+        assert!(matches!(
+            HostLock::existing(&root.0, uid),
+            Err(crate::host::HostError::Busy)
+        ));
+        owner.verify().unwrap();
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            (after.dev(), after.ino(), after.mode()),
+            (before.dev(), before.ino(), before.mode())
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"");
+        drop(owner);
+        assert_eq!(m.status().code, Code::StatusReady);
+        assert_eq!(
+            fs::metadata(root.0.join("run/lock")).unwrap().mode() & 0o7777,
+            mode
+        );
+    }
+}
+fn assert_coordination_refused(root: &Root) {
     let mut m = root.module();
-    assert_eq!(m.status().code, Code::StatusUpdateInProgress);
+    assert_eq!(m.status().code, Code::StatusRecoveryRequired);
     assert_eq!(m.check().code, Code::CheckNotReady);
-    assert_eq!(
-        m.recover(Confirmation::Approved).code,
-        Code::RecoverConcurrentMutation
-    );
+    assert_eq!(m.recover(Confirmation::Approved).code, Code::RecoverRefused);
     assert_eq!(m.transport.calls, 0);
-    owner.verify().unwrap();
-    assert!(HostLock::existing(&root.0, fs::metadata(&root.0).unwrap().uid()).is_err());
-    drop(owner);
-    assert_eq!(m.status().code, Code::StatusReady);
+}
+#[test]
+fn writable_nonsticky_or_symlinked_coordination_parents_are_preserved_and_refused() {
+    for bad in 0..4 {
+        let root = Root::new();
+        root.pair(&crate::release_acquisition::fixture_archive());
+        root.write("run/lock/sbxr.lock", b"keep coordination bytes", 0o600);
+        match bad {
+            0 => fs::set_permissions(root.0.join("run/lock"), fs::Permissions::from_mode(0o777))
+                .unwrap(),
+            1 => {
+                fs::set_permissions(root.0.join("run"), fs::Permissions::from_mode(0o1777)).unwrap()
+            }
+            2 => {
+                fs::rename(root.0.join("run/lock"), root.0.join("run/kept")).unwrap();
+                symlink("kept", root.0.join("run/lock")).unwrap();
+            }
+            _ => {
+                fs::rename(root.0.join("run"), root.0.join("kept")).unwrap();
+                symlink("kept", root.0.join("run")).unwrap();
+            }
+        }
+        let path = root.0.join("run/lock/sbxr.lock");
+        let before = fs::metadata(&path).unwrap();
+        assert_coordination_refused(&root);
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            (after.dev(), after.ino(), after.mode()),
+            (before.dev(), before.ino(), before.mode())
+        );
+        assert_eq!(fs::read(path).unwrap(), b"keep coordination bytes");
+        if bad >= 2 {
+            assert!(
+                root.0
+                    .join(if bad == 2 { "run/lock" } else { "run" })
+                    .is_symlink()
+            );
+        }
+    }
+}
+#[test]
+fn foreign_coordination_files_under_sticky_parent_are_preserved_and_refused() {
+    for bad in 0..5 {
+        let root = Root::new();
+        root.pair(&crate::release_acquisition::fixture_archive());
+        fs::set_permissions(root.0.join("run/lock"), fs::Permissions::from_mode(0o1777)).unwrap();
+        let path = root.0.join("run/lock/sbxr.lock");
+        root.write("run/lock/sbxr.lock", b"keep foreign bytes", 0o600);
+        match bad {
+            0 => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+            1 => fs::hard_link(&path, root.0.join("kept-lock")).unwrap(),
+            2 => {
+                fs::rename(&path, root.0.join("kept-lock")).unwrap();
+                symlink("../../kept-lock", &path).unwrap();
+            }
+            3 => root.write("run/lock/sbxr.lock", &[b'x'; 4097], 0o600),
+            _ => {
+                fs::remove_file(&path).unwrap();
+                fs::create_dir(&path).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        let before = fs::symlink_metadata(&path).unwrap();
+        let body = (!before.is_dir()).then(|| fs::read(&path).unwrap());
+        assert_coordination_refused(&root);
+        let after = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(
+            (after.dev(), after.ino(), after.mode(), after.nlink()),
+            (before.dev(), before.ino(), before.mode(), before.nlink())
+        );
+        if let Some(body) = body {
+            assert_eq!(fs::read(&path).unwrap(), body);
+        }
+    }
 }
 #[test]
 fn malformed_or_foreign_pair_is_preserved_and_cannot_start_network_or_recovery() {

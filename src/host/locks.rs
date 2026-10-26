@@ -37,6 +37,60 @@ fn safe_file(s: &Stat, uid: u32, coordination: bool) -> bool {
         && s.st_mode & 0o7133 == 0
         && (!coordination || s.st_mode & 0o7777 == 0o600)
 }
+// Shared with the read-only lifecycle probe; callers validate their retained root.
+pub(super) fn lock_parent(
+    root: &OwnedFd,
+    uid: u32,
+    path: &str,
+    create: bool,
+) -> Result<Option<(OwnedFd, String)>, HostError> {
+    let parts: Vec<_> = Path::new(path)
+        .components()
+        .map(|p| match p {
+            std::path::Component::Normal(v) => v.to_str().ok_or(HostError::Unsafe),
+            _ => Err(HostError::Unsafe),
+        })
+        .collect::<Result<_, _>>()?;
+    let (name, parents) = parts.split_last().ok_or(HostError::Unsafe)?;
+    let mut dir = fs::openat(
+        root,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(io)?;
+    let mut prefix = String::new();
+    for part in parents {
+        if create {
+            match fs::mkdirat(&dir, *part, Mode::from_raw_mode(0o755)) {
+                Ok(()) => fs::fsync(&dir).map_err(io)?,
+                Err(Errno::EXIST) => (),
+                Err(e) => return Err(err(e)),
+            }
+        }
+        dir = match fs::openat(
+            &dir,
+            *part,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(v) => v,
+            Err(Errno::NOENT) if !create => return Ok(None),
+            Err(e) => return Err(err(e)),
+        };
+        if !prefix.is_empty() {
+            prefix.push('/')
+        }
+        prefix.push_str(part);
+        let s = fs::fstat(&dir).map_err(io)?;
+        let sticky_coordination =
+            path == MUTATION_LOCK && prefix == "run/lock" && s.st_mode & 0o1000 != 0;
+        if s.st_uid != uid || s.st_mode & 0o022 != 0 && !sticky_coordination {
+            return Err(HostError::Unsafe);
+        }
+    }
+    Ok(Some((dir, (*name).into())))
+}
 pub struct HostLock {
     root: OwnedFd,
     path: PathBuf,
@@ -160,52 +214,7 @@ impl HostLock {
     }
     fn parent(&self, path: &str, create: bool) -> Result<Option<(OwnedFd, String)>, HostError> {
         self.root_unchanged()?;
-        let parts: Vec<_> = Path::new(path)
-            .components()
-            .map(|p| match p {
-                std::path::Component::Normal(v) => v.to_str().ok_or(HostError::Unsafe),
-                _ => Err(HostError::Unsafe),
-            })
-            .collect::<Result<_, _>>()?;
-        let (name, parents) = parts.split_last().ok_or(HostError::Unsafe)?;
-        let mut dir = fs::openat(
-            &self.root,
-            ".",
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(io)?;
-        let mut prefix = String::new();
-        for part in parents {
-            if create {
-                match fs::mkdirat(&dir, *part, Mode::from_raw_mode(0o755)) {
-                    Ok(()) => fs::fsync(&dir).map_err(io)?,
-                    Err(Errno::EXIST) => (),
-                    Err(e) => return Err(err(e)),
-                }
-            }
-            dir = match fs::openat(
-                &dir,
-                *part,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            ) {
-                Ok(v) => v,
-                Err(Errno::NOENT) if !create => return Ok(None),
-                Err(e) => return Err(err(e)),
-            };
-            if !prefix.is_empty() {
-                prefix.push('/')
-            }
-            prefix.push_str(part);
-            let s = fs::fstat(&dir).map_err(io)?;
-            let sticky_coordination =
-                path == MUTATION_LOCK && prefix == "run/lock" && s.st_mode & 0o1000 != 0;
-            if s.st_uid != self.uid || s.st_mode & 0o022 != 0 && !sticky_coordination {
-                return Err(HostError::Unsafe);
-            }
-        }
-        Ok(Some((dir, (*name).into())))
+        lock_parent(&self.root, self.uid, path, create)
     }
     pub fn verify(&self) -> Result<(), HostError> {
         let (parent, name) = self
