@@ -168,6 +168,7 @@ pub trait CommandRunner {
 pub struct NativeReadOnly;
 impl CommandRunner for NativeReadOnly {
     fn query(&self, query: Query, stop: &Cancellation) -> Result<CommandOutput, HostError> {
+        let _phase = super::timing::span(super::timing::Phase::Query(query));
         super::linux::require_native_environment()?;
         // Configuration validation executes a package binary and is not a read-only
         // OS observation until package/configuration authority has been established.
@@ -256,9 +257,11 @@ pub(super) fn run_in(
     limit: usize,
     stop: &Cancellation,
 ) -> Result<CommandOutput, HostError> {
+    let _phase = super::timing::span(super::timing::Phase::Process);
     if stop.cancelled() {
         return Err(HostError::Cancelled);
     }
+    let _spawn = super::timing::span(super::timing::Phase::Spawn);
     let mut child = Command::new(program)
         .args(args)
         .env_clear()
@@ -272,6 +275,7 @@ pub(super) fn run_in(
         .process_group(0)
         .spawn()
         .map_err(|_| HostError::Io)?;
+    drop(_spawn);
     let group = Pid::from_raw(child.id() as i32).filter(|pid| pid.as_raw_nonzero().get() > 1);
     let Some(group) = group else {
         let _ = child.kill();

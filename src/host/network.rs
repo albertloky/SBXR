@@ -44,6 +44,7 @@ impl NetworkAdmission {
     /// Real implementation, never called by Mac/VPS development tests. Running
     /// inspection omits the occupied listener bind; setup/activation must require it.
     pub fn native(stop: &Cancellation, require_bind: bool) -> Result<Self, HostError> {
+        let _phase = super::timing::span(super::timing::Phase::Network);
         super::linux::require_native_environment()?;
         let roots = native_roots()?;
         let runner = NativeReadOnly;
@@ -75,6 +76,7 @@ fn resolve(
     port: u16,
     stop: &Cancellation,
 ) -> Result<Vec<SocketAddr>, HostError> {
+    let _phase = super::timing::span(super::timing::Phase::Dns);
     let output = runner.query(query, stop)?;
     if output.code() != 0 {
         return Err(HostError::Unsafe);
@@ -97,6 +99,7 @@ fn resolve(
     Ok(addresses)
 }
 fn native_roots() -> Result<RootCertStore, HostError> {
+    let _phase = super::timing::span(super::timing::Phase::Roots);
     let fs = super::filesystem::ProtectedFs::native()?;
     let (bytes, evidence) = fs
         .raw(
@@ -193,6 +196,7 @@ fn tls(
     ),
     HostError,
 > {
+    let _phase = super::timing::span(super::timing::Phase::Tls);
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
@@ -203,6 +207,7 @@ fn tls(
     let name = ServerName::try_from(hostname.to_owned()).map_err(|_| HostError::Unsafe)?;
     let mut connection =
         ClientConnection::new(Arc::new(config), name).map_err(|_| HostError::Unsafe)?;
+    let _connect = super::timing::span(super::timing::Phase::Connect);
     let mut stream = None;
     for address in addresses {
         let timeout = remaining(deadline, stop).map_err(|_| {
@@ -220,11 +225,13 @@ fn tls(
             Err(_) => continue,
         }
     }
+    drop(_connect);
     let mut stream = DeadlineTcp {
         stream: stream.ok_or(HostError::Unsafe)?,
         deadline,
         stop: stop.clone(),
     };
+    let _handshake = super::timing::span(super::timing::Phase::Handshake);
     while connection.is_handshaking() {
         connection.complete_io(&mut stream).map_err(|_| {
             if stop.cancelled() {
@@ -234,6 +241,7 @@ fn tls(
             }
         })?;
     }
+    drop(_handshake);
     let result = DestinationObservation {
         dns: !addresses.is_empty(),
         tcp: true,
@@ -266,6 +274,7 @@ fn fetch_ipv4(
     deadline: Instant,
     stop: &Cancellation,
 ) -> Result<Ipv4Addr, HostError> {
+    let _phase = super::timing::span(super::timing::Phase::IpHttp);
     let (mut stream, _) = tls(roots, hostname, addresses, b"http/1.1", deadline, stop)?;
     write!(
         stream,
@@ -373,6 +382,7 @@ fn fetch_ipv4(
     Ok(ipv4)
 }
 fn bind(address: SocketAddr) -> Result<(), HostError> {
+    let _phase = super::timing::span(super::timing::Phase::Bind);
     let listener = TcpListener::bind(address).map_err(|_| HostError::Busy)?;
     drop(listener);
     Ok(())

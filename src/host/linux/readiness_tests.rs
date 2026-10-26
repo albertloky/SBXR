@@ -321,3 +321,30 @@ fn captured_absent_service_never_bypasses_platform_network_lock_or_transaction_g
         assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
     }
 }
+
+#[test]
+fn fixed_query_timing_brackets_actual_transport_without_command_payload() {
+    let root = Root::new();
+    let (host, commands, _) = system_host(&root);
+    host.runner.transport().backend.borrow_mut().query_overrides =
+        vec![(Query::Active, 7, b"SECRET-SENTINEL /private/path".to_vec())];
+    let (result, bytes) =
+        crate::host::timing::capture(|| host.runner.query(Query::Active, &Cancellation::new()));
+    assert_eq!(result.unwrap().bytes(), b"SECRET-SENTINEL /private/path");
+    assert_eq!(commands.borrow().len(), 1);
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(!text.contains("SECRET-SENTINEL") && !text.contains("/private/path"));
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line.strip_prefix("SBXR_NATIVE_PHASE ").unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "the actual fixed-query boundary must be measured"
+    );
+    assert_eq!(rows[0]["phase"], "query-active");
+    assert_eq!(rows[0]["event"], "begin");
+    assert_eq!(rows[1]["event"], "end");
+    assert_eq!(rows[0]["id"], rows[1]["id"]);
+}

@@ -369,6 +369,7 @@ impl<T: Transport> CommandRunner for SystemRunner<T> {
         self.lock = lock
     }
     fn query(&self, query: Query, stop: &Cancellation) -> Result<CommandOutput, HostError> {
+        let _phase = super::timing::span(super::timing::Phase::Query(query));
         let (program, args) = query.argv();
         if query == Query::ValidateConfiguration {
             let fs = if self.root == Path::new("/") {

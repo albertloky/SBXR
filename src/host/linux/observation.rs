@@ -111,6 +111,7 @@ pub(in crate::host) fn read_ownership(
 pub(in crate::host) fn read_installed(
     fs: &ProtectedFs,
 ) -> Result<Option<InstalledRecord>, HostError> {
+    let _phase = super::super::timing::span(super::super::timing::Phase::Installed);
     let record = fs.raw(
         "var/lib/sbxr/installed.json",
         Mode::from_raw_mode(0o600),

@@ -57,6 +57,7 @@ impl<'a> NativeOwnerSources<'a> {
             package_acquisition::{self, PackageHttps},
         };
         if self.package.borrow().is_none() {
+            let _phase = super::timing::span(super::timing::Phase::Package);
             let package = package_acquisition::acquire(
                 &mut PackageHttps::new().map_err(|_| HostError::Foreign)?,
                 &SelectionBudget::new().with_cancellation(self.stop.clone()),
@@ -69,6 +70,7 @@ impl<'a> NativeOwnerSources<'a> {
     fn probe_image(&self) -> Result<crate::package_acquisition::ProbeImage, HostError> {
         self.ensure_package()?;
         if self.probe.borrow().is_none() {
+            let _phase = super::timing::span(super::timing::Phase::Probe);
             let cache = self.package.borrow();
             let (key, deb) = cache.as_ref().ok_or(HostError::Foreign)?.as_ref();
             let budget =
@@ -263,6 +265,7 @@ impl<'a> NativeOwnerSources<'a> {
 }
 impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
     fn journeys(&self) -> Result<Vec<Journey>, HostError> {
+        let _phase = super::timing::span(super::timing::Phase::Journeys);
         self.proof.verify()?;
         super::linux::require_native_environment()?;
         if self.stop.is_cancelled() {
@@ -340,6 +343,15 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
         Ok(journeys)
     }
     fn open(&self, journey: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
+        use super::timing::Phase;
+        let _phase = super::timing::span(match journey {
+            Journey::Standard => Phase::Standard,
+            Journey::Tunnel => Phase::Tunnel,
+            Journey::Removal => Phase::Removal,
+            Journey::Http => Phase::Http,
+            Journey::Identity => Phase::Identity,
+            Journey::Disclosure => Phase::Disclosure,
+        });
         if !self.journeys()?.contains(&journey) {
             return Err(HostError::Foreign);
         }
@@ -392,8 +404,13 @@ pub fn run_public_unreleased(
     output: &mut impl std::io::Write,
 ) -> Result<(), PublicEntryError> {
     super::require_live_adapter()?;
-    let root = ProtectedFs::native()?;
-    let selected = super::entry_input::select(&root, super::entry_input::now()?)?;
+    let _trace = super::timing::enable();
+    let _entry = super::timing::span(super::timing::Phase::Entry);
+    let selected = {
+        let _phase = super::timing::span(super::timing::Phase::Select);
+        let root = ProtectedFs::native()?;
+        super::entry_input::select(&root, super::entry_input::now()?)?
+    };
     match selected {
         super::entry_input::EntryInput::Stable => run_public_selected(input, output, None),
         super::entry_input::EntryInput::Candidate(reviewed) => {
@@ -419,6 +436,7 @@ fn run_public_selected(
         None => crate::artifact_trust::SelectionBudget::new(),
     }
     .with_cancellation(stop.clone());
+    let _authentication = super::timing::span(super::timing::Phase::Authenticate);
     let proof = match reviewed {
         None => {
             let mut authentication =
@@ -429,6 +447,7 @@ fn run_public_selected(
             super::admission::NativeAdmission::reviewed_candidate(input, &budget, stop.clone())?
         }
     };
+    drop(_authentication);
     if proof.record().release_identity().commit() != commit {
         return Err(HostError::Foreign.into());
     }

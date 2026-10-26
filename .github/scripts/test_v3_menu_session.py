@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -26,6 +27,7 @@ FIXTURE = r'''#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
 root=Path(os.environ["FIXTURE_ROOT"]); spec=json.loads(os.environ["FIXTURE_SPEC"])
+for diagnostic in spec.get("diagnostics", []): print(diagnostic,file=sys.stderr,flush=True)
 def event(value):
     with (root/"events.jsonl").open("a") as stream: stream.write(json.dumps(value)+"\n")
 print("SBXR V3\nProxy status: Running\nCode: PROXY-INSTALLATION-STATUS-RUNNING")
@@ -64,6 +66,7 @@ elif kind == "terminal":
     print("Code: "+spec["expected"],flush=True); raise SystemExit(0)
 print("SBXR V3\nProxy status: Running\nCode: "+spec.get("actual",spec.get("expected","PROXY-INSTALLATION-STATUS-RUNNING")))
 print("1. View details\n0. Exit",flush=True); event({"exit":sys.stdin.readline().strip()})
+for diagnostic in spec.get("late_diagnostics", []): print(diagnostic,file=sys.stderr,flush=True)
 '''
 
 class MenuSessionDeadlineTest(unittest.TestCase):
@@ -110,6 +113,7 @@ class MenuSessionDeadlineTest(unittest.TestCase):
             with patch.object(menu.time, "monotonic", side_effect=lambda: clock[0]):
                 with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
                     stream.line(10.0)
+            stream.timing.close()
             self.assertIn('"event": "prompt-received"', journal.getvalue())
             self.assertNotIn('"event": "prompt-accepted"', journal.getvalue())
 
@@ -134,8 +138,9 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                         else:
                             with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
                                 stream.line(10.0)
+                stream.timing.close()
                 events = [json.loads(line.removeprefix("SBXR_MENU_PHASE ")) for line in journal.getvalue().splitlines()]
-                self.assertEqual([e["event"] for e in events], ["prompt-received"] +
+                self.assertEqual([e["event"] for e in events], ["first-byte-received", "first-line-received", "prompt-received"] +
                                  (["prompt-accepted"] if received < 10 else []))
                 self.assertEqual(events[0]["monotonic"], received)
 
@@ -154,16 +159,18 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                 clock[0] = 11.0
                 with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
                     session.return_to_menu()
+            timing.close()
             events = [json.loads(line.removeprefix("SBXR_MENU_PHASE ")) for line in journal.getvalue().splitlines()]
-            self.assertEqual([e["event"] for e in events], ["prompt-received", "prompt-accepted",
+            self.assertEqual([e["event"] for e in events], ["spawn-attempt", "spawn-complete", "first-byte-received", "first-line-received", "prompt-received", "prompt-accepted",
                              "input-attempt", "input-sent", "return-wait"])
-            self.assertEqual(events[3]["class"], "continuation")
-            self.assertLess(events[3]["monotonic"], events[4]["monotonic"])
+            self.assertEqual(events[7]["class"], "continuation")
+            self.assertLess(events[7]["monotonic"], events[8]["monotonic"])
         finally:
             if session is not None:
                 session.stop()
                 self.assertTrue(session.cleaned)
                 self.assertIsNotNone(session.process.returncode)
+                session.timing.close()
                 session.process.stdin.close()
                 session.process.stdout.close()
 
@@ -193,6 +200,7 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                         else:
                             with self.assertRaisesRegex(menu.ProtocolError, "output-deadline"):
                                 session.return_to_menu()
+                    session.timing.close()
                     events = [json.loads(line.removeprefix("SBXR_MENU_PHASE ")) for line in journal.getvalue().splitlines()]
                     sent = [e["class"] for e in events if e["event"] == "input-sent"]
                     self.assertEqual(sent, ["continuation"] + (["exit"] if received < 10 else []))
@@ -202,8 +210,311 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                     if session is not None:
                         session.stop()
                         self.assertTrue(session.cleaned)
+                        session.timing.close()
                         session.process.stdin.close()
                         session.process.stdout.close()
+
+    def test_protected_cleanup_services_stderr_until_the_wrapper_finishes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            done=Path(temporary)/"done"
+            child=("import os,signal,sys,pathlib\n"
+                   "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[1]).write_text('done');sys.exit(0)\n"
+                   "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nsys.stdin.read()")
+            journal=io.StringIO()
+            session=menu.MenuSession([sys.executable,"-c",child,str(done)],io.BytesIO(),time.monotonic()+5,
+                                     timing=menu.PhaseTiming(journal,time.monotonic()+5))
+            try:
+                self.assertEqual(session.stream.line(session.deadline),"READY")
+                # Exercise the post-admission cleanup handshake on this OS.
+                session.protected_wrapper=True
+                session.stop()
+                self.assertTrue(done.exists(),"stderr must not block lawful wrapper cleanup")
+                self.assertTrue(session.cleaned)
+            finally:
+                if session.process.returncode is None:session.stop()
+                session.timing.close()
+                session.process.stdin.close();session.process.stdout.close();session.process.stderr.close()
+
+    def test_cleanup_does_not_relay_after_a_diagnostic_sink_failure(self):
+        class Sink(io.StringIO):
+            failed=False
+            def write(self,value):
+                if self.failed:raise OSError("fixture diagnostic sink failed")
+                return super().write(value)
+        with tempfile.TemporaryDirectory() as temporary:
+            ready=Path(temporary)/"ready"
+            child=("import json,pathlib,sys\nprint('READY',flush=True)\nsys.stdin.readline()\n"
+                   "print('SBXR_NATIVE_PHASE '+json.dumps(dict(phase='snapshot',event='end',id=1,elapsed_us=2)),file=sys.stderr,flush=True)\n"
+                   "pathlib.Path(sys.argv[1]).write_text('ready')\nsys.stdin.read()")
+            sink=Sink();session=menu.MenuSession([sys.executable,"-c",child,str(ready)],io.BytesIO(),time.monotonic()+5,
+                                               timing=menu.PhaseTiming(sink,time.monotonic()+5))
+            try:
+                self.assertEqual(session.stream.line(session.deadline),"READY")
+                session.process.stdin.write(b"go\n");session.process.stdin.flush()
+                until=time.monotonic()+3
+                while not ready.exists():
+                    self.assertLess(time.monotonic(),until);time.sleep(.01)
+                sink.failed=True
+                session.stop()
+                self.assertTrue(session.cleaned)
+                self.assertTrue(session.process.stderr.closed)
+            finally:
+                if session.process.returncode is None:session.stop()
+                session.timing.close()
+                session.process.stdin.close();session.process.stdout.close();session.process.stderr.close()
+
+    def test_descriptor_duplication_failure_never_falls_back_to_buffered_stderr(self):
+        reads, writes = os.pipe()
+        buffered_writes = []
+        class Sink:
+            def fileno(self):
+                return writes
+            def write(self, value):
+                buffered_writes.append(value)
+                raise OSError("buffered fallback would block at shutdown")
+        try:
+            with patch.object(menu.os,"dup",side_effect=OSError(errno.EMFILE,"fixture fd exhaustion")):
+                timing = menu.PhaseTiming(Sink(),time.monotonic()+1)
+            timing("driver-start")
+            timing.close()
+            self.assertEqual(buffered_writes,[])
+            self.assertTrue(os.get_blocking(writes),"inherited descriptor flags must remain unchanged")
+        finally:
+            os.close(reads)
+            os.close(writes)
+
+    def test_spawn_diagnostic_sink_failure_still_allows_full_protected_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ready, done = Path(temporary)/"ready", Path(temporary)/"done"
+            failed = threading.Event()
+            class Sink(io.StringIO):
+                def write(self, value):
+                    if "spawn-complete" in value:
+                        failed.set()
+                        raise OSError("fixture capture unavailable")
+                    return super().write(value)
+            child = ("import os,signal,sys,pathlib\n"
+                     "def finish(*_):\n os.write(2,b'RAW-SECRET /private/path'*8192);pathlib.Path(sys.argv[2]).touch();sys.exit(0)\n"
+                     "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nprint('READY',flush=True)\nsys.stdin.read()")
+            sink = Sink()
+            timing = menu.PhaseTiming(sink,time.monotonic()+5)
+            session = menu.MenuSession([sys.executable,"-c",child,str(ready),str(done)],
+                                       io.BytesIO(),timing.deadline,timing=timing)
+            try:
+                self.assertEqual(session.stream.line(session.deadline),"READY")
+                self.assertTrue(failed.wait(timeout=2),"exercise a real failed relay write")
+                session.protected_wrapper = True
+                started = time.monotonic()
+                self.assertEqual(session.stop(),0)
+                self.assertLess(time.monotonic()-started,2)
+                self.assertTrue(done.exists())
+                self.assertTrue(session.cleaned)
+                self.assertTrue(session.process.stderr.closed)
+                self.assertNotIn("RAW-SECRET",sink.getvalue())
+                self.assertNotIn("/private/path",sink.getvalue())
+            finally:
+                if session.process.returncode is None:
+                    session.stop()
+                timing.close()
+                session.process.stdin.close()
+                session.process.stdout.close()
+                session.process.stderr.close()
+
+    def test_fallback_finish_services_late_stderr_before_waiting_for_exit(self):
+        journal=io.StringIO()
+        child="import os,sys;print('READY',flush=True);sys.stdin.readline();os.write(2,b'X'*2097152)"
+        session=menu.MenuSession([sys.executable,"-c",child],io.BytesIO(),time.monotonic()+1,
+                                 timing=menu.PhaseTiming(journal,time.monotonic()+1))
+        try:
+            self.assertEqual(session.stream.line(session.deadline),"READY")
+            session.write("0\n")
+            # Force the retained portable wait branch; no platform settings change.
+            native_os=menu.os
+            class WithoutWaitid:
+                def __getattr__(self,name):
+                    if name=="waitid":raise AttributeError(name)
+                    return getattr(native_os,name)
+            with patch.object(menu.sys,"platform","fixture"),patch.object(menu,"os",WithoutWaitid()):
+                session.finish()
+            self.assertTrue(session.cleaned)
+        finally:
+            if session.process.returncode is None:session.stop()
+            session.timing.close()
+            session.process.stdin.close();session.process.stdout.close();session.process.stderr.close()
+
+    def test_constructor_failure_still_completes_chatty_protected_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ready, done = Path(temporary)/"ready", Path(temporary)/"done"
+            child = ("import os,signal,sys,pathlib\n"
+                     "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[2]).write_text('done');sys.exit(0)\n"
+                     "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nsys.stdin.read()")
+            class FailingTiming(menu.PhaseTiming):
+                def __call__(self, event, *args):
+                    if event == "spawn-complete":
+                        until = time.monotonic()+3
+                        while not ready.exists():
+                            if time.monotonic() >= until:
+                                raise AssertionError("fixture did not install its cleanup handler")
+                            time.sleep(.01)
+                        raise OSError("fixture post-spawn diagnostics failed")
+                    super().__call__(event, *args)
+            sessions = []
+            class Session(menu.MenuSession):
+                def stop(self):
+                    self.protected_wrapper = True
+                    sessions.append(self)
+                    return super().stop()
+            timing = FailingTiming(io.StringIO(), time.monotonic()+5)
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(OSError, "post-spawn diagnostics failed"):
+                    Session([sys.executable,"-c",child,str(ready),str(done)],
+                            io.BytesIO(),timing.deadline,timing=timing)
+            finally:
+                timing.close()
+            self.assertTrue(done.exists(), "constructor failure must not strand wrapper cleanup on stderr")
+            self.assertLess(time.monotonic()-started, 2)
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0].process.returncode, 0)
+            self.assertTrue(sessions[0].cleaned)
+            self.assertTrue(all(pipe.closed for pipe in (sessions[0].process.stdin,
+                                                        sessions[0].process.stdout,sessions[0].process.stderr)))
+
+    def test_high_descriptor_pipe_survives_read_and_constructor_failure_cleanup(self):
+        # Only the descriptor number is simulated. Readiness, reads, child
+        # ownership, the 128KiB cleanup write and reaping use real pipes/processes.
+        for failure in (False, True):
+            with self.subTest(constructor_failure=failure), tempfile.TemporaryDirectory() as temporary:
+                ready, done = Path(temporary)/"ready", Path(temporary)/"done"
+                child = ("import os,signal,sys,pathlib\n"
+                         "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[2]).touch();sys.exit(0)\n"
+                         "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nprint('READY',flush=True)\nsys.stdin.read()")
+                pipes, sessions = [], []
+                real_popen, real_read, real_poll = menu.subprocess.Popen, os.read, select.poll
+                class HighPipe:
+                    def __init__(self, stream):
+                        self.stream = stream
+                    def fileno(self):
+                        return 1024
+                    def __getattr__(self, name):
+                        return getattr(self.stream,name)
+                class Poll:
+                    def __init__(self):
+                        self.inner, self.aliases = real_poll(), {}
+                    def register(self, stream, events):
+                        fd = stream if isinstance(stream,int) else stream.fileno()
+                        real_fd = pipes[0].stream.fileno() if fd == 1024 else fd
+                        self.aliases[real_fd] = fd
+                        self.inner.register(real_fd,events)
+                    def poll(self, timeout):
+                        return [(self.aliases[fd],events) for fd,events in self.inner.poll(timeout)]
+                def start(*args, **kwargs):
+                    process = real_popen(*args,**kwargs)
+                    process.stderr = HighPipe(process.stderr)
+                    pipes.append(process.stderr)
+                    return process
+                def read(fd, count):
+                    return real_read(pipes[0].stream.fileno() if fd == 1024 else fd,count)
+                class Timing(menu.PhaseTiming):
+                    def __call__(self, event, *args):
+                        if failure and event == "spawn-complete":
+                            until = time.monotonic()+3
+                            while not ready.exists():
+                                if time.monotonic() >= until:
+                                    raise AssertionError("fixture cleanup handler not ready")
+                                time.sleep(.01)
+                            raise OSError("original constructor diagnostic error")
+                        super().__call__(event,*args)
+                class Session(menu.MenuSession):
+                    def stop(self):
+                        self.protected_wrapper = True
+                        if self not in sessions:
+                            sessions.append(self)
+                        return super().stop()
+                timing, session = Timing(io.StringIO(),time.monotonic()+5), None
+                try:
+                    with patch.object(menu.subprocess,"Popen",side_effect=start), \
+                            patch.object(menu.os,"read",side_effect=read), \
+                            patch.object(menu.select,"poll",Poll):
+                        if failure:
+                            with self.assertRaisesRegex(OSError,"original constructor diagnostic error"):
+                                Session([sys.executable,"-c",child,str(ready),str(done)],
+                                        io.BytesIO(),timing.deadline,timing=timing)
+                        else:
+                            session = Session([sys.executable,"-c",child,str(ready),str(done)],
+                                              io.BytesIO(),timing.deadline,timing=timing)
+                            self.assertEqual(session.stream.line(session.deadline),"READY")
+                            session.stop()
+                    self.assertTrue(done.exists(),"high descriptors must not strand protected cleanup")
+                    self.assertEqual(len(sessions),1)
+                    self.assertTrue(sessions[0].cleaned)
+                    self.assertEqual(sessions[0].process.returncode,0)
+                    self.assertTrue(sessions[0].process.stderr.closed)
+                finally:
+                    timing.close()
+                    if session is not None and session not in sessions:
+                        sessions.append(session)
+                    for owned in sessions:
+                        if not owned.cleaned:
+                            # Dispose only this test's newly owned child if the
+                            # assertion exposes the original broken collector.
+                            owned.stream.diagnostics = None
+                            owned.protected_wrapper = False
+                            menu.MenuSession.stop(owned)
+                        for pipe in (owned.process.stdin,owned.process.stdout,owned.process.stderr):
+                            pipe.close()
+
+    def test_diagnostic_readiness_errors_cannot_preempt_protected_cleanup_or_reap(self):
+        for persistent in (False, True):
+            with self.subTest(persistent=persistent), tempfile.TemporaryDirectory() as temporary:
+                done = Path(temporary)/"done"
+                child = ("import os,signal,sys,pathlib\n"
+                         "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[1]).touch();sys.exit(0)\n"
+                         "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nsys.stdin.read()")
+                timing = menu.PhaseTiming(io.StringIO(),time.monotonic()+5)
+                session = menu.MenuSession([sys.executable,"-c",child,str(done)],
+                                           io.BytesIO(),timing.deadline,timing=timing)
+                try:
+                    self.assertEqual(session.stream.line(session.deadline),"READY")
+                    session.protected_wrapper = not persistent
+                    original, calls = session.stream.diagnostics.drain, []
+                    def fail(*args, **kwargs):
+                        calls.append(1)
+                        if persistent or len(calls) == 1:
+                            raise ValueError("fixture diagnostic readiness failure")
+                        return original(*args,**kwargs)
+                    with patch.object(session.stream.diagnostics,"drain",side_effect=fail):
+                        session.stop()
+                    self.assertTrue(session.cleaned)
+                    self.assertEqual(session.process.returncode,-signal.SIGKILL if persistent else 0)
+                    self.assertTrue(session.process.stderr.closed)
+                    if not persistent:
+                        self.assertTrue(done.exists(),"retry transient diagnostic readiness failures")
+                finally:
+                    if not session.cleaned:
+                        session.protected_wrapper = False
+                        session.stop()
+                    timing.close()
+                    for pipe in (session.process.stdin,session.process.stdout,session.process.stderr):
+                        pipe.close()
+
+    def test_raw_stderr_bound_cancels_and_reaps_without_relaying_unterminated_data(self):
+        journal = io.StringIO()
+        session = menu.MenuSession([sys.executable, "-c", "import sys; sys.stderr.write('SECRET-SENTINEL /private/path'*100);sys.stderr.flush();sys.stdin.read()"],
+                                   io.BytesIO(), time.monotonic()+5,
+                                   timing=menu.PhaseTiming(journal,time.monotonic()+5))
+        try:
+            with patch.object(menu, "MAX_OUTPUT", 256):
+                with self.assertRaisesRegex(menu.ProtocolError, "diagnostic-bound"):
+                    session.stream.line(session.deadline)
+        finally:
+            session.stop()
+            self.assertTrue(session.cleaned)
+            self.assertTrue(session.process.stderr.closed)
+            session.timing.close()
+            session.process.stdin.close();session.process.stdout.close()
+        self.assertNotIn("SECRET-SENTINEL",journal.getvalue())
+        self.assertNotIn("/private/path",journal.getvalue())
 
     def test_details_timing_does_not_record_input_payload(self):
         journal = io.StringIO()
@@ -212,10 +523,11 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                                    timing=menu.PhaseTiming(journal, time.monotonic() + 5))
         try:
             session.write("SECRET-SENTINEL /private/path\n")
+            session.timing.close()
             self.assertNotIn("SECRET-SENTINEL", journal.getvalue())
             self.assertNotIn("/private/path", journal.getvalue())
             self.assertEqual([json.loads(line.removeprefix("SBXR_MENU_PHASE "))["class"]
-                              for line in journal.getvalue().splitlines()], ["other", "other"])
+                              for line in journal.getvalue().splitlines()], ["none", "none", "other", "other"])
         finally:
             session.stop()
             session.process.stdin.close()
@@ -472,6 +784,76 @@ class MenuSessionDriverTest(unittest.TestCase):
             events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()] if (root/"events.jsonl").exists() else []
             return result,events
 
+    def test_unread_diagnostic_sink_cannot_block_success_or_deadline_cleanup(self):
+        for kind in ("details", "hang"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                executable = root/"sbxr"
+                executable.write_text(FIXTURE)
+                executable.chmod(0o700)
+                row = "SBXR_NATIVE_PHASE " + json.dumps(dict(phase="snapshot",event="begin",id=1,elapsed_us=1))
+                spec = {"label":"View details", "kind":kind, "diagnostics":[row]*1000}
+                env = dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec))
+                process = subprocess.Popen([sys.executable,"-B",str(DRIVER),"details","View details",
+                                            "--executable",str(executable),"--timeout","1"],
+                                           env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                try:
+                    # Deliberately do not read stderr until the driver exits.
+                    # A blocked relay has no exception to catch and cannot enforce its deadline.
+                    process.wait(timeout=2.5)
+                    stderr = process.stderr.read().decode()
+                    self.assertEqual(process.returncode, 0 if kind == "details" else 1, stderr)
+                    events = [json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()]
+                    self.assertEqual(events[0], {"selected":"7"})
+                    if kind == "details":
+                        self.assertEqual(events, [{"selected":"7"},{"continue":""},{"exit":"0"}])
+                    else:
+                        descendant = int((root/"descendant.pid").read_text())
+                        until = time.monotonic()+2
+                        while True:
+                            try:
+                                os.kill(descendant,0)
+                                if sys.platform.startswith("linux") and Path(f"/proc/{descendant}/stat").read_text().rsplit(") ",1)[1].startswith("Z "):
+                                    break
+                            except (ProcessLookupError,FileNotFoundError):
+                                break
+                            self.assertLess(time.monotonic(),until,"driver left its fixture descendant running")
+                            time.sleep(.01)
+                finally:
+                    if process.poll() is None:
+                        # Release the sink before asking the driver to clean up its own child.
+                        process.terminate()
+                        try:
+                            process.communicate(timeout=7)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.communicate(timeout=3)
+                    process.stderr.close()
+
+    def test_details_distinguishes_startup_receipt_and_menu_and_relays_only_fixed_native_events(self):
+        begin = {"phase": "query-active", "event": "begin", "id": 1, "elapsed_us": 3}
+        end = {**begin, "event": "end", "elapsed_us": 9}
+        spec = {"label": "View details", "kind": "details", "diagnostics": [
+            "SECRET-SENTINEL /private/path",
+            "SECRET-SENTINEL" * 100,
+            "SBXR_NATIVE_PHASE " + json.dumps({**begin, "phase": "/private/path"}),
+            "SBXR_NATIVE_PHASE " + json.dumps({**begin, "secret": "SECRET-SENTINEL"}),
+            'SBXR_NATIVE_PHASE {"phase":"query-active","event":"begin","id":1,"id":2,"elapsed_us":3}',
+            "SBXR_NATIVE_PHASE " + json.dumps({**begin, "id": True}),
+            "SBXR_NATIVE_PHASE " + json.dumps(begin),
+        ], "late_diagnostics": ["SBXR_NATIVE_PHASE " + json.dumps(end)]}
+        result, inputs = self.invoke(spec, "details", "View details")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(inputs, [{"selected": "7"}, {"continue": ""}, {"exit": "0"}])
+        self.assertNotIn("SECRET-SENTINEL", result.stderr)
+        self.assertNotIn("/private/path", result.stderr)
+        native = [json.loads(line.removeprefix("SBXR_NATIVE_PHASE ")) for line in result.stderr.splitlines() if line.startswith("SBXR_NATIVE_PHASE ")]
+        self.assertEqual([{k: row[k] for k in begin} for row in native], [begin, end])
+        self.assertTrue(all(set(row) == set(begin) | {"received_monotonic", "remaining_ms"} for row in native))
+        events = [json.loads(line.removeprefix("SBXR_MENU_PHASE "))["event"] for line in result.stderr.splitlines() if line.startswith("SBXR_MENU_PHASE ")]
+        expected = ["driver-start", "request-ready", "spawn-attempt", "spawn-complete", "first-byte-received", "first-line-received", "menu-frame-accepted", "menu-label-matched", "menu-ready", "input-attempt", "input-sent"]
+        self.assertEqual(events[:len(expected)], expected)
+
     def test_details_records_prompt_input_and_return_phases_without_input_values(self):
         spec = {"label": "View details", "kind": "details"}
         result, events = self.invoke(spec, "details", "View details")
@@ -480,6 +862,7 @@ class MenuSessionDriverTest(unittest.TestCase):
         journal = [json.loads(line.removeprefix("SBXR_MENU_PHASE "))
                    for line in result.stderr.splitlines() if line.startswith("SBXR_MENU_PHASE ")]
         self.assertEqual([entry["event"] for entry in journal], [
+            "driver-start", "request-ready", "spawn-attempt", "spawn-complete", "first-byte-received", "first-line-received", "menu-frame-accepted", "menu-label-matched", "menu-ready",
             "input-attempt", "input-sent", "prompt-received", "prompt-accepted",
             "input-attempt", "input-sent", "return-wait", "return-frame", "return-ready",
             "input-attempt", "input-sent",

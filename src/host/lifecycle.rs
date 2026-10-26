@@ -84,6 +84,7 @@ impl LifecycleHost {
             .transpose()
     }
     pub(crate) fn inspect(&self) -> Result<Snapshot, HostError> {
+        let _phase = super::timing::span(super::timing::Phase::Lifecycle);
         let mut s = Snapshot {
             busy: self.fs.lifecycle_lock_held()?,
             transaction: false,

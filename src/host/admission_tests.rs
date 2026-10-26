@@ -312,3 +312,40 @@ fn candidate_entry_input_remains_part_of_each_selected_journey_guard() {
         Outcome::Refused
     );
 }
+
+#[test]
+fn snapshot_timings_keep_fresh_record_refusal_and_never_emit_authority() {
+    let fixture = Fixture::new();
+    let snapshot = fixture.capture().unwrap();
+    for changed in [false, true] {
+        if changed {
+            fixture.write(
+                "var/lib/sbxr/installed.json",
+                b"SECRET-SENTINEL /private/path",
+                0o600,
+            );
+        }
+        let (result, bytes) = super::super::timing::capture(|| snapshot.verify());
+        assert_eq!(result.is_err(), changed);
+        let text = String::from_utf8(bytes).unwrap();
+        for forbidden in [
+            "SECRET-SENTINEL",
+            "/private/path",
+            fixture.0.to_str().unwrap(),
+            "v9.0.0",
+            &"a".repeat(40),
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| {
+                serde_json::from_str(line.strip_prefix("SBXR_NATIVE_PHASE ").unwrap()).unwrap()
+            })
+            .collect();
+        assert_eq!(rows[0]["phase"], "snapshot");
+        assert_eq!(rows[0]["event"], "begin");
+        assert_eq!(rows.last().unwrap()["event"], "end");
+        assert_eq!(rows[0]["id"], rows.last().unwrap()["id"]);
+    }
+}

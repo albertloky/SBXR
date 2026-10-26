@@ -108,6 +108,7 @@ impl SetupMaterial {
         package: Vec<u8>,
         entropy: &mut dyn crate::identity_generation::Entropy,
     ) -> Result<Self, HostError> {
+        let _phase = super::super::timing::span(super::super::timing::Phase::Material);
         if key.len() > 1 << 20
             || sha256_hex(&key) != PINNED_SING_BOX.signing_key_sha256
             || package.len() as u64 != PINNED_SING_BOX.size

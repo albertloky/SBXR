@@ -5,13 +5,16 @@ import argparse
 import ctypes
 import hashlib
 import json
+import math
 import os
+import queue
 import re
 import select
 import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -155,22 +158,184 @@ def kill_adopted_children():
             os.close(descriptor)
 
 
+class DiagnosticRelay:
+    """Bounded best effort: sink progress never controls the menu or cleanup."""
+    def __init__(self, sink):
+        self.pending = queue.Queue(maxsize=256)
+        self.closed, self.abandon = threading.Event(), threading.Event()
+        self.worker = None
+        try:
+            descriptor = sink.fileno()
+        except (AttributeError, OSError, ValueError):
+            descriptor = None
+        else:
+            try:
+                descriptor = os.dup(descriptor)
+            except OSError:
+                # Never fall back to buffered stderr after FD exhaustion.
+                self.closed.set()
+                return
+        self.worker = threading.Thread(target=self.run,
+                                       args=(sink, descriptor, self.pending, self.closed, self.abandon),
+                                       daemon=True)
+        try:
+            self.worker.start()
+        except BaseException:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise
+
+    @staticmethod
+    def run(sink, descriptor, pending, closed, abandon):
+        try:
+            while not abandon.is_set():
+                try:
+                    record = pending.get(timeout=.01)
+                except queue.Empty:
+                    if closed.is_set():
+                        return
+                    continue
+                if descriptor is None:
+                    sink.write(record)
+                    sink.flush()
+                else:
+                    # Never hold stderr's buffered lock: a full pipe may leave
+                    # this daemon in write while the controller exits safely.
+                    body = record.encode("ascii")
+                    while body and not abandon.is_set():
+                        written = os.write(descriptor, body)
+                        if written <= 0:
+                            return
+                        body = body[written:]
+        except (OSError, ValueError):
+            pass
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def emit(self, record):
+        if self.closed.is_set() or len(record) > 511:
+            return
+        try:
+            self.pending.put_nowait(record + "\n")
+        except queue.Full:
+            pass
+
+    def close(self):
+        self.closed.set()
+        # Flush an available sink briefly, never wait for a blocked writer.
+        if self.worker is not None:
+            self.worker.join(timeout=.05)
+        self.abandon.set()
+
+
 class PhaseTiming:
     """Details-only bounded events; never transcript bytes or input values."""
     def __init__(self, sink, deadline):
-        self.sink = sink
+        self.relay = DiagnosticRelay(sink)
         self.deadline = deadline
 
     def __call__(self, event, input_class="none"):
         now = time.monotonic()
-        print("SBXR_MENU_PHASE " + json.dumps({
+        self.relay.emit("SBXR_MENU_PHASE " + json.dumps({
             "event": event, "class": input_class, "monotonic": round(now, 6),
             "remaining_ms": round((self.deadline - now) * 1000, 3),
-        }, sort_keys=True), file=self.sink, flush=True)
+        }, sort_keys=True))
+
+    def native(self, raw):
+        prefix = b"SBXR_NATIVE_PHASE "
+        if not raw.startswith(prefix):
+            return
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate field")
+                result[key] = value
+            return result
+        try:
+            row = json.loads(raw[len(prefix):], object_pairs_hook=unique)
+            if (type(row) is not dict or set(row) != {"phase", "event", "id", "elapsed_us"} or
+                    row["phase"] not in NATIVE_PHASES or row["event"] not in ("begin", "end") or
+                    type(row["id"]) is not int or not 0 < row["id"] <= 2**64 - 1 or
+                    type(row["elapsed_us"]) is not int or not 0 <= row["elapsed_us"] <= 2**64 - 1):
+                return
+        except (ValueError, TypeError, UnicodeError):
+            return
+        now = time.monotonic()
+        row.update(received_monotonic=round(now, 6), remaining_ms=round((self.deadline - now) * 1000, 3))
+        self.relay.emit("SBXR_NATIVE_PHASE " + json.dumps(row, sort_keys=True))
+
+    def close(self):
+        self.relay.close()
+
+
+NATIVE_PHASES = frozenset("authenticate entry entry-select installed-pair journeys lifecycle material network network-bind network-connect network-dns network-handshake network-ip-http network-roots network-tls open-disclosure open-http open-identity open-removal open-standard open-tunnel package probe-image query-active query-clock query-configuration-owner query-destination-dns query-enabled query-group query-hold query-listener query-load-state query-package query-process query-public-ip-dns query-start-condition query-unit-owner query-user query-validate review-action review-details review-status snapshot subprocess subprocess-spawn write-details".split())
+
+
+def readable(streams, timeout):
+    """Owned-pipe readiness without select's FD_SETSIZE descriptor ceiling."""
+    poller = select.poll()
+    by_fd = {stream.fileno(): stream for stream in streams}
+    for descriptor in by_fd:
+        poller.register(descriptor, select.POLLIN)
+    # The caller still checks its original monotonic deadline after receipt.
+    return [by_fd[descriptor] for descriptor, _ in poller.poll(math.ceil(timeout * 1000))]
+
+
+class NativeDiagnostics:
+    """Drain only our owned pipe; raw stderr is bounded and never forwarded."""
+    def __init__(self, stream, timing):
+        self.stream, self.timing = stream, timing
+        self.buffer = bytearray()
+        self.total = 0
+        self.closed = self.discard = self.exceeded = False
+
+    def drain(self, *, relay=True):
+        # Bounded work per call; never wait for EOF or a descendant-held pipe.
+        for _ in range(16):
+            if self.closed or self.exceeded and relay:
+                return
+            try:
+                # This owned pipe has one reader. Readiness before each read
+                # avoids blocking without a fallible descriptor-mode change.
+                if not readable([self.stream], 0):
+                    return
+                block = os.read(self.stream.fileno(), 4096)
+            except BlockingIOError:
+                return
+            if not block:
+                self.closed = True
+                return
+            self.total = min(self.total + len(block), MAX_OUTPUT + 1)
+            if self.total > MAX_OUTPUT:
+                self.exceeded = True
+            if not relay:
+                self.buffer.clear()
+                continue
+            if self.exceeded:
+                return
+            self.buffer.extend(block)
+            while b"\n" in self.buffer:
+                raw, _, rest = self.buffer.partition(b"\n")
+                self.buffer = bytearray(rest)
+                if not self.discard and len(raw) <= 512:
+                    self.timing.native(raw)
+                self.discard = False
+            if len(self.buffer) > 512:
+                self.buffer.clear()
+                self.discard = True
+
+    def close(self):
+        try:
+            self.drain(relay=False)
+        finally:
+            self.stream.close()
+            self.closed = True
 
 
 class LineStream:
-    def __init__(self, stream, sink, cancelled=None, owner_exited=None, timing=None):
+    def __init__(self, stream, sink, cancelled=None, owner_exited=None, timing=None, diagnostics=None):
         self.stream = stream
         self.sink = sink
         self.buffer = bytearray()
@@ -179,6 +344,14 @@ class LineStream:
         self.owner_exited = owner_exited or (lambda: False)
         self.last_code = None
         self.timing = timing or (lambda *args: None)
+        self.diagnostics = diagnostics
+        self.first_byte = self.first_line = False
+
+    def drain_diagnostics(self):
+        if self.diagnostics:
+            self.diagnostics.drain()
+            if self.diagnostics.exceeded:
+                raise ProtocolError("diagnostic-bound")
 
     def line(self, deadline):
         if self.cancelled():
@@ -192,8 +365,14 @@ class LineStream:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ProtocolError("output-deadline")
-            if not select.select([self.stream], [], [], min(remaining, 0.1))[0]:
-                if self.owner_exited():
+            watched = [self.stream]
+            if self.diagnostics and not self.diagnostics.closed:
+                watched.append(self.diagnostics.stream)
+            ready = readable(watched, min(remaining, 0.1))
+            if self.diagnostics and self.diagnostics.stream in ready:
+                self.drain_diagnostics()
+            if self.stream not in ready:
+                if not ready and self.owner_exited():
                     raise ProtocolError("owner-exited")
                 continue
             block = os.read(self.stream.fileno(), 4096)
@@ -201,6 +380,9 @@ class LineStream:
                 if self.buffer:
                     raise ProtocolError("output-unterminated")
                 return None
+            if not self.first_byte:
+                self.timing("first-byte-received")
+                self.first_byte = True
             self.buffer.extend(block)
             self.total += len(block)
             if self.total > MAX_OUTPUT or len(self.buffer) > 1024 * 1024:
@@ -208,6 +390,9 @@ class LineStream:
         raw, _, rest = self.buffer.partition(b"\n")
         self.buffer = bytearray(rest)
         rendered = raw + b"\n"
+        if not self.first_line:
+            self.timing("first-line-received")
+            self.first_line = True
         details_prompt = raw.rstrip(b"\r") == DETAILS_PROMPT.encode("ascii")
         if details_prompt:
             self.timing("prompt-received", "details-continuation")
@@ -243,19 +428,37 @@ class MenuSession:
             raise InterruptedError("menu session interrupted")
         if time.monotonic() >= deadline:
             raise ProtocolError("deadline-before-start")
-        self.process = subprocess.Popen(
-            [executable] if isinstance(executable, str) else list(executable),
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, bufsize=0, start_new_session=True,
-        )
         def owner_exited():
             try:
                 return child_exited(self.process.pid)
             except ChildProcessError:
                 return True
-        self.stream = LineStream(self.process.stdout, sink, self.cancelled, owner_exited, self.timing)
+        # Allocate the drainer before owning a child. After spawn, bind its
+        # pipes before any fallible diagnostic callback can trigger cleanup.
+        diagnostics = NativeDiagnostics(None, timing) if isinstance(timing, PhaseTiming) else None
+        self.stream = LineStream(None, sink, self.cancelled, owner_exited, self.timing, diagnostics)
         self.cleaned = False
         self.returncode = None
+        self.timing("spawn-attempt")
+        self.process = subprocess.Popen(
+            [executable] if isinstance(executable, str) else list(executable),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE if diagnostics else subprocess.DEVNULL,
+            bufsize=0, start_new_session=True,
+        )
+        self.stream.stream = self.process.stdout
+        if diagnostics:
+            diagnostics.stream = self.process.stderr
+        try:
+            self.timing("spawn-complete")
+        except BaseException:
+            try:
+                self.stop()
+            finally:
+                for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
+                    if pipe:
+                        pipe.close()
+            raise
 
     def write(self, value):
         input_class = ("continuation" if value == "\n" else "exit" if value == "0\n" else
@@ -280,14 +483,18 @@ class MenuSession:
             line = self.stream.line(self.deadline)
             if line is None:
                 raise ProtocolError("exit-before-selection")
+            if line == "SBXR V3":
+                self.timing("menu-frame-accepted")
             match = re.fullmatch(r"([1-9][0-9]*)\. (.+)", line)
             if match and match.group(2) == label:
                 if selection is not None:
                     raise ProtocolError("label-duplicate")
                 selection = match.group(1)
+                self.timing("menu-label-matched")
             if line == "0. Exit":
                 if selection is None:
                     raise ProtocolError("label-missing")
+                self.timing("menu-ready")
                 self.write(selection + "\n")
                 return
 
@@ -377,19 +584,50 @@ class MenuSession:
             if line.startswith("Code: "):
                 raise ProtocolError("result-mismatch")
 
+    def cleanup_diagnostics(self, *, close=False):
+        if self.stream.diagnostics:
+            try:
+                if close:
+                    self.stream.diagnostics.close()
+                else:
+                    self.stream.diagnostics.drain(relay=False)
+            except Exception:
+                # Best-effort diagnostics cannot preempt signal/reap. Keep the
+                # collector attached so a transient readiness failure retries.
+                pass
+
+    def wait(self, timeout, *, cleanup=False):
+        deadline = time.monotonic() + timeout
+        while True:
+            if cleanup:
+                self.cleanup_diagnostics()
+            else:
+                self.stream.drain_diagnostics()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(self.process.args, timeout)
+            try:
+                return self.process.wait(timeout=min(remaining, 0.01))
+            except subprocess.TimeoutExpired:
+                continue
+
     def finish(self):
+        self.stream.drain_diagnostics()
         if not hasattr(os, "waitid") and sys.platform != "darwin":
             remaining = max(0.01, self.deadline - time.monotonic())
             try:
-                code = self.process.wait(timeout=remaining)
+                code = self.wait(remaining)
             except subprocess.TimeoutExpired as error:
                 raise ProtocolError("exit-deadline") from error
             try:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            self.cleanup_diagnostics(close=True)
             self.cleaned = True
             self.returncode = code
+            if self.stream.diagnostics and self.stream.diagnostics.exceeded:
+                raise ProtocolError("diagnostic-bound")
             if code != 0:
                 raise ProtocolError("process-failed")
             return
@@ -398,10 +636,14 @@ class MenuSession:
                 raise InterruptedError("menu session interrupted")
             if time.monotonic() >= self.deadline:
                 raise ProtocolError("exit-deadline")
+            self.stream.drain_diagnostics()
             if self.stream.owner_exited():
+                self.stream.drain_diagnostics()
                 break
             time.sleep(0.01)
         code = self.stop()
+        if self.stream.diagnostics and self.stream.diagnostics.exceeded:
+            raise ProtocolError("diagnostic-bound")
         if code != 0:
             raise ProtocolError("process-failed")
 
@@ -433,6 +675,7 @@ class MenuSession:
             # This runs only AFTER failure; the journey deadline is unchanged.
             cleanup_deadline = time.monotonic() + 20
             while time.monotonic() < cleanup_deadline:
+                self.cleanup_diagnostics()
                 if self.stream.owner_exited():
                     break
                 time.sleep(0.01)
@@ -448,9 +691,10 @@ class MenuSession:
                 raise
         try:
             remaining = max(0, cleanup_deadline - time.monotonic()) if sys.platform == "darwin" else 5
-            code = self.process.wait(timeout=remaining)
+            code = self.wait(remaining, cleanup=True)
         except subprocess.TimeoutExpired:
             raise ProtocolError("process-cleanup")
+        self.cleanup_diagnostics(close=True)
         if not sys.platform.startswith("linux"):
             self.cleaned = True
             self.returncode = code
@@ -505,17 +749,22 @@ def qualification_deadline(path):
         raise ProtocolError("request-clock-unavailable") from None
 
 
-def drive(args, cancelled=None):
-    deadline = time.monotonic() + float(args.timeout)
+def drive(args, cancelled=None, timing=None):
+    deadline = timing.deadline if timing else time.monotonic() + float(args.timeout)
+    if timing:
+        timing("driver-start")
     request = os.environ.get("SBXR_QUALIFICATION_REQUEST")
     if request:
         request_deadline = qualification_deadline(request)
         deadline = min(deadline, time.monotonic() + request_deadline - time.time())
     if time.monotonic() >= deadline:
         raise ProtocolError("deadline-before-start")
+    if timing:
+        timing.deadline = deadline
+        timing("request-ready")
     session = MenuSession(args.executable, sys.stdout.buffer, deadline, cancelled,
                           protected_wrapper=args.protected_wrapper,
-                          timing=PhaseTiming(sys.stderr, deadline) if args.mode == "details" else None)
+                          timing=timing)
     try:
         session.choose(args.label)
         if args.mode == "action" and args.label == "Start setup":
@@ -588,6 +837,7 @@ def parser():
 
 def main():
     received_signal = None
+    timing = None
     def cancelled():
         return received_signal is not None
     def receive(signum, _frame):
@@ -603,14 +853,23 @@ def main():
                 raise ProtocolError("subreaper-unavailable")
         for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(signum, receive)
-        drive(args, cancelled)
+        if args.mode == "details":
+            timing = PhaseTiming(sys.stderr, time.monotonic() + float(args.timeout))
+        drive(args, cancelled, timing)
     except Exception as error:
         phase = ("signal-cancelled" if received_signal is not None else
                  error.phase if isinstance(error, ProtocolError) else "driver-error")
         code = error.code if isinstance(error, ProtocolError) else None
         suffix = " code=" + code if code and re.fullmatch(r"[A-Z0-9-]+", code) else ""
-        print("SBXR_MENU_SESSION_REFUSED phase=" + phase + suffix, file=sys.stderr)
+        message = "SBXR_MENU_SESSION_REFUSED phase=" + phase + suffix
+        if timing:
+            timing.relay.emit(message)
+        else:
+            print(message, file=sys.stderr)
         return 1
+    finally:
+        if timing:
+            timing.close()
     return 0
 
 

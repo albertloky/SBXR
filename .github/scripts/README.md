@@ -61,6 +61,30 @@ means stdin write/flush completed, not that the product consumed it. No input
 value, transcript line, path, or credential enters these events. A captured late
 prompt still refuses; timing does not extend any deadline.
 
+Details timings now bracket request-clock work and product spawn, distinguish the
+first stdout byte/line received from the accepted menu label/frame, and retain
+selection/continuation/return events. Native non-terminal public entry emits only
+typed `SBXR_NATIVE_PHASE` scopes for entry selection/authentication, Owner work,
+fresh installed/process checks, fixed queries/subprocesses and network stages.
+The details driver drains a bounded private stderr pipe, relays only the closed
+schema/phase allowlist and discards other stderr. Menu/native records and the final
+details refusal use a daemon relay with at most 256 queued records of 512 bytes.
+A full queue drops records; sink writes never run on the enforcement thread. The
+relay uses a duplicated raw descriptor without changing inherited descriptor
+flags or holding stderr's buffered lock; exit uses a 50 ms relay join allowance.
+The owned stderr drainer is installed before post-spawn diagnostics, checks
+readiness before every read, and cleanup drains without relay. A full or failed
+diagnostic sink cannot prevent deadline enforcement or owned-process cleanup. No raw command,
+path, address, output, credential, fingerprint or formatted error enters a native
+record. There is no new CLI/environment authority switch.
+
+Native `elapsed_us` uses a per-process origin; driver `received_monotonic` is the
+receipt time, not the native event's clock. Match begin/end by ID. End means scope
+exit, including refusal; spans are inclusive, and missing events may reflect
+termination, backpressure drops or incomplete collection. These diagnostics do
+not establish a latency repair or packaged qualification.
+
+
 The former `v3-clean` runner and forced-interruption procedure are retired;
 their source remains in Git history. The shared menu, identity and cleanup
 helpers remain available for current callers.

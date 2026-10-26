@@ -198,3 +198,57 @@ fn native_admission_refuses_mac_before_network() {
         ))
     }
 }
+
+#[test]
+fn timing_brackets_real_loopback_tls_and_http_without_endpoint_or_payload() {
+    let (address, worker) = server(
+        b"http/1.1",
+        Some(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n8.8.8.8".to_vec()),
+    );
+    let (result, bytes) = crate::host::timing::capture(|| {
+        fetch_ipv4(
+            &roots(),
+            "localhost",
+            &[address],
+            Instant::now() + Duration::from_secs(2),
+            &Cancellation::new(),
+        )
+    });
+    assert_eq!(result.unwrap(), Ipv4Addr::new(8, 8, 8, 8));
+    worker.join().unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    for forbidden in [
+        "localhost",
+        "8.8.8.8",
+        "HTTP",
+        "GET",
+        "server-key",
+        "/private/",
+    ] {
+        assert!(!text.contains(forbidden));
+    }
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line.strip_prefix("SBXR_NATIVE_PHASE ").unwrap()).unwrap())
+        .collect();
+    let phases: Vec<_> = rows
+        .iter()
+        .map(|r| (r["phase"].as_str().unwrap(), r["event"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        phases,
+        vec![
+            ("network-ip-http", "begin"),
+            ("network-tls", "begin"),
+            ("network-connect", "begin"),
+            ("network-connect", "end"),
+            ("network-handshake", "begin"),
+            ("network-handshake", "end"),
+            ("network-tls", "end"),
+            ("network-ip-http", "end")
+        ]
+    );
+    for pair in [(0, 7), (1, 6), (2, 3), (4, 5)] {
+        assert_eq!(rows[pair.0]["id"], rows[pair.1]["id"]);
+    }
+}

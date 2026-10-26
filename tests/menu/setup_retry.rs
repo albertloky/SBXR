@@ -123,7 +123,7 @@ data=json.load(sys.stdin)
 class Lines:
  def __init__(self):self.it=iter(data.splitlines())
  def line(self,_):return next(self.it,None)
-s=object.__new__(d.MenuSession);s.stream=Lines();s.deadline=0
+s=object.__new__(d.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args:None
 writes=[];s.write=writes.append
 s.choose('Start setup');s.expect_prompt(d.SETUP_CHOICE_PROMPT);s.write('1\n');s.expect_prompt(d.SETUP_REFUSAL_PROMPT,review_code='PROXY-INSTALLATION-ACTION-REFUSED');s.write('c\n');s.wait_code('PROXY-INSTALLATION-ACTION-CANCELLED')
 assert writes==['2\n','1\n','c\n','0\n'],writes

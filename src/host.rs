@@ -24,6 +24,7 @@ pub mod runtime_io;
 mod setup;
 pub mod subscription;
 pub mod system;
+pub(crate) mod timing;
 use crate::records::SetupPhase;
 pub use fixture::{FIXTURE_CONFIGURATION, FixtureHost, HostObservation};
 pub use setup::{SetupFailure, SetupGuard, SetupHost, SetupObservation};

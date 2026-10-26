@@ -137,3 +137,42 @@ fn owner_session_stop_cancels_a_real_owned_child_without_cancelling_a_fresh_sess
     assert!(stop.cancelled());
     assert!(!Cancellation::new().cancelled());
 }
+
+#[test]
+fn timing_distinguishes_actual_spawn_and_completion_without_argv_or_output() {
+    let (result, bytes) = super::super::timing::capture(|| {
+        run(
+            "/bin/sh",
+            &["-c", "printf 'SECRET-SENTINEL /private/path'"],
+            Duration::from_secs(2),
+            1024,
+            &Cancellation::new(),
+        )
+    });
+    assert_eq!(result.unwrap().bytes(), b"SECRET-SENTINEL /private/path");
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(
+        !text.contains("SECRET-SENTINEL")
+            && !text.contains("/private/path")
+            && !text.contains("/bin/sh")
+    );
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line.strip_prefix("SBXR_NATIVE_PHASE ").unwrap()).unwrap())
+        .collect();
+    let phases: Vec<_> = rows
+        .iter()
+        .map(|r| (r["phase"].as_str().unwrap(), r["event"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        phases,
+        vec![
+            ("subprocess", "begin"),
+            ("subprocess-spawn", "begin"),
+            ("subprocess-spawn", "end"),
+            ("subprocess", "end")
+        ]
+    );
+    assert_eq!(rows[0]["id"], rows[3]["id"]);
+    assert_eq!(rows[1]["id"], rows[2]["id"]);
+}

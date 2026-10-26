@@ -152,7 +152,9 @@ Linux validation. `testdata/` directories contain test inputs, not live evidence
 
 These are separate from installed product behavior. For a missing menu action,
 first inspect product review/legal-action logic; for lost menu output or a
-deadline failure, inspect the driver and operator wrapper.
+deadline failure, inspect the driver and operator wrapper. Native fixed timing
+scopes live in `src/host/timing.rs`; the details driver relays their closed schema
+without raw stderr. See the script map for clock and scope-exit semantics.
 
 | Task | Implementation | Checks / procedure |
 |---|---|---|

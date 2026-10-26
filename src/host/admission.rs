@@ -135,6 +135,7 @@ impl Snapshot {
         Ok(value)
     }
     pub(super) fn verify(&self) -> Result<(), HostError> {
+        let _phase = super::timing::span(super::timing::Phase::Snapshot);
         if self.stop.is_cancelled() {
             return Err(HostError::Cancelled);
         }

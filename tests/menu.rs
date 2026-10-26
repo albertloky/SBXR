@@ -263,7 +263,7 @@ data=json.load(sys.stdin)
 class Lines:
  def __init__(self):self.items=iter(data['text'].splitlines())
  def line(self,_):return next(self.items,None)
-s=object.__new__(d.MenuSession);s.stream=Lines();s.deadline=0
+s=object.__new__(d.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args:None
 writes=[];s.write=writes.append
 s.choose(data['label']);s.expect_prompt(d.PROMPTS[data['label']]);s.write('n\n');s.wait_code('PROXY-INSTALLATION-ACTION-CANCELLED')
 assert writes==['2\n','n\n','0\n'],writes

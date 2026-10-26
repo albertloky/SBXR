@@ -161,6 +161,12 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
     }
 
     fn review(&self, action: Action) -> Review {
+        use crate::host::timing::{Phase, span};
+        let _phase = span(match action {
+            Action::Status => Phase::ReviewStatus,
+            Action::ViewDetails => Phase::ReviewDetails,
+            _ => Phase::ReviewAction,
+        });
         *self.owner.borrow_mut() = Rc::new(());
         self.active.borrow_mut().take();
         let Ok(journeys) = self.sources.journeys() else {
@@ -243,6 +249,7 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
         self.apply(p, c, Some(output))
     }
     fn write_details(&mut self, output: &mut dyn std::io::Write) -> std::io::Result<()> {
+        let _phase = crate::host::timing::span(crate::host::timing::Phase::Details);
         let reviewed = self.review(Action::ViewDetails);
         for line in reviewed.details {
             writeln!(output, "{line}")?;
