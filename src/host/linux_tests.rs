@@ -118,7 +118,7 @@ struct Fake {
     fail_after: bool,
     cancel_after: Option<Operation>,
     queries_fail: bool,
-    query_override: Option<(Query, i32, Vec<u8>)>,
+    query_overrides: Vec<(Query, i32, Vec<u8>)>,
     configuration_owner: bool,
     install_default: bool,
     effects: Vec<Operation>,
@@ -138,7 +138,7 @@ impl Fake {
             fail_after: false,
             cancel_after: None,
             queries_fail: false,
-            query_override: None,
+            query_overrides: Vec::new(),
             configuration_owner: true,
             install_default: false,
             effects: vec![],
@@ -161,8 +161,10 @@ impl CommandRunner for Fake {
         if self.queries_fail || stop.cancelled() {
             return Err(HostError::Unsafe);
         }
-        if let Some((query, code, bytes)) = &self.query_override
-            && *query == q
+        if let Some((_, code, bytes)) = self
+            .query_overrides
+            .iter()
+            .find(|(query, _, _)| *query == q)
         {
             return CommandOutput::completed(*code, bytes.clone());
         }

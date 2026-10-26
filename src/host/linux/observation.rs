@@ -374,8 +374,15 @@ impl Facts {
             return Err(HostError::Unsafe);
         }
         *guard = SetupGuard::Query(Query::Active);
+        // systemd 255 uses exit 4 for an absent unit, while printing inactive.
+        // Corroborate absence; exit 4 never proves a loaded/masked service stopped.
+        let absent_inactive = active == "inactive"
+            && values[6].code() == 4
+            && enabled == "not-found"
+            && values[7].code() == 0
+            && values[7].text()? == "not-found";
         if !matches!(active, "active" | "inactive" | "failed")
-            || values[6].code() != if active == "active" { 0 } else { 3 }
+            || values[6].code() != if active == "active" { 0 } else { 3 } && !absent_inactive
         {
             return Err(HostError::Unsafe);
         }

@@ -1,6 +1,38 @@
 //! Injected Linux command/filesystem observations; never native admission or effects.
 use super::*;
 
+// Exact stdout/code vectors from the 2026-10-26 post-cleanup inventory. These
+// are not the original q196 failure-time observations or native authority.
+fn captured_queries() -> Vec<(Query, i32, Vec<u8>)> {
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("testdata/clean-absent-queries.json")).unwrap();
+    assert_eq!(rows.len(), QUERIES.len());
+    QUERIES
+        .iter()
+        .zip(rows)
+        .map(|(query, row)| {
+            assert_eq!(row["query"], format!("{query:?}"));
+            (
+                *query,
+                row["code"].as_i64().unwrap().try_into().unwrap(),
+                row["stdout"].as_str().unwrap().as_bytes().to_vec(),
+            )
+        })
+        .collect()
+}
+#[test]
+fn captured_clean_absent_queries_admit_the_installed_software_before_proxy_setup() {
+    let root = Root::new();
+    let (host, commands, _) = system_host(&root);
+    host.runner.transport().backend.borrow_mut().query_overrides = captured_queries();
+    let installation = StandardInstallation::new(host, release()).unwrap();
+    let review = installation.review(Action::StartSetup);
+    assert_eq!(review.status, Status::NotSetUp, "{:?}", review.details);
+    assert!(review.prepared.is_some());
+    assert!(commands.borrow().iter().all(|c| !c.mutation()));
+    assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+}
+
 #[test]
 fn clean_installed_refusals_identify_bounded_guards_without_payloads() {
     for (case, expected) in [
@@ -17,14 +49,14 @@ fn clean_installed_refusals_identify_bounded_guards_without_payloads() {
         match case {
             0 => host.admission.architecture = "arm64".into(),
             1 => {
-                host.runner.transport().backend.borrow_mut().query_override =
-                    Some((Query::Clock, 0, b"no\n".to_vec()))
+                host.runner.transport().backend.borrow_mut().query_overrides =
+                    vec![(Query::Clock, 0, b"no\n".to_vec())]
             }
             // Existing Go absent-host fixture uses this vector. It is not a
             // capture of q196's missing raw systemctl results; keep it refused.
             2 => {
-                host.runner.transport().backend.borrow_mut().query_override =
-                    Some((Query::Enabled, 1, b"not-found\n".to_vec()))
+                host.runner.transport().backend.borrow_mut().query_overrides =
+                    vec![(Query::Enabled, 1, b"not-found\n".to_vec())]
             }
             3 => root.write(CONFIG, b"SECRET-SENTINEL /private/owner-path", 0o640),
             4 => root.write("usr/local/bin/sbxr", b"SECRET-SENTINEL", 0o755),
@@ -73,6 +105,7 @@ impl<'a> crate::proxyinstallation::OwnerSources<'a> for CleanSources<'_> {
     ) -> Result<Box<dyn crate::proxyinstallation::Interface + 'a>, HostError> {
         use crate::proxyinstallation::{Journey, RemovalInstallation};
         let (mut host, _, _) = system_host(self.root);
+        host.runner.transport().backend.borrow_mut().query_overrides = captured_queries();
         match journey {
             Journey::Standard => {
                 // Setup-only network/clock facts never authorize removal.
@@ -203,7 +236,7 @@ fn clean_installed_unknown_command_results_remain_refused_and_classified() {
         (Query::Group, 2, b"SECRET-SENTINEL"),
         (Query::Process, 0, b"SECRET-SENTINEL"),
         (Query::Enabled, 0, b"not-found"),
-        (Query::Active, 4, b"inactive"),
+        (Query::Active, 4, b"failed"),
         (Query::LoadState, 0, b"SECRET-SENTINEL"),
         (Query::Listener, 1, b"SECRET-SENTINEL"),
         (Query::UnitOwner, 2, b"SECRET-SENTINEL"),
@@ -211,8 +244,8 @@ fn clean_installed_unknown_command_results_remain_refused_and_classified() {
     ] {
         let root = Root::new();
         let (host, commands, _) = system_host(&root);
-        host.runner.transport().backend.borrow_mut().query_override =
-            Some((query, code, bytes.to_vec()));
+        host.runner.transport().backend.borrow_mut().query_overrides =
+            vec![(query, code, bytes.to_vec())];
         let module = StandardInstallation::new(host, release()).unwrap();
         let review = module.review(Action::StartSetup);
         assert_eq!(review.status, Status::ProblemDetected);
@@ -224,5 +257,67 @@ fn clean_installed_unknown_command_results_remain_refused_and_classified() {
         );
         assert!(!diagnostic.contains("SECRET-SENTINEL"));
         assert!(commands.borrow().iter().all(|c| !c.mutation()));
+    }
+}
+
+#[test]
+fn absent_active_exit_requires_exact_corroboration_and_rejects_unknown_states() {
+    for (query, code, bytes) in [
+        (Query::Active, 4, b"failed\n".as_slice()),
+        (Query::Active, 4, b"unknown\n"),
+        (Query::Active, 4, b"active\n"),
+        (Query::Active, 4, b""),
+        (Query::Active, 1, b"inactive\n"),
+        (Query::Active, 0, b"inactive\n"),
+        (Query::Active, 3, b"active\n"),
+        (Query::Enabled, 1, b"disabled\n"),
+        (Query::Enabled, 1, b"masked\n"),
+        (Query::LoadState, 0, b"loaded\n"),
+        (Query::LoadState, 0, b"masked\n"),
+        (Query::LoadState, 1, b"not-found\n"),
+        (Query::LoadState, 0, b"error\n"),
+        (Query::LoadState, 0, b"not-found\nloaded\n"),
+    ] {
+        let root = Root::new();
+        let (host, commands, _) = system_host(&root);
+        let mut queries = captured_queries();
+        let slot = queries.iter_mut().find(|(q, _, _)| *q == query).unwrap();
+        *slot = (query, code, bytes.to_vec());
+        host.runner.transport().backend.borrow_mut().query_overrides = queries;
+        let installation = StandardInstallation::new(host, release()).unwrap();
+        let review = installation.review(Action::StartSetup);
+        assert_eq!(review.status, Status::ProblemDetected, "{query:?}");
+        assert!(review.prepared.is_none());
+        assert!(
+            review
+                .details
+                .iter()
+                .any(|d| d.contains("Readiness guard: Query(Active); result: Unsafe."))
+        );
+        assert!(commands.borrow().iter().all(|c| !c.mutation()));
+    }
+}
+#[test]
+fn captured_absent_service_never_bypasses_platform_network_lock_or_transaction_guards() {
+    for case in 0..8 {
+        let root = Root::new();
+        let (mut host, commands, _) = system_host(&root);
+        host.runner.transport().backend.borrow_mut().query_overrides = captured_queries();
+        match case {
+            0 => host.admission.root = false,
+            1 => host.admission.architecture = "arm64".into(),
+            2 => host.admission.destination_compatible = false,
+            3 => host.admission.host_lock_held = false,
+            4 => host.admission.package_locks_held = false,
+            5 => host.admission.tcp443_available = false,
+            6 => root.write("var/lib/sbxr/update.json", b"foreign", 0o600),
+            _ => host.admission.public_ipv4 = "127.0.0.1".into(),
+        }
+        let installation = StandardInstallation::new(host, release()).unwrap();
+        let review = installation.review(Action::StartSetup);
+        assert_eq!(review.status, Status::ProblemDetected);
+        assert!(review.prepared.is_none());
+        assert!(commands.borrow().iter().all(|c| !c.mutation()));
+        assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
     }
 }

@@ -1,0 +1,13 @@
+[
+  {"query": "Package", "code": 1, "stdout": ""},
+  {"query": "Hold", "code": 0, "stdout": ""},
+  {"query": "User", "code": 2, "stdout": ""},
+  {"query": "Group", "code": 2, "stdout": ""},
+  {"query": "Process", "code": 1, "stdout": ""},
+  {"query": "Enabled", "code": 4, "stdout": "not-found\n"},
+  {"query": "Active", "code": 4, "stdout": "inactive\n"},
+  {"query": "LoadState", "code": 0, "stdout": "not-found\n"},
+  {"query": "Listener", "code": 0, "stdout": ""},
+  {"query": "UnitOwner", "code": 1, "stdout": ""},
+  {"query": "Clock", "code": 0, "stdout": "yes\n"}
+]
