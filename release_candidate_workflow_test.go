@@ -432,7 +432,7 @@ func TestCandidateRoutesCurrentV3Qualification(t *testing.T) {
 	assertActionsPinned(t, stable)
 }
 
-func TestCandidateV3TransportStagesPrivateManifest(t *testing.T) {
+func TestCandidateV3TransportStagesPrivateManifestAndBundle(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -460,23 +460,36 @@ func TestCandidateV3TransportStagesPrivateManifest(t *testing.T) {
 	if err := os.Chmod(manifest, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	bundle := filepath.Join(source, "qualification.bundle")
+	if err := os.WriteFile(bundle, []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(bundle, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	executable := filepath.Join(source, "sbxr-release")
 	if err := os.WriteFile(executable, []byte("fixture"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	archive := exec.Command("tar", "-C", source, "-czf", "-", "qualification-manifest.json", "sbxr-release")
+	archive := exec.Command("tar", "-C", source, "-czf", "-", "qualification-manifest.json", "qualification.bundle", "sbxr-release")
 	archiveBytes, err := archive.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	// Preserve archive modes like root extraction on the VPS, even as a local user.
+	command = strings.Replace(command, "tar --no-same-owner", "tar -p --no-same-owner", 1)
 	command = "umask 077; " + strings.ReplaceAll(command, "/root/sbxr-qualification-v3", remote)
 	extract := exec.Command("bash", "-c", "set -euo pipefail; "+command)
 	extract.Stdin = bytes.NewReader(archiveBytes)
 	if output, err := extract.CombinedOutput(); err != nil {
 		t.Fatalf("V3 transport staging failed: %v\n%s", err, output)
 	}
-	for path, want := range map[string]os.FileMode{remote: 0o700, filepath.Join(remote, "qualification-manifest.json"): 0o600} {
+	for path, want := range map[string]os.FileMode{
+		remote: 0o700,
+		filepath.Join(remote, "qualification-manifest.json"): 0o600,
+		filepath.Join(remote, "qualification.bundle"):        0o600,
+	} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
