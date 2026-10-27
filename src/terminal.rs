@@ -27,7 +27,8 @@ fn run_inner(
     installation: &mut impl Interface,
     mut lifecycle: Option<&mut dyn crate::software_lifecycle::Interface>,
 ) -> io::Result<()> {
-    match installation.review(Action::Status).mode {
+    let initial = installation.review(Action::Status);
+    match initial.mode {
         ExecutionMode::Native => {}
         ExecutionMode::NativeUnavailable => {
             writeln!(output, "SBXR Rust — native installation unavailable")?;
@@ -58,8 +59,13 @@ fn run_inner(
             )?;
         }
     }
+    let mut initial = Some(initial);
     loop {
-        let mut current = installation.review(Action::Status);
+        // Consume the fresh banner review once, before any Owner input. Every
+        // later frame still observes anew and invalidates prepared authority.
+        let mut current = initial
+            .take()
+            .unwrap_or_else(|| installation.review(Action::Status));
         let qualifier = match current.mode {
             ExecutionMode::Native => "local",
             ExecutionMode::Simulation => "simulated",

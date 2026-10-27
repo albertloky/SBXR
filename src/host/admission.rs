@@ -115,6 +115,13 @@ impl Snapshot {
         let (executable, named) = fs
             .raw(EXECUTABLE, Mode::from_raw_mode(0o755), LIMIT)?
             .ok_or(HostError::Foreign)?;
+        // Bind the exact retained tuple, including changes between the initial
+        // pair observation and these separate protected reads. Later guards can
+        // preserve this proof by comparing fresh full bytes and file identities.
+        if InstalledRecord::decode(&record_bytes).map_err(refused)? != record {
+            return Err(HostError::Foreign);
+        }
+        release_identity::verify_installed_pair(&record, &executable).map_err(refused)?;
         let installed = fs.admission_executable()?;
         let original = stamp(&installed)?;
         let value = Self {
@@ -153,9 +160,7 @@ impl Snapshot {
         {
             return Err(HostError::Foreign);
         }
-        if super::linux::observation::read_installed(&self.fs)?.as_ref() != Some(&self.record)
-            || !super::lifecycle::transactions_absent(&self.fs)?
-        {
+        if !super::lifecycle::transactions_absent(&self.fs)? {
             return Err(HostError::Foreign);
         }
         let retained_record = self

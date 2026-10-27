@@ -349,3 +349,272 @@ fn snapshot_timings_keep_fresh_record_refusal_and_never_emit_authority() {
         assert_eq!(rows[0]["id"], rows.last().unwrap()["id"]);
     }
 }
+
+#[test]
+fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work() {
+    use std::{sync::Arc, time::Instant};
+    let f = Fixture::new();
+    let payload = elf(
+        Architecture::Amd64,
+        &[
+            (
+                release_identity::RUST_ARTIFACT_SECTION,
+                release_identity::rust_artifact_metadata(&"a".repeat(40), Architecture::Amd64)
+                    .unwrap(),
+            ),
+            (".comment", release_identity::RUST_COMPILER_COMMENT.to_vec()),
+            (".padding", vec![0; 8 * 1024 * 1024]),
+        ],
+    );
+    let image = release_identity::stamp_executable(
+        &payload,
+        "v9.0.0",
+        &"a".repeat(40),
+        200,
+        Architecture::Amd64,
+    )
+    .unwrap();
+    let record = InstalledRecord::new(
+        crate::records::ReleaseIdentity::new("v9.0.0", &"a".repeat(40), &"b".repeat(64)).unwrap(),
+        200,
+        "amd64",
+        &crate::records::sha256_hex(&image),
+    )
+    .unwrap();
+    f.write(EXECUTABLE, &image, 0o755);
+    f.write(
+        "var/lib/sbxr/installed.json",
+        &record.encode().unwrap(),
+        0o600,
+    );
+    let capture_start = Instant::now();
+    let snapshot = f.capture().unwrap();
+    let capture_elapsed = capture_start.elapsed();
+    let named_reads = Arc::new(AtomicUsize::new(0));
+    let count = named_reads.clone();
+    *snapshot.fs.raw_observer.lock().unwrap() = Some(Box::new(move |path| {
+        if path == EXECUTABLE {
+            count.fetch_add(1, Ordering::Relaxed);
+        }
+    }));
+    let start = Instant::now();
+    let ((), trace) = super::super::timing::capture(|| {
+        for _ in 0..4 {
+            snapshot.verify().unwrap();
+        }
+    });
+    println!(
+        "inert image bytes={} capture_us={} four_verify_us={} named_reads={}",
+        image.len(),
+        capture_elapsed.as_micros(),
+        start.elapsed().as_micros(),
+        named_reads.load(Ordering::Relaxed)
+    );
+    assert_eq!(
+        named_reads.load(Ordering::Relaxed),
+        4,
+        "one fresh full named-image read per guard"
+    );
+    let trace = String::from_utf8(trace).unwrap();
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|l| l.contains("\"phase\":\"snapshot\"") && l.contains("\"event\":\"begin\""))
+            .count(),
+        4
+    );
+    assert!(
+        !trace.contains("installed-pair"),
+        "captured tuple must not be re-proved"
+    );
+}
+
+#[test]
+fn capture_rejects_record_bytes_changed_after_the_initial_pair_read() {
+    let f = Fixture::new();
+    // Both records independently match image A; only the release-index identity
+    // differs. The exact record returned by the first read must bind held bytes.
+    let other = InstalledRecord::new(
+        crate::records::ReleaseIdentity::new("v9.0.0", &"a".repeat(40), &"c".repeat(64)).unwrap(),
+        200,
+        "amd64",
+        &crate::records::sha256_hex(&executable()),
+    )
+    .unwrap();
+    release_identity::verify_installed_pair(&other, &executable()).unwrap();
+    let fs = ProtectedFs::open(&f.0).unwrap();
+    let record_path = f.0.join("var/lib/sbxr/installed.json");
+    let mut changed = false;
+    *fs.raw_observer.lock().unwrap() = Some(Box::new(move |path| {
+        if path == EXECUTABLE && !changed {
+            changed = true;
+            std::fs::write(&record_path, other.encode().unwrap()).unwrap();
+        }
+    }));
+    assert!(
+        Snapshot::capture(
+            fs,
+            File::open(f.0.join(EXECUTABLE)).unwrap(),
+            release_identity::rust_artifact_metadata(&"a".repeat(40), Architecture::Amd64).unwrap(),
+            Cancellation::new()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn capture_rejects_a_valid_image_that_does_not_match_the_captured_record() {
+    let f = Fixture::new();
+    let image_a = executable();
+    let payload = release_identity::read_executable_identity(&image_a).unwrap();
+    let image_b = release_identity::stamp_executable(
+        payload.payload(),
+        "v9.0.0",
+        &"a".repeat(40),
+        201,
+        Architecture::Amd64,
+    )
+    .unwrap();
+    release_identity::inspect_linux_artifact(&image_b, Architecture::Amd64).unwrap();
+    let record_b = InstalledRecord::new(
+        crate::records::ReleaseIdentity::new("v9.0.0", &"a".repeat(40), &"b".repeat(64)).unwrap(),
+        201,
+        "amd64",
+        &crate::records::sha256_hex(&image_b),
+    )
+    .unwrap();
+    release_identity::verify_installed_pair(&record_b, &image_b).unwrap();
+    let fs = ProtectedFs::open(&f.0).unwrap();
+    let image_path = f.0.join(EXECUTABLE);
+    let mut records = 0;
+    *fs.raw_observer.lock().unwrap() = Some(Box::new(move |path| {
+        if path == "var/lib/sbxr/installed.json" {
+            records += 1;
+            if records == 2 {
+                std::fs::write(&image_path, &image_b).unwrap();
+            }
+        }
+    }));
+    assert!(
+        Snapshot::capture(
+            fs,
+            File::open(f.0.join(EXECUTABLE)).unwrap(),
+            release_identity::rust_artifact_metadata(&"a".repeat(40), Architecture::Amd64).unwrap(),
+            Cancellation::new()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn every_guard_keeps_fresh_metadata_namespace_record_and_transaction_refusals() {
+    for case in [
+        "image-mode",
+        "record-mode",
+        "image-link",
+        "record-link",
+        "parent-mode",
+        "record-identity",
+        "uid",
+        "gid",
+        "prior-image",
+        "candidate-image",
+        "prior-record",
+        "candidate-record",
+        "update",
+        "next-update",
+    ] {
+        let f = Fixture::new();
+        let mut snapshot = f.capture().unwrap();
+        let record_path = "var/lib/sbxr/installed.json";
+        match case {
+            "image-mode" => std::fs::set_permissions(
+                f.0.join(EXECUTABLE),
+                std::fs::Permissions::from_mode(0o754),
+            )
+            .unwrap(),
+            "record-mode" => std::fs::set_permissions(
+                f.0.join(record_path),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap(),
+            "image-link" => std::fs::hard_link(f.0.join(EXECUTABLE), f.0.join("link")).unwrap(),
+            "record-link" => std::fs::hard_link(f.0.join(record_path), f.0.join("link")).unwrap(),
+            "parent-mode" => std::fs::set_permissions(
+                f.0.join("usr/local/bin"),
+                std::fs::Permissions::from_mode(0o777),
+            )
+            .unwrap(),
+            "record-identity" => {
+                let other = InstalledRecord::new(
+                    crate::records::ReleaseIdentity::new(
+                        "v9.0.0",
+                        &"a".repeat(40),
+                        &"c".repeat(64),
+                    )
+                    .unwrap(),
+                    200,
+                    "amd64",
+                    &crate::records::sha256_hex(&executable()),
+                )
+                .unwrap();
+                f.write(record_path, &other.encode().unwrap(), 0o600);
+            }
+            // Exercise expected-owner comparisons without changing OS ownership.
+            "uid" => snapshot.fs.uid += 1,
+            "gid" => snapshot.fs.gid += 1,
+            other => f.write(
+                match other {
+                    "prior-image" => "usr/local/bin/.sbxr-update-prior",
+                    "candidate-image" => "usr/local/bin/.sbxr-update-candidate",
+                    "prior-record" => "var/lib/sbxr/.installed.json.prior",
+                    "candidate-record" => "var/lib/sbxr/.installed.json.candidate",
+                    "update" => "var/lib/sbxr/update.json",
+                    "next-update" => "var/lib/sbxr/.update.json.next",
+                    _ => unreachable!(),
+                },
+                b"pending transaction",
+                0o600,
+            ),
+        }
+        assert!(snapshot.verify().is_err(), "guard accepted {case}");
+    }
+}
+
+#[test]
+fn cancellation_during_a_fresh_read_still_refuses_the_guard() {
+    let f = Fixture::new();
+    let snapshot = f.capture().unwrap();
+    let stop = snapshot.stop.clone();
+    *snapshot.fs.raw_observer.lock().unwrap() = Some(Box::new(move |path| {
+        if path == "var/lib/sbxr/installed.json" {
+            stop.cancel();
+        }
+    }));
+    assert_eq!(snapshot.verify(), Err(HostError::Cancelled));
+}
+
+#[test]
+fn stale_process_proof_blocks_streaming_execution_without_output_or_effects() {
+    use crate::{
+        domain::{Action, Confirmation, Outcome},
+        proxyinstallation::{Installation, Interface},
+    };
+    let f = Fixture::new();
+    let snapshot = f.capture().unwrap();
+    let mut journey = BoundJourney::new(&snapshot, Box::new(Installation::simulation()));
+    let prepared = journey.review(Action::StartSetup).prepared.unwrap();
+    f.write("var/lib/sbxr/update.json", b"transaction appeared", 0o600);
+    let mut output = Vec::new();
+    assert_eq!(
+        journey
+            .execute_output(prepared, Confirmation::Approved, &mut output)
+            .unwrap()
+            .outcome,
+        Outcome::Refused
+    );
+    assert!(output.is_empty());
+    assert!(journey.review(Action::StartSetup).prepared.is_none());
+    assert!(journey.write_details(&mut output).is_err());
+    assert!(output.is_empty());
+}

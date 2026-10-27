@@ -44,12 +44,16 @@ pub(super) struct Metadata {
     pub uid: u32,
     pub gid: u32,
 }
+#[cfg(test)]
+type RawObserver = Box<dyn FnMut(&str) + Send>;
 pub(super) struct ProtectedFs {
     root: OwnedFd,
     path: PathBuf,
     pub uid: u32,
     pub gid: u32,
     native_write_lock: Option<std::sync::Arc<super::locks::HostLock>>,
+    #[cfg(test)]
+    pub(super) raw_observer: std::sync::Mutex<Option<RawObserver>>,
     #[cfg(test)]
     pub(super) package_replacement_fault: std::sync::atomic::AtomicU8,
 }
@@ -67,6 +71,8 @@ impl ProtectedFs {
             uid,
             gid,
             native_write_lock: None,
+            #[cfg(test)]
+            raw_observer: std::sync::Mutex::new(None),
             #[cfg(test)]
             package_replacement_fault: std::sync::atomic::AtomicU8::new(0),
         })
@@ -92,6 +98,8 @@ impl ProtectedFs {
             uid: 0,
             gid: stat.st_gid,
             native_write_lock: None,
+            #[cfg(test)]
+            raw_observer: std::sync::Mutex::new(None),
             #[cfg(test)]
             package_replacement_fault: std::sync::atomic::AtomicU8::new(0),
         })
@@ -202,7 +210,16 @@ impl ProtectedFs {
         mode: Mode,
         limit: usize,
     ) -> Result<Option<(Vec<u8>, Evidence)>, HostError> {
-        self.raw_with_links(path, mode, limit, 1)
+        let result = self.raw_with_links(path, mode, limit, 1);
+        #[cfg(test)]
+        if let Ok(Some(_)) = &result
+            && let Some(observer) = &mut *self.raw_observer.lock().unwrap()
+        {
+            // Observe a completed protected read; tests can inject a change
+            // before the next read without threads, sockets or native effects.
+            observer(path);
+        }
+        result
     }
     fn raw_with_links(
         &self,

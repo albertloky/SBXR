@@ -349,3 +349,83 @@ fn candidate_arguments_and_ambient_overrides_cannot_bypass_protected_zero_argume
         }
     }
 }
+
+#[test]
+fn first_frame_uses_one_status_review_and_later_input_boundaries_refresh_it() {
+    use sbxr::{
+        domain::Action,
+        proxyinstallation::{Interface, Review},
+    };
+    use std::{
+        cell::Cell,
+        io::{self, BufRead, Read},
+        rc::Rc,
+    };
+    struct CountingOwner(Rc<Cell<usize>>);
+    impl Interface for CountingOwner {
+        fn review(&self, action: Action) -> Review {
+            if action == Action::Status {
+                self.0.set(self.0.get() + 1);
+            }
+            ReadOnlyOwner(sbxr::proxyinstallation::ExecutionMode::Native).review(action)
+        }
+        fn execute(
+            &mut self,
+            _: sbxr::proxyinstallation::PreparedAction,
+            _: sbxr::domain::Confirmation,
+        ) -> sbxr::domain::Result {
+            panic!("read-only menu must not execute")
+        }
+    }
+    struct Input {
+        bytes: io::Cursor<&'static [u8]>,
+        reviews: Rc<Cell<usize>>,
+        expected: std::collections::VecDeque<usize>,
+    }
+    impl Read for Input {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            panic!("use BufRead")
+        }
+    }
+    impl BufRead for Input {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            assert_eq!(
+                self.reviews.get(),
+                self.expected.pop_front().unwrap(),
+                "Status count at the next Owner input"
+            );
+            let bytes = self.bytes.fill_buf()?;
+            // One complete input per prompt, so a buffered future input cannot
+            // accidentally bypass the next review assertion.
+            let n = bytes
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(bytes.len(), |i| i + 1);
+            Ok(&bytes[..n])
+        }
+        fn consume(&mut self, n: usize) {
+            self.bytes.consume(n);
+        }
+    }
+    let reviews = Rc::new(Cell::new(0));
+    let mut input = Input {
+        // Details, continuation, invalid choice, lifecycle Check, Exit.
+        bytes: io::Cursor::new(b"1\n\nbad\n2\n0\n"),
+        reviews: reviews.clone(),
+        expected: [1, 1, 2, 3, 5].into(),
+    };
+    let mut output = Vec::new();
+    sbxr::terminal::run_with_lifecycle(
+        &mut input,
+        &mut output,
+        &mut CountingOwner(reviews.clone()),
+        &mut ReadOnlyLifecycle,
+    )
+    .unwrap();
+    assert!(input.expected.is_empty());
+    assert_eq!(reviews.get(), 5); // Includes pre-lifecycle authority invalidation.
+    let output = String::from_utf8(output).unwrap();
+    assert_eq!(output.lines().filter(|line| *line == "SBXR V3").count(), 4);
+    assert!(output.contains("Press Enter to return to the menu."));
+    assert!(output.contains("SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"));
+}
