@@ -1174,4 +1174,64 @@ class MenuSessionDriverTest(unittest.TestCase):
                 unrelated.wait(timeout=3)
                 libc.prctl(36, previous.value, 0, 0, 0)
 
+class QueryDiagnosticTests(unittest.TestCase):
+    """Pure relay tests; no child, signal, socket or network operations."""
+    def row(self):
+        return dict(query="query-public-ip-dns", id=7, elapsed_us=5_000_000,
+                    outcome="timeout", process=dict(location="stdout-drain", leader="not-exited",
+                    stdout_eof=False, stderr_eof=True, stdout_bytes=12, stderr_bytes=3))
+
+    def relay(self, rows, sink=None):
+        sink = sink if sink is not None else io.StringIO()
+        timing = menu.PhaseTiming(sink, time.monotonic() + 1)
+        try:
+            for row in rows:
+                raw = row if isinstance(row, bytes) else ("SBXR_NATIVE_QUERY " + json.dumps(row)).encode()
+                timing.native(raw)
+        finally:
+            timing.close()
+        return sink
+
+    def test_closed_schema_accepts_terminal_states_and_bounds(self):
+        rows = []
+        for outcome in sorted(menu.QUERY_OUTCOMES):
+            for leader in ("unobserved", "not-exited", "exited"):
+                row = self.row()
+                row.update(outcome=outcome, id=2**64-1, elapsed_us=2**64-1,
+                           query="query-configuration-owner")
+                row["process"].update(leader=leader, stdout_bytes=1 << 20, stderr_bytes=0)
+                rows.append(row)
+        received = self.relay(rows).getvalue().splitlines()
+        self.assertEqual(len(received), len(rows))
+        for original, line in zip(rows, received):
+            self.assertLessEqual(len(line), 511)
+            row = json.loads(line.removeprefix("SBXR_NATIVE_QUERY "))
+            self.assertEqual({k: row[k] for k in original}, original)
+            self.assertEqual(set(row) - set(original), {"received_monotonic", "remaining_ms"})
+
+    def test_rejects_payloads_unknown_values_duplicates_and_wrong_types(self):
+        bad = []
+        for field, value in [("query", "network"), ("query", []), ("outcome", "SECRET-SENTINEL"),
+                             ("id", True), ("id", 0), ("elapsed_us", -1), ("process", [])]:
+            bad.append({**self.row(), field: value})
+        bad.append({**self.row(), "payload": "SECRET-SENTINEL"})
+        for field, value in [("location", "/private/path"), ("leader", []), ("stdout_eof", 1),
+                             ("stderr_bytes", True), ("stdout_bytes", (1 << 20) + 1),
+                             ("stderr_bytes", -1), ("payload", "SECRET-SENTINEL")]:
+            row = self.row(); row["process"][field] = value; bad.append(row)
+        row = self.row(); row["process"].update(stdout_bytes=1 << 20, stderr_bytes=1); bad.append(row)
+        raw = ("SBXR_NATIVE_QUERY " + json.dumps(self.row())).encode()
+        bad.extend([raw.replace(b'"id": 7', b'"id": 7, "id": 8'),
+                    raw.replace(b'"stdout_bytes": 12', b'"stdout_bytes": 12, "stdout_bytes": 13'),
+                    raw[:80]])
+        self.assertEqual(self.relay(bad).getvalue(), "")
+
+    def test_failed_sink_does_not_escape_and_worker_finishes(self):
+        class Failed(io.StringIO):
+            def write(self, value):
+                raise BrokenPipeError("SECRET-SENTINEL")
+        started = time.monotonic()
+        self.relay([self.row()], Failed())
+        self.assertLess(time.monotonic() - started, .5)
+
 if __name__ == "__main__": unittest.main()

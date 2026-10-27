@@ -1,12 +1,6 @@
 //! Fixed, non-secret native timings. End means scope exit, including refusal.
 use super::process::Query;
-use std::{
-    cell::RefCell,
-    io::{IsTerminal, Write},
-    marker::PhantomData,
-    rc::Rc,
-    time::Instant,
-};
+use std::{cell::RefCell, io::Write, marker::PhantomData, rc::Rc, time::Instant};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Phase {
@@ -117,35 +111,15 @@ fn enable_with(sink: Box<dyn Write>) -> Enabled {
         }))
     }))
 }
-struct NativeSink;
-impl Write for NativeSink {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        use rustix::event::{PollFd, PollFlags, Timespec, poll};
-        let stderr = std::io::stderr();
-        let mut writer = stderr.lock();
-        let mut ready = [PollFd::new(&stderr, PollFlags::OUT)];
-        if poll(
-            &mut ready,
-            Some(&Timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            }),
-        )? == 0
-        {
-            return Err(std::io::ErrorKind::WouldBlock.into());
-        }
-        writer.write(bytes)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
+#[path = "timing_sink.rs"]
+mod native_sink;
 pub(crate) fn enable() -> Enabled {
-    if std::io::stderr().is_terminal() {
-        return Enabled(TRACE.with(|t| t.take()));
+    match native_sink::NativeSink::new(&std::io::stderr()) {
+        Ok(sink) => enable_with(Box::new(sink)),
+        Err(_) => Enabled(TRACE.with(|t| t.take())),
     }
-    enable_with(Box::new(NativeSink))
 }
+
 fn emit(phase: Phase, event: &str, id: u64) {
     let value = TRACE.with(|t| {
         t.borrow().as_ref().map(|trace| {
@@ -167,8 +141,7 @@ fn emit(phase: Phase, event: &str, id: u64) {
         id,
         elapsed
     );
-    let _ = sink.write_all(line.as_bytes());
-    let _ = sink.flush();
+    let _ = sink.write(line.as_bytes());
 }
 pub(crate) struct Span(Option<(Phase, u64)>, PhantomData<Rc<()>>);
 pub(crate) fn span(phase: Phase) -> Span {
@@ -182,6 +155,53 @@ pub(crate) fn span(phase: Phase) -> Span {
         emit(phase, "begin", id);
     }
     Span(id.map(|id| (phase, id)), PhantomData)
+}
+impl Span {
+    pub(super) fn query_result(
+        &self,
+        observation: &super::process::ProcessObservation,
+        result: &Result<super::process::CommandOutput, super::HostError>,
+    ) {
+        let Some((Phase::Query(query), id)) = self.0 else {
+            return;
+        };
+        use super::HostError;
+        let outcome = match result {
+            Ok(output) if output.code() == 0 => "completed-zero",
+            Ok(_) => "completed-nonzero",
+            Err(HostError::Timeout) => "timeout",
+            Err(HostError::Cancelled) => "cancelled",
+            Err(HostError::OutputLimit) => "output-limit",
+            Err(HostError::Io) => "io",
+            Err(HostError::Unsafe) => "unsafe",
+            Err(HostError::Foreign) => "foreign",
+            Err(HostError::Injected) => "injected",
+            Err(HostError::LiveUnavailable) => "live-unavailable",
+            Err(HostError::UnsupportedHost) => "unsupported-host",
+            Err(HostError::Busy) => "busy",
+        };
+        TRACE.with(|t| {
+            let value = t.borrow().as_ref().map(|trace| {
+                (
+                    trace.sink.clone(),
+                    trace.start.elapsed().as_micros().min(u64::MAX as u128) as u64,
+                )
+            });
+            let Some((sink, elapsed)) = value else { return };
+            let Ok(mut sink) = sink.try_borrow_mut() else {
+                return;
+            };
+            let row = serde_json::json!({
+                "query": Phase::Query(query).label(), "id": id,
+                "elapsed_us": elapsed, "outcome": outcome, "process": observation,
+            });
+            let line = format!("SBXR_NATIVE_QUERY {row}\n");
+            // One best-effort write through the private nonblocking pipe sink.
+            // No flush/retry: a failed or partial diagnostic cannot delay cleanup,
+            // alter the result, or confer authority. The relay drops partial rows.
+            let _ = sink.write(line.as_bytes());
+        });
+    }
 }
 impl Drop for Span {
     fn drop(&mut self) {
@@ -336,6 +356,95 @@ assert {row['phase'] for row in rows}==driver.NATIVE_PHASES
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
+    }
+
+    #[test]
+    fn query_diagnostic_terminal_outcomes_are_closed_and_payload_free() {
+        use super::super::{
+            HostError,
+            process::{CommandOutput, ProcessObservation},
+        };
+        let cases = [
+            (
+                Ok(CommandOutput::completed(0, b"SECRET-SENTINEL".to_vec()).unwrap()),
+                "completed-zero",
+            ),
+            (
+                Ok(CommandOutput::completed(7, b"SECRET-SENTINEL".to_vec()).unwrap()),
+                "completed-nonzero",
+            ),
+            (Err(HostError::Timeout), "timeout"),
+            (Err(HostError::Cancelled), "cancelled"),
+            (Err(HostError::OutputLimit), "output-limit"),
+            (Err(HostError::Io), "io"),
+            (Err(HostError::Unsafe), "unsafe"),
+            (Err(HostError::Foreign), "foreign"),
+            (Err(HostError::Injected), "injected"),
+            (Err(HostError::LiveUnavailable), "live-unavailable"),
+            (Err(HostError::UnsupportedHost), "unsupported-host"),
+            (Err(HostError::Busy), "busy"),
+        ];
+        for (result, expected) in cases {
+            let (_, bytes) = capture(|| {
+                let query = span(Phase::Query(Query::PublicIpDns));
+                query.query_result(&ProcessObservation::default(), &result);
+            });
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(!text.contains("SECRET-SENTINEL"));
+            let rows: Vec<_> = text
+                .lines()
+                .filter_map(|l| l.strip_prefix("SBXR_NATIVE_QUERY "))
+                .collect();
+            assert_eq!(rows.len(), 1);
+            let row: serde_json::Value = serde_json::from_str(rows[0]).unwrap();
+            assert_eq!(row["outcome"], expected);
+            assert_eq!(row["process"]["location"], "before-run");
+            assert_eq!(row["process"]["leader"], "unobserved");
+            if let Ok(output) = result {
+                assert_eq!(output.bytes(), b"SECRET-SENTINEL");
+            }
+        }
+    }
+
+    #[test]
+    fn query_diagnostic_sink_failures_never_retry_or_change_result() {
+        struct Sink {
+            calls: Rc<RefCell<usize>>,
+            kind: u8,
+        }
+        impl Write for Sink {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                *self.calls.borrow_mut() += 1;
+                match self.kind {
+                    0 => Err(std::io::ErrorKind::WouldBlock.into()),
+                    1 => Err(std::io::ErrorKind::Interrupted.into()),
+                    2 => Err(std::io::ErrorKind::BrokenPipe.into()),
+                    3 => Ok(0),
+                    _ => Ok(1),
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("must not flush")
+            }
+        }
+        for kind in 0..5 {
+            let calls = Rc::new(RefCell::new(0));
+            let enabled = enable_with(Box::new(Sink {
+                calls: calls.clone(),
+                kind,
+            }));
+            // Construct a query span without emitting unrelated begin/end rows.
+            let mut phase = Span(Some((Phase::Query(Query::PublicIpDns), 1)), PhantomData);
+            let result = Err(super::super::HostError::Timeout);
+            phase.query_result(
+                &super::super::process::ProcessObservation::default(),
+                &result,
+            );
+            assert_eq!(*calls.borrow(), 1);
+            assert!(matches!(result, Err(super::super::HostError::Timeout)));
+            phase.0 = None;
+            drop(enabled);
+        }
     }
 
     #[test]

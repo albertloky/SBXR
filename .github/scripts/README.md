@@ -61,6 +61,31 @@ means stdin write/flush completed, not that the product consumed it. No input
 value, transcript line, path, or credential enters these events. A captured late
 prompt still refuses; timing does not extend any deadline.
 
+Fixed native queries also emit one best-effort `SBXR_NATIVE_QUERY` terminal
+record, correlated by the query span ID. Its closed schema contains the query
+label, elapsed time, terminal outcome and process observations: last location,
+last observed leader state, stdout/stderr EOF flags and retained byte counts.
+No payload, argv, environment, PID or raw resolver response is included. The
+native producer admits only Linux pipe sinks that it can reopen through procfs
+with a private nonblocking open file description. It pins the source descriptor,
+verifies pipe identity, and never modifies inherited descriptor flags or acquires
+a stdio lock. Regular files, terminals, sockets, unsupported platforms and failed
+reopens disable native diagnostics. Both timing and query records use one direct
+write of at most 512 bytes without retry/flush; the bounded details relay
+rejects unknown fields, labels and out-of-range values. Missing/truncated records
+prove nothing and cannot alter readiness, cancellation, cleanup or deadlines.
+`not-exited` means the last nonblocking wait found no exit; it does **not** assert
+that the child was still running at timeout. `unobserved` means no successful
+wait observation. `exited` with a pipe not at EOF localizes the remaining wait to
+pipe completion. Byte counts are retained bytes, not total bytes produced or DNS
+response counts. `outcome=timeout` plus `location` identifies the loop or drain
+that returned the timeout. Other outcomes use the same last-location field.
+These facts cannot by themselves distinguish NSS/resolver delay from upstream
+DNS failure. That needs separately authorized, contemporaneous resolver evidence
+for the same fixed lookup (request/response timing and resolver result category),
+without unrelated traffic or payload capture; do not rerun qualification merely
+to obtain it.
+
 Details timings now bracket request-clock work and product spawn, distinguish the
 first stdout byte/line received from the accepted menu label/frame, and retain
 selection/continuation/return events. Native non-terminal public entry emits only

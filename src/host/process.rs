@@ -168,20 +168,97 @@ pub trait CommandRunner {
 pub struct NativeReadOnly;
 impl CommandRunner for NativeReadOnly {
     fn query(&self, query: Query, stop: &Cancellation) -> Result<CommandOutput, HostError> {
-        let _phase = super::timing::span(super::timing::Phase::Query(query));
-        super::linux::require_native_environment()?;
-        // Configuration validation executes a package binary and is not a read-only
-        // OS observation until package/configuration authority has been established.
-        if query == Query::ValidateConfiguration {
-            return Err(HostError::LiveUnavailable);
+        let phase = super::timing::span(super::timing::Phase::Query(query));
+        let mut observation = ProcessObservation::default();
+        let result = (|| {
+            super::linux::require_native_environment()?;
+            // Configuration execution still requires package/configuration authority.
+            if query == Query::ValidateConfiguration {
+                return Err(HostError::LiveUnavailable);
+            }
+            let (program, args) = query.argv();
+            let before = super::linux::verify_probe_executable(program)?;
+            let output = run_observed(
+                program,
+                args,
+                "/",
+                Duration::from_secs(5),
+                OUTPUT_LIMIT,
+                stop,
+                &mut observation,
+            )?;
+            observation.location = ProcessLocation::VerifyAfter;
+            if super::linux::verify_probe_executable(program)? != before {
+                return Err(HostError::Unsafe);
+            }
+            Ok(output)
+        })();
+        phase.query_result(&observation, &result);
+        result
+    }
+}
+/// Last observed state, not a fresh process inspection at timeout. No payloads,
+/// paths, arguments, exit values or arbitrary strings enter this diagnostic.
+#[derive(Default, serde::Serialize)]
+pub(super) struct ProcessObservation {
+    location: ProcessLocation,
+    leader: LeaderObservation,
+    stdout_eof: bool,
+    stderr_eof: bool,
+    stdout_bytes: usize,
+    stderr_bytes: usize,
+}
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ProcessLocation {
+    #[default]
+    BeforeRun,
+    Spawn,
+    PipeSetup,
+    Loop,
+    StdoutDrain,
+    StderrDrain,
+    Wait,
+    Complete,
+    VerifyAfter,
+}
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum LeaderObservation {
+    #[default]
+    Unobserved,
+    NotExited,
+    Exited,
+}
+impl ProcessObservation {
+    fn drain(
+        &mut self,
+        stderr: bool,
+        stream: &mut impl Read,
+        bytes: &mut Vec<u8>,
+        limit: usize,
+        stop: &Cancellation,
+        deadline: Instant,
+    ) -> Result<bool, HostError> {
+        self.location = if stderr {
+            ProcessLocation::StderrDrain
+        } else {
+            ProcessLocation::StdoutDrain
+        };
+        let result = drain(stream, bytes, limit, stop, deadline);
+        // Record even on error, without another read or deadline check.
+        if stderr {
+            self.stderr_bytes = bytes.len();
+            if let Ok(eof) = result {
+                self.stderr_eof = eof;
+            }
+        } else {
+            self.stdout_bytes = bytes.len();
+            if let Ok(eof) = result {
+                self.stdout_eof = eof;
+            }
         }
-        let (program, args) = query.argv();
-        let before = super::linux::verify_probe_executable(program)?;
-        let output = run(program, args, Duration::from_secs(5), OUTPUT_LIMIT, stop)?;
-        if super::linux::verify_probe_executable(program)? != before {
-            return Err(HostError::Unsafe);
-        }
-        Ok(output)
+        result
     }
 }
 struct ChildGuard {
@@ -240,6 +317,7 @@ fn drain(
         }
     }
 }
+#[cfg(test)]
 fn run(
     program: &str,
     args: &[&str],
@@ -257,10 +335,30 @@ pub(super) fn run_in(
     limit: usize,
     stop: &Cancellation,
 ) -> Result<CommandOutput, HostError> {
+    run_observed(
+        program,
+        args,
+        cwd,
+        timeout,
+        limit,
+        stop,
+        &mut ProcessObservation::default(),
+    )
+}
+fn run_observed(
+    program: &str,
+    args: &[&str],
+    cwd: &str,
+    timeout: Duration,
+    limit: usize,
+    stop: &Cancellation,
+    observation: &mut ProcessObservation,
+) -> Result<CommandOutput, HostError> {
     let _phase = super::timing::span(super::timing::Phase::Process);
     if stop.cancelled() {
         return Err(HostError::Cancelled);
     }
+    observation.location = ProcessLocation::Spawn;
     let _spawn = super::timing::span(super::timing::Phase::Spawn);
     let mut child = Command::new(program)
         .args(args)
@@ -287,6 +385,7 @@ pub(super) fn run_in(
         group,
         reaped: false,
     };
+    observation.location = ProcessLocation::PipeSetup;
     let mut stdout = child.child.stdout.take().ok_or(HostError::Io)?;
     let mut stderr = child.child.stderr.take().ok_or(HostError::Io)?;
     nonblocking(&stdout)?;
@@ -295,20 +394,23 @@ pub(super) fn run_in(
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let mut code = None;
     loop {
+        observation.location = ProcessLocation::Loop;
         if stop.cancelled() {
             return Err(HostError::Cancelled);
         }
         if Instant::now() >= deadline {
             return Err(HostError::Timeout);
         }
-        let out_done = drain(
+        let out_done = observation.drain(
+            false,
             &mut stdout,
             &mut out,
             limit.saturating_sub(err.len()),
             stop,
             deadline,
         )?;
-        let err_done = drain(
+        let err_done = observation.drain(
+            true,
             &mut stderr,
             &mut err,
             limit.saturating_sub(out.len()),
@@ -320,20 +422,28 @@ pub(super) fn run_in(
         }
         // Keep the leader waitable until its owned process group is killed;
         // reaping early would permit PID/group-number reuse during pipe drains.
-        if code.is_none()
-            && let Some(status) = waitid(
+        observation.location = ProcessLocation::Wait;
+        if code.is_none() {
+            let status = waitid(
                 WaitId::Pid(group),
                 WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
             )
-            .map_err(|_| HostError::Io)?
-        {
-            code = Some(status.exit_status().ok_or(HostError::Io)?);
+            .map_err(|_| HostError::Io)?;
+            observation.leader = if status.is_some() {
+                LeaderObservation::Exited
+            } else {
+                LeaderObservation::NotExited
+            };
+            if let Some(status) = status {
+                code = Some(status.exit_status().ok_or(HostError::Io)?);
+            }
         }
         if let Some(code) = code
             && out_done
             && err_done
         {
             child.terminate();
+            observation.location = ProcessLocation::Complete;
             return CommandOutput::completed(code, out);
         }
         thread::sleep(Duration::from_millis(2));

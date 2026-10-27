@@ -243,7 +243,7 @@ class PhaseTiming:
         }, sort_keys=True))
 
     def native(self, raw):
-        prefix = b"SBXR_NATIVE_PHASE "
+        prefix = b"SBXR_NATIVE_QUERY " if raw.startswith(b"SBXR_NATIVE_QUERY ") else b"SBXR_NATIVE_PHASE "
         if not raw.startswith(prefix):
             return
         def unique(pairs):
@@ -255,7 +255,10 @@ class PhaseTiming:
             return result
         try:
             row = json.loads(raw[len(prefix):], object_pairs_hook=unique)
-            if (type(row) is not dict or set(row) != {"phase", "event", "id", "elapsed_us"} or
+            if prefix == b"SBXR_NATIVE_QUERY ":
+                if not valid_query_diagnostic(row):
+                    return
+            elif (type(row) is not dict or set(row) != {"phase", "event", "id", "elapsed_us"} or
                     row["phase"] not in NATIVE_PHASES or row["event"] not in ("begin", "end") or
                     type(row["id"]) is not int or not 0 < row["id"] <= 2**64 - 1 or
                     type(row["elapsed_us"]) is not int or not 0 <= row["elapsed_us"] <= 2**64 - 1):
@@ -264,13 +267,35 @@ class PhaseTiming:
             return
         now = time.monotonic()
         row.update(received_monotonic=round(now, 6), remaining_ms=round((self.deadline - now) * 1000, 3))
-        self.relay.emit("SBXR_NATIVE_PHASE " + json.dumps(row, sort_keys=True))
+        self.relay.emit(prefix.decode("ascii") + json.dumps(row, sort_keys=True))
 
     def close(self):
         self.relay.close()
 
 
 NATIVE_PHASES = frozenset("authenticate entry entry-select installed-pair journeys lifecycle material network network-bind network-connect network-dns network-handshake network-ip-http network-roots network-tls open-disclosure open-http open-identity open-removal open-standard open-tunnel package probe-image query-active query-clock query-configuration-owner query-destination-dns query-enabled query-group query-hold query-listener query-load-state query-package query-process query-public-ip-dns query-start-condition query-unit-owner query-user query-validate review-action review-details review-status snapshot subprocess subprocess-spawn write-details".split())
+
+
+QUERY_OUTCOMES = frozenset("completed-zero completed-nonzero timeout cancelled output-limit io unsafe foreign injected live-unavailable unsupported-host busy".split())
+QUERY_LOCATIONS = frozenset("before-run spawn pipe-setup loop stdout-drain stderr-drain wait complete verify-after".split())
+
+
+def valid_query_diagnostic(row):
+    """Closed, bounded observations only; never forward arbitrary child output."""
+    if (type(row) is not dict or set(row) != {"query", "id", "elapsed_us", "outcome", "process"} or
+            type(row["query"]) is not str or row["query"] not in NATIVE_PHASES or not row["query"].startswith("query-") or
+            type(row["outcome"]) is not str or row["outcome"] not in QUERY_OUTCOMES or
+            type(row["id"]) is not int or not 0 < row["id"] <= 2**64 - 1 or
+            type(row["elapsed_us"]) is not int or not 0 <= row["elapsed_us"] <= 2**64 - 1):
+        return False
+    state = row["process"]
+    if (type(state) is not dict or set(state) != {"location", "leader", "stdout_eof", "stderr_eof", "stdout_bytes", "stderr_bytes"} or
+            type(state["location"]) is not str or state["location"] not in QUERY_LOCATIONS or
+            type(state["leader"]) is not str or state["leader"] not in ("unobserved", "not-exited", "exited") or
+            any(type(state[k]) is not bool for k in ("stdout_eof", "stderr_eof")) or
+            any(type(state[k]) is not int or not 0 <= state[k] <= 1 << 20 for k in ("stdout_bytes", "stderr_bytes"))):
+        return False
+    return state["stdout_bytes"] + state["stderr_bytes"] <= 1 << 20
 
 
 def readable(streams, timeout):
