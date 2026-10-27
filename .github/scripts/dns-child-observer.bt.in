@@ -1,0 +1,99 @@
+// Prepared Linux-only diagnostic, NOT live-qualified. Render with dns-child-observer.py.
+// C-ABI hook: (event, native_query_id, child_pid). Never read user memory.
+config = { max_map_keys=64; perf_rb_pages=8; missing_probes=error; }
+BEGIN { printf("STARTING %d %llu\n", TARGET_PID, nsecs(monotonic)); }
+uprobe:TARGET_EXE:TARGET_SYMBOL
+/pid == TARGET_PID && !@stopped/
+{
+  $q = arg1;
+  if (arg0 == 1) {
+    if (@q[tid] || @seen[$q] || !$q || @queries >= 32) {
+      printf("BAD 1 %llu\n", nsecs(monotonic)); @stopped = 1;
+    } else {
+      @queries = @queries + 1; @seen[$q] = 1; @q[tid] = $q;
+      printf("BEGIN %llu %d %llu\n", $q, tid, nsecs(monotonic));
+    }
+  } else if (arg0 == 2) {
+    if (@q[tid] != $q || @child[tid] != arg2 || !arg2) {
+      printf("BAD 2 %llu\n", nsecs(monotonic)); @stopped = 1;
+    } else { printf("SPAWN %llu %llu %llu\n", $q, arg2, nsecs(monotonic)); }
+  } else if (arg0 == 3) {
+    if (@q[tid] != $q || @child[tid] != arg2) {
+      printf("BAD 3 %llu\n", nsecs(monotonic)); @stopped = 1;
+    } else {
+      printf("FINISH %llu %llu %llu\n", $q, arg2, nsecs(monotonic));
+      delete(@q[tid]); delete(@child[tid]);
+    }
+  } else { printf("BAD 4 %llu\n", nsecs(monotonic)); @stopped = 1; }
+}
+tracepoint:sched:sched_process_fork
+/!@stopped && (@q[tid] || @cq[tid])/
+{
+  // Only one direct child of the armed query TID. Descendants invalidate coverage.
+  if (@cq[tid] || @child[tid]) {
+    printf("BAD 5 %llu\n", nsecs(monotonic)); @stopped = 1;
+  } else {
+    $c = args.child_pid; $q = @q[tid];
+    @child[tid] = $c; @cq[$c] = $q;
+    printf("FORK %llu %d %llu\n", $q, $c, nsecs(monotonic));
+  }
+}
+tracepoint:raw_syscalls:sys_enter
+/!@stopped && @cq[tid]/
+{
+  if (@calls[tid] >= 4096 || @enter[tid]) {
+    printf("BAD 6 %llu\n", nsecs(monotonic)); @stopped = 1;
+  } else {
+    @calls[tid] = @calls[tid] + 1; @enter[tid] = nsecs(monotonic); @nr[tid] = args.id;
+  }
+}
+tracepoint:raw_syscalls:sys_exit
+/!@stopped && @cq[tid] && @enter[tid]/
+{
+  $now = nsecs(monotonic); $d = $now - @enter[tid]; @total[tid] = @total[tid] + $d;
+  if ($d >= 1000000) {
+    if (@rows >= 128) { printf("BAD 7 %llu\n", nsecs(monotonic)); @stopped = 1; }
+    else {
+      @rows = @rows + 1; @slow[tid] = @slow[tid] + 1;
+      printf("WAIT %llu %d %llu %lld %llu 0\n", @cq[tid], tid, $now, @nr[tid], $d);
+    }
+  }
+  delete(@enter[tid]); delete(@nr[tid]);
+}
+tracepoint:sched:sched_switch
+/!@stopped && (@cq[args.prev_pid] || @cq[args.next_pid])/
+{
+  if (@cq[args.prev_pid]) { @off[args.prev_pid] = nsecs(monotonic); }
+  if (@cq[args.next_pid] && @off[args.next_pid]) {
+    @offtotal[args.next_pid] = @offtotal[args.next_pid] + nsecs(monotonic) - @off[args.next_pid];
+    delete(@off[args.next_pid]);
+  }
+}
+tracepoint:sched:sched_process_exit
+/!@stopped && @cq[tid]/
+{
+  $now = nsecs(monotonic);
+  // A killed child may never have sys_exit; preserve its unfinished wait explicitly.
+  if (@enter[tid]) {
+    $d = $now - @enter[tid]; @total[tid] = @total[tid] + $d;
+    if (@rows >= 128) { printf("BAD 8 %llu\n", nsecs(monotonic)); @stopped = 1; }
+    else {
+      @rows = @rows + 1; @slow[tid] = @slow[tid] + 1;
+      printf("WAIT %llu %d %llu %lld %llu 1\n", @cq[tid], tid, $now, @nr[tid], $d);
+    }
+  }
+  printf("EXIT %llu %d %llu %llu %llu %llu %llu\n", @cq[tid], tid, $now, @calls[tid], @total[tid], @offtotal[tid], @slow[tid]);
+  // Removal is at kernel exit, before PID reuse. Retain parent-side fork identity
+  // until Finish, so short children that exit before Spawned still correlate.
+  delete(@cq[tid]); delete(@enter[tid]); delete(@nr[tid]);
+  delete(@slow[tid]); delete(@calls[tid]); delete(@total[tid]); delete(@off[tid]); delete(@offtotal[tid]);
+}
+tracepoint:sched:sched_process_exit
+/pid == TARGET_PID && tid == TARGET_PID/
+{ @stopped = 1; printf("DONE %llu\n", nsecs(monotonic)); exit(); }
+interval:s:90 { @stopped = 1; printf("DONE %llu\n", nsecs(monotonic)); exit(); }
+END {
+  clear(@q); clear(@seen); clear(@child); clear(@cq); clear(@enter); clear(@nr);
+  clear(@slow); clear(@calls); clear(@total); clear(@off); clear(@offtotal);
+  clear(@rows); clear(@queries); clear(@stopped);
+}

@@ -7,6 +7,11 @@ source commit or change a recorded result. Raw evidence stays private under
 `.scratch/acceptance/`; those links are local-only and may be unavailable in
 a fresh clone. Start new work with the [current guide](../README.md).
 
+## Local diagnostic preparation
+
+- [DNS child diagnostic: isolated Linux preparation — 2026-10-27](dns-child-diagnostic-linux-2026-10-27.md)
+  — local builds, inert checks and supervisor source review; no runtime tracing or release qualification.
+
 ## Release attempts and publication
 
 - [Installer repair and fresh readiness — 2026-09-26](installer-repair-readiness-2026-09-26.md)

@@ -157,6 +157,13 @@ pub(crate) fn span(phase: Phase) -> Span {
     Span(id.map(|id| (phase, id)), PhantomData)
 }
 impl Span {
+    pub(super) fn dns_observer_id(&self) -> Option<u64> {
+        match self.0 {
+            Some((Phase::Query(Query::DestinationDns | Query::PublicIpDns), id)) => Some(id),
+            _ => None,
+        }
+    }
+
     pub(super) fn query_result(
         &self,
         observation: &super::process::ProcessObservation,
@@ -458,6 +465,23 @@ assert {row['phase'] for row in rows}==driver.NATIVE_PHASES
             "{}",
             String::from_utf8_lossy(&result.stderr)
         );
+    }
+
+    #[test]
+    fn dns_observer_ids_only_exist_for_traced_dns_queries() {
+        assert!(
+            span(Phase::Query(Query::PublicIpDns))
+                .dns_observer_id()
+                .is_none()
+        );
+        let _ = capture(|| {
+            let first = span(Phase::Query(Query::PublicIpDns));
+            let second = span(Phase::Query(Query::DestinationDns));
+            assert!(first.dns_observer_id().is_some());
+            assert_ne!(first.dns_observer_id(), second.dns_observer_id());
+            assert!(span(Phase::Query(Query::User)).dns_observer_id().is_none());
+            assert!(span(Phase::Process).dns_observer_id().is_none());
+        });
     }
 
     #[test]

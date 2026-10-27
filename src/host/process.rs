@@ -1,6 +1,8 @@
 //! Fixed queries and bounded subprocess transport, shared by the system adapter.
 //! No shell is exposed. Raw command output is never formatted.
 use super::{HostError, Operation};
+#[path = "dns_observer.rs"]
+mod dns_observer;
 use rustix::{
     fs::{OFlags, fcntl_getfl, fcntl_setfl},
     process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid},
@@ -169,7 +171,10 @@ pub struct NativeReadOnly;
 impl CommandRunner for NativeReadOnly {
     fn query(&self, query: Query, stop: &Cancellation) -> Result<CommandOutput, HostError> {
         let phase = super::timing::span(super::timing::Phase::Query(query));
-        let mut observation = ProcessObservation::default();
+        let mut observation = ProcessObservation {
+            observer_query: phase.dns_observer_id(),
+            ..ProcessObservation::default()
+        };
         let result = (|| {
             super::linux::require_native_environment()?;
             // Configuration execution still requires package/configuration authority.
@@ -201,6 +206,8 @@ impl CommandRunner for NativeReadOnly {
 /// paths, arguments, exit values or arbitrary strings enter this diagnostic.
 #[derive(Default, serde::Serialize)]
 pub(super) struct ProcessObservation {
+    #[serde(skip)]
+    observer_query: Option<u64>,
     location: ProcessLocation,
     leader: LeaderObservation,
     stdout_eof: bool,
@@ -358,6 +365,9 @@ fn run_observed(
     if stop.cancelled() {
         return Err(HostError::Cancelled);
     }
+    // Scope begins before fork and ends after ChildGuard has reaped the child.
+    // It performs no I/O, waits, attachment or authority decisions.
+    let observer = dns_observer::Scope::begin(observation.observer_query);
     observation.location = ProcessLocation::Spawn;
     let _spawn = super::timing::span(super::timing::Phase::Spawn);
     let mut child = Command::new(program)
@@ -373,6 +383,7 @@ fn run_observed(
         .process_group(0)
         .spawn()
         .map_err(|_| HostError::Io)?;
+    observer.spawned(child.id());
     drop(_spawn);
     let group = Pid::from_raw(child.id() as i32).filter(|pid| pid.as_raw_nonzero().get() > 1);
     let Some(group) = group else {

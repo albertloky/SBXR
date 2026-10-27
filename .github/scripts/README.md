@@ -62,6 +62,11 @@ means stdin write/flush completed, not that the product consumed it. No input
 value, transcript line, path, or credential enters these events. A captured late
 prompt still refuses; timing does not extend any deadline.
 
+A prepared [exact DNS-child observer](dns-child-observer.md) adds a payload-free
+pre-spawn hook, a Linux tracing prototype and a fail-closed post-attachment
+wrapper. Its local contract tests
+do not establish Linux attachment, overhead, cleanup or live readiness.
+
 Fixed native queries also emit one best-effort `SBXR_NATIVE_QUERY` terminal
 record, correlated by the query span ID. Its closed schema contains the query
 label, elapsed time, terminal outcome and process observations: last location,
@@ -369,3 +374,7 @@ publication/failure; and `release_collector_test.go`,
 matching script boundaries. The former V4 operator producer is retired; retrieve
 it only to interpret historical records at
 [commit `0859e96`](https://github.com/albertloky/SBXR/tree/0859e964b66d10deb5768a372b09ca5903332553/.github/scripts/v3-operator).
+
+The [DNS fixture review runbook](dns-child-fixture-review.md) documents the
+repository-local fixture/supervisor source, inert tests and remaining runtime
+prerequisites. It grants no tracing or signal-fixture execution authority.

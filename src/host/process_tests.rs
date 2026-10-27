@@ -302,6 +302,7 @@ fn query_diagnostic_distinguishes_observed_exit_from_pending_leader() {
             stderr_bytes: 3,
             stdout_eof: false,
             stderr_eof: true,
+            observer_query: Some(7),
         };
         let (_, output) = super::super::timing::capture(|| {
             let phase = super::super::timing::span(super::super::timing::Phase::Query(
@@ -310,6 +311,7 @@ fn query_diagnostic_distinguishes_observed_exit_from_pending_leader() {
             phase.query_result(&observation, &Err(HostError::Timeout));
         });
         let text = String::from_utf8(output).unwrap();
+        assert!(!text.contains("observer_query"));
         let row: serde_json::Value = serde_json::from_str(
             text.lines()
                 .find_map(|l| l.strip_prefix("SBXR_NATIVE_QUERY "))
