@@ -69,6 +69,63 @@ print("1. View details\n0. Exit",flush=True); event({"exit":sys.stdin.readline()
 for diagnostic in spec.get("late_diagnostics", []): print(diagnostic,file=sys.stderr,flush=True)
 '''
 
+class SetupDiagnosticSelectionTest(unittest.TestCase):
+    """Inert CLI-boundary fixtures: no product, signals, sockets or environment."""
+    def test_setup_relays_closed_records_on_success_and_missing_label(self):
+        record = dict(query="query-destination-dns", id=89, elapsed_us=15,
+                      outcome="timeout", process=dict(location="loop", leader="not-exited",
+                      stdout_eof=False, stderr_eof=False, stdout_bytes=0, stderr_bytes=0))
+        for refused in (False, True):
+            with self.subTest(refused=refused):
+                sink = io.StringIO()
+                observed = []
+                def drive(args, cancelled, timing):
+                    observed.append(timing)
+                    # Exercise the actual spawn configuration without starting a
+                    # child or entering signal/reaping cleanup.
+                    with patch.object(menu.subprocess, "Popen") as spawn:
+                        session = menu.MenuSession("inert-fixture", io.BytesIO(),
+                                                   time.monotonic() + 90, timing=timing)
+                        self.assertEqual(spawn.call_args.kwargs["stderr"], subprocess.PIPE)
+                        self.assertIsInstance(session.stream.diagnostics, menu.NativeDiagnostics)
+                    if timing:
+                        timing.native(b"SECRET-SENTINEL /private/path")
+                        timing.native(("SBXR_NATIVE_QUERY " + json.dumps({**record, "secret": "SECRET-SENTINEL"})).encode())
+                        timing.native(("SBXR_NATIVE_QUERY " + json.dumps(record)).encode())
+                    if refused:
+                        guard = dict(guard="clock", cause="unsafe", id=90, elapsed_us=16)
+                        raw = ("SBXR_NATIVE_READINESS " + json.dumps(guard) + "\n").encode()
+                        session.stream.buffer = bytearray(b"SBXR V3\nCode: SOFTWARE-LIFECYCLE-STATUS-READY\n1. View details\n0. Exit\n")
+                        with patch.object(menu, "readable", side_effect=[[session.process.stderr], []]), \
+                             patch.object(menu.os, "read", return_value=raw):
+                            try:
+                                session.choose("Start setup")
+                            except menu.ProtocolError as error:
+                                session.process.stdin.write.assert_not_called()
+                                error.code = session.stream.last_code
+                                raise
+                with patch.object(sys, "argv", [str(DRIVER), "action", "Start setup", "--timeout", "90"]), \
+                     patch.object(sys, "platform", "darwin"), patch.object(sys, "stderr", sink), \
+                     patch.object(menu.signal, "signal"), patch.object(menu, "drive", side_effect=drive):
+                    self.assertEqual(menu.main(), int(refused))
+                self.assertIsInstance(observed[0], menu.PhaseTiming)
+                output = sink.getvalue()
+                self.assertNotIn("SECRET-SENTINEL", output)
+                self.assertNotIn("/private/path", output)
+                rows = [json.loads(line.split(" ", 1)[1]) for line in output.splitlines()
+                        if line.startswith("SBXR_NATIVE_QUERY ")]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual({key: rows[0][key] for key in record}, record)
+                self.assertEqual("phase=label-missing" in output, refused)
+                guards = [json.loads(line.split(" ", 1)[1]) for line in output.splitlines()
+                          if line.startswith("SBXR_NATIVE_READINESS ")]
+                self.assertEqual(len(guards), int(refused))
+                if refused:
+                    self.assertEqual(guards[0]["guard"], "clock")
+                    self.assertEqual(guards[0]["cause"], "unsafe")
+                    self.assertLess(output.index("SBXR_NATIVE_READINESS "), output.index("SBXR_MENU_SESSION_REFUSED"))
+
+
 class MenuSessionDeadlineTest(unittest.TestCase):
     def test_expired_session_never_starts_product(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1173,6 +1230,45 @@ class MenuSessionDriverTest(unittest.TestCase):
                 unrelated.kill()
                 unrelated.wait(timeout=3)
                 libc.prctl(36, previous.value, 0, 0, 0)
+
+class ReadinessDiagnosticTests(unittest.TestCase):
+    """Pure strict-filter tests; no product or native process operations."""
+    def relay(self, rows):
+        sink = io.StringIO()
+        timing = menu.PhaseTiming(sink, time.monotonic() + 1)
+        try:
+            for row in rows:
+                timing.native(row if isinstance(row, bytes) else
+                              ("SBXR_NATIVE_READINESS " + json.dumps(row)).encode())
+        finally:
+            timing.close()
+        return sink.getvalue().splitlines()
+
+    def test_accepts_closed_guard_and_error_vocabulary(self):
+        # Keep each batch below the existing best-effort queue capacity.
+        for guard in sorted(menu.READINESS_GUARDS):
+            rows = [dict(guard=guard, cause=cause, id=2**64-1, elapsed_us=2**64-1)
+                    for cause in sorted(menu.READINESS_CAUSES)]
+            received = self.relay(rows)
+            self.assertEqual(len(received), len(rows))
+            for original, line in zip(rows, received):
+                self.assertLessEqual(len(line), 511)
+                row = json.loads(line.split(" ", 1)[1])
+                self.assertEqual({key: row[key] for key in original}, original)
+                self.assertEqual(set(row) - set(original), {"received_monotonic", "remaining_ms"})
+
+    def test_rejects_payloads_unknown_enums_duplicates_and_invalid_scalars(self):
+        row = dict(guard="clock", cause="unsafe", id=1, elapsed_us=0)
+        bad = [{**row, key: value} for key, value in [
+            ("guard", "/private/path"), ("guard", []), ("cause", "SECRET-SENTINEL"),
+            ("cause", "completed-zero"), ("cause", []), ("payload", "SECRET-SENTINEL"),
+            ("id", True), ("id", 0), ("id", 2**64), ("elapsed_us", True),
+            ("elapsed_us", -1), ("elapsed_us", 2**64)]]
+        bad += [[], None, {key: value for key, value in row.items() if key != "guard"}]
+        raw = ("SBXR_NATIVE_READINESS " + json.dumps(row)).encode()
+        bad += [raw.replace(b'"id": 1', b'"id": 1, "id": 2'), raw[:40]]
+        self.assertEqual(self.relay(bad), [])
+
 
 class QueryDiagnosticTests(unittest.TestCase):
     """Pure relay tests; no child, signal, socket or network operations."""

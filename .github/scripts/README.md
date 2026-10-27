@@ -53,8 +53,9 @@ preserved outside that cleanup authority. Absence checks
 treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
-Details mode writes bounded `SBXR_MENU_PHASE` events to stderr with monotonic
-receipt/acceptance times, input classes, and return-frame progress. `prompt-received`
+Details mode and `action "Start setup"` write bounded `SBXR_MENU_PHASE` events
+to stderr with monotonic receipt/acceptance times, input classes, and return-frame
+progress. `prompt-received`
 means a complete continuation line was extracted before transcript writing;
 `prompt-accepted` follows the existing post-write deadline check. `input-sent`
 means stdin write/flush completed, not that the product consumed it. No input
@@ -71,7 +72,7 @@ with a private nonblocking open file description. It pins the source descriptor,
 verifies pipe identity, and never modifies inherited descriptor flags or acquires
 a stdio lock. Regular files, terminals, sockets, unsupported platforms and failed
 reopens disable native diagnostics. Both timing and query records use one direct
-write of at most 512 bytes without retry/flush; the bounded details relay
+write of at most 512 bytes without retry/flush; the bounded details/setup relay
 rejects unknown fields, labels and out-of-range values. Missing/truncated records
 prove nothing and cannot alter readiness, cancellation, cleanup or deadlines.
 `not-exited` means the last nonblocking wait found no exit; it does **not** assert
@@ -91,9 +92,9 @@ first stdout byte/line received from the accepted menu label/frame, and retain
 selection/continuation/return events. Native non-terminal public entry emits only
 typed `SBXR_NATIVE_PHASE` scopes for entry selection/authentication, Owner work,
 fresh installed/process checks, fixed queries/subprocesses and network stages.
-The details driver drains a bounded private stderr pipe, relays only the closed
+The details/setup driver drains a bounded private stderr pipe, relays only the closed
 schema/phase allowlist and discards other stderr. Menu/native records and the final
-details refusal use a daemon relay with at most 256 queued records of 512 bytes.
+details/setup refusal use a daemon relay with at most 256 queued records of 512 bytes.
 A full queue drops records; sink writes never run on the enforcement thread. The
 relay uses a duplicated raw descriptor without changing inherited descriptor
 flags or holding stderr's buffered lock; exit uses a 50 ms relay join allowance.
@@ -107,7 +108,20 @@ Native `elapsed_us` uses a per-process origin; driver `received_monotonic` is th
 receipt time, not the native event's clock. Match begin/end by ID. End means scope
 exit, including refusal; spans are inclusive, and missing events may reflect
 termination, backpressure drops or incomplete collection. These diagnostics do
-not establish a latency repair or packaged qualification.
+not establish a latency repair or packaged qualification. Setup capture includes
+the initial menu refusal before a label is selected; it does not perform a second
+review or retry. A failed Standard review additionally emits one
+`SBXR_NATIVE_READINESS` record from that same failure before returning its refusal.
+Its exact fields are `guard`, `cause`, `id`, and `elapsed_us`; exhaustive typed
+`SetupGuard`/`HostError` matches supply fixed labels (query guards use the existing
+`query-*` labels). No formatted error or observation payload is admitted. IDs use
+the existing per-process sequence; surrounding phase records locate the review.
+The relay strictly validates the closed enums and integer bounds, and drains
+already available diagnostics before refusing a missing setup label even when
+the menu is buffered. It does not wait for a record. This covers non-query Standard
+state failures as well as query failures; adapter-open/Owner refusals outside that
+boundary are not represented by this record. Failed/full sinks remain best effort,
+and no record can recover diagnostics discarded by older drivers.
 
 
 The former `v3-clean` runner and forced-interruption procedure are retired;

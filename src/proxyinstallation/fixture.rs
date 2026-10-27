@@ -121,7 +121,10 @@ impl<H: SetupHost> StandardInstallation<H> {
         *self.owner.borrow_mut() = Rc::new(());
         let state = match self.state() {
             Ok(state) => state,
-            Err(failure) => return Review{mode:self.mode(),details:vec!["Host authority could not be verified. Preserve unknown state; real deployment is unavailable.".into(), failure.to_string()],status:Status::ProblemDetected,legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("Host ownership or observations are unsafe or unsupported. No deployment action is available."),prepared:None},
+            Err(failure) => {
+                crate::host::timing::readiness_failure(failure);
+                return Review{mode:self.mode(),details:vec!["Host authority could not be verified. Preserve unknown state; real deployment is unavailable.".into(), failure.to_string()],status:Status::ProblemDetected,legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("Host ownership or observations are unsafe or unsupported. No deployment action is available."),prepared:None};
+            }
         };
         let mut legal_actions = vec![Action::ViewDetails];
         legal_actions.extend(state.action);

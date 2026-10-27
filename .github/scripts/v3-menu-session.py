@@ -230,7 +230,7 @@ class DiagnosticRelay:
 
 
 class PhaseTiming:
-    """Details-only bounded events; never transcript bytes or input values."""
+    """Bounded details/setup events; never transcript bytes or input values."""
     def __init__(self, sink, deadline):
         self.relay = DiagnosticRelay(sink)
         self.deadline = deadline
@@ -243,7 +243,8 @@ class PhaseTiming:
         }, sort_keys=True))
 
     def native(self, raw):
-        prefix = b"SBXR_NATIVE_QUERY " if raw.startswith(b"SBXR_NATIVE_QUERY ") else b"SBXR_NATIVE_PHASE "
+        prefix = next((p for p in (b"SBXR_NATIVE_QUERY ", b"SBXR_NATIVE_READINESS ", b"SBXR_NATIVE_PHASE ")
+                       if raw.startswith(p)), b"SBXR_NATIVE_PHASE ")
         if not raw.startswith(prefix):
             return
         def unique(pairs):
@@ -257,6 +258,9 @@ class PhaseTiming:
             row = json.loads(raw[len(prefix):], object_pairs_hook=unique)
             if prefix == b"SBXR_NATIVE_QUERY ":
                 if not valid_query_diagnostic(row):
+                    return
+            elif prefix == b"SBXR_NATIVE_READINESS ":
+                if not valid_readiness_diagnostic(row):
                     return
             elif (type(row) is not dict or set(row) != {"phase", "event", "id", "elapsed_us"} or
                     row["phase"] not in NATIVE_PHASES or row["event"] not in ("begin", "end") or
@@ -296,6 +300,18 @@ def valid_query_diagnostic(row):
             any(type(state[k]) is not int or not 0 <= state[k] <= 1 << 20 for k in ("stdout_bytes", "stderr_bytes"))):
         return False
     return state["stdout_bytes"] + state["stderr_bytes"] <= 1 << 20
+
+
+READINESS_GUARDS = frozenset("effects ownership-store ownership-record recovery observation native-authority transactions locks network platform admission clock installed-pair proxy-resources port443".split()) | frozenset(p for p in NATIVE_PHASES if p.startswith("query-"))
+READINESS_CAUSES = QUERY_OUTCOMES - {"completed-zero", "completed-nonzero"}
+
+
+def valid_readiness_diagnostic(row):
+    return (type(row) is dict and set(row) == {"guard", "cause", "id", "elapsed_us"} and
+            type(row["guard"]) is str and row["guard"] in READINESS_GUARDS and
+            type(row["cause"]) is str and row["cause"] in READINESS_CAUSES and
+            type(row["id"]) is int and 0 < row["id"] <= 2**64 - 1 and
+            type(row["elapsed_us"]) is int and 0 <= row["elapsed_us"] <= 2**64 - 1)
 
 
 def readable(streams, timeout):
@@ -518,6 +534,9 @@ class MenuSession:
                 self.timing("menu-label-matched")
             if line == "0. Exit":
                 if selection is None:
+                    # The menu may already be buffered while its same-review
+                    # guard record is pending on stderr. Drain only what is ready.
+                    self.stream.drain_diagnostics()
                     raise ProtocolError("label-missing")
                 self.timing("menu-ready")
                 self.write(selection + "\n")
@@ -878,7 +897,7 @@ def main():
                 raise ProtocolError("subreaper-unavailable")
         for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(signum, receive)
-        if args.mode == "details":
+        if args.mode == "details" or (args.mode == "action" and args.label == "Start setup"):
             timing = PhaseTiming(sys.stderr, time.monotonic() + float(args.timeout))
         drive(args, cancelled, timing)
     except Exception as error:

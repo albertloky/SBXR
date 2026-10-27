@@ -203,6 +203,62 @@ impl Span {
         });
     }
 }
+/// Record the same failed Standard review, before its details can be replaced
+/// by another observation. Only exhaustive enum labels enter this record.
+pub(crate) fn readiness_failure(failure: super::SetupFailure) {
+    use super::{HostError, SetupGuard};
+    let guard = match failure.guard {
+        SetupGuard::Effects => "effects",
+        SetupGuard::OwnershipStore => "ownership-store",
+        SetupGuard::OwnershipRecord => "ownership-record",
+        SetupGuard::Recovery => "recovery",
+        SetupGuard::Observation => "observation",
+        SetupGuard::Query(query) => Phase::Query(query).label(),
+        SetupGuard::NativeAuthority => "native-authority",
+        SetupGuard::Transactions => "transactions",
+        SetupGuard::Locks => "locks",
+        SetupGuard::Network => "network",
+        SetupGuard::Platform => "platform",
+        SetupGuard::Admission => "admission",
+        SetupGuard::Clock => "clock",
+        SetupGuard::InstalledPair => "installed-pair",
+        SetupGuard::ProxyResources => "proxy-resources",
+        SetupGuard::Port443 => "port443",
+    };
+    let cause = match failure.cause {
+        HostError::Unsafe => "unsafe",
+        HostError::Foreign => "foreign",
+        HostError::Io => "io",
+        HostError::Injected => "injected",
+        HostError::LiveUnavailable => "live-unavailable",
+        HostError::UnsupportedHost => "unsupported-host",
+        HostError::Cancelled => "cancelled",
+        HostError::Timeout => "timeout",
+        HostError::OutputLimit => "output-limit",
+        HostError::Busy => "busy",
+    };
+    let value = TRACE.with(|t| {
+        let mut state = t.borrow_mut();
+        let trace = state.as_mut()?;
+        trace.next = trace.next.saturating_add(1);
+        Some((
+            trace.sink.clone(),
+            trace.next,
+            trace.start.elapsed().as_micros().min(u64::MAX as u128) as u64,
+        ))
+    });
+    let Some((sink, id, elapsed)) = value else {
+        return;
+    };
+    let Ok(mut sink) = sink.try_borrow_mut() else {
+        return;
+    };
+    let row = serde_json::json!({"guard": guard, "cause": cause, "id": id, "elapsed_us": elapsed});
+    let line = format!("SBXR_NATIVE_READINESS {row}\n");
+    // The same bounded private nonblocking sink as phase/query records. Never
+    // flush, retry, format HostError, or let diagnostic failure change refusal.
+    let _ = sink.write(line.as_bytes());
+}
 impl Drop for Span {
     fn drop(&mut self) {
         if let Some((phase, id)) = self.0 {
@@ -232,6 +288,52 @@ pub(crate) fn capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readiness_record_is_bounded_and_sink_failure_never_retries_or_flushes() {
+        use super::super::{HostError, SetupFailure, SetupGuard};
+        let (_, bytes) = capture(|| {
+            readiness_failure(SetupFailure::new(SetupGuard::Clock, HostError::Unsafe));
+            readiness_failure(SetupFailure::new(
+                SetupGuard::Query(Query::ConfigurationOwner),
+                HostError::UnsupportedHost,
+            ));
+        });
+        let text = String::from_utf8(bytes).unwrap();
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| {
+                assert!(line.len() < 512);
+                serde_json::from_str(line.strip_prefix("SBXR_NATIVE_READINESS ").unwrap()).unwrap()
+            })
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["guard"], "clock");
+        assert_eq!(rows[0]["cause"], "unsafe");
+        assert_eq!(rows[1]["guard"], "query-configuration-owner");
+        assert_eq!(rows[1]["cause"], "unsupported-host");
+        assert_eq!(rows[0]["id"], 1);
+        assert_eq!(rows[1]["id"], 2);
+        assert!(
+            rows.iter()
+                .all(|r| r.as_object().unwrap().len() == 4 && r["elapsed_us"].is_u64())
+        );
+        struct Failed(Rc<std::cell::Cell<usize>>);
+        impl Write for Failed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                self.0.set(self.0.get() + 1);
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("must not flush")
+            }
+        }
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let enabled = enable_with(Box::new(Failed(calls.clone())));
+        readiness_failure(SetupFailure::new(SetupGuard::Network, HostError::Timeout));
+        drop(enabled);
+        assert_eq!(calls.get(), 1);
+    }
+
     #[test]
     fn scopes_pair_on_refusal_without_payload_or_path_and_restore_disabled_state() {
         assert!(span(Phase::Entry).0.is_none());

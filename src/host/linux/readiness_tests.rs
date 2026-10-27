@@ -348,3 +348,106 @@ fn fixed_query_timing_brackets_actual_transport_without_command_payload() {
     assert_eq!(rows[1]["event"], "end");
     assert_eq!(rows[0]["id"], rows[1]["id"]);
 }
+
+#[test]
+fn fresh_readiness_can_change_between_owner_details_and_setup_without_mutation() {
+    use crate::proxyinstallation::{Interface, Journey, OwnerInstallation, OwnerSources};
+    struct Changing<'a> {
+        root: &'a Root,
+        proof: &'a crate::release_acquisition::AuthenticatedInstalled,
+        opens: std::cell::Cell<usize>,
+    }
+    impl<'a> OwnerSources<'a> for Changing<'a> {
+        fn journeys(&self) -> Result<Vec<Journey>, HostError> {
+            Ok(vec![Journey::Standard])
+        }
+        fn mode(&self) -> crate::proxyinstallation::ExecutionMode {
+            crate::proxyinstallation::ExecutionMode::InjectedHost
+        }
+        fn open(&self, journey: Journey) -> Result<Box<dyn Interface + 'a>, HostError> {
+            let n = self.opens.get();
+            self.opens.set(n + 1);
+            // Initial status refuses; details status also refuses but its reopened
+            // detail observation passes; returned status passes; fresh setup refuses.
+            // This is an injected admission change, not a replay of q200's unknown guard.
+            CleanSources {
+                root: self.root,
+                proof: self.proof,
+                setup_ready: [false, false, true, true, false, true][n],
+            }
+            .open(journey)
+        }
+    }
+    let root = Root::new();
+    let proof = clean_pair(&root);
+    let owner = OwnerInstallation::new(Changing {
+        root: &root,
+        proof: &proof,
+        opens: std::cell::Cell::new(0),
+    });
+    let initial = owner.review(Action::Status);
+    assert_eq!(initial.status, Status::ProblemDetected);
+    let details = owner.review(Action::ViewDetails);
+    assert_eq!(details.status, Status::ProblemDetected);
+    assert!(
+        details
+            .details
+            .iter()
+            .any(|d| d.contains("durable phase: None"))
+    );
+    let returned = owner.review(Action::Status);
+    assert_eq!(returned.status, Status::NotSetUp);
+    assert!(returned.legal_actions.contains(&Action::StartSetup));
+    let fresh = owner.review(Action::StartSetup);
+    assert_eq!(fresh.status, Status::ProblemDetected);
+    assert!(!fresh.legal_actions.contains(&Action::StartSetup));
+    assert!(fresh.prepared.is_none());
+    assert!(
+        owner
+            .review(Action::Status)
+            .legal_actions
+            .contains(&Action::StartSetup)
+    );
+    assert_eq!(owner.sources().opens.get(), 6);
+    assert!(!root.0.join("var/lib/sbxr/proxy-ownership.json").exists());
+}
+
+#[test]
+fn initial_non_query_refusal_records_its_guard_before_a_later_successful_review() {
+    let root = Root::new();
+    let (host, commands, _) = system_host(&root);
+    host.runner.transport().backend.borrow_mut().query_overrides =
+        vec![(Query::Clock, 0, b"no\n".to_vec())];
+    let installation = StandardInstallation::new(host, release()).unwrap();
+    let ((initial, later), bytes) = crate::host::timing::capture(|| {
+        let initial = installation.review(Action::Status);
+        installation
+            .host()
+            .runner
+            .transport()
+            .backend
+            .borrow_mut()
+            .query_overrides
+            .clear();
+        let later = installation.review(Action::ViewDetails);
+        (initial, later)
+    });
+    assert_eq!(initial.status, Status::ProblemDetected);
+    assert!(initial.prepared.is_none());
+    assert!(!initial.legal_actions.contains(&Action::StartSetup));
+    assert_eq!(later.status, Status::NotSetUp);
+    let text = String::from_utf8(bytes).unwrap();
+    let rows: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("SBXR_NATIVE_READINESS "))
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["guard"], "clock");
+    assert_eq!(rows[0]["cause"], "unsafe");
+    assert_eq!(rows[0].as_object().unwrap().len(), 4);
+    assert!(rows[0]["id"].as_u64().unwrap() > 0);
+    assert!(rows[0]["elapsed_us"].is_u64());
+    assert!(!text.contains(root.0.to_str().unwrap()));
+    assert!(commands.borrow().iter().all(|c| !c.mutation()));
+}
