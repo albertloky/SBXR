@@ -776,6 +776,9 @@ impl super::super::system::Transport for SystemFixtureTransport {
                 }
                 Some(Operation::RemovePackageIdentity)
             }
+            ("/usr/bin/cat", _) => {
+                return CommandOutput::completed(0, b"1 0 8:1 / / rw - ext4 none rw\n".to_vec());
+            }
             ("/usr/bin/find", _) => {
                 return CommandOutput::completed(
                     0,

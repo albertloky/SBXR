@@ -262,6 +262,7 @@ func TestPackageIdentityRemovalAcceptsGroupRemovedByUserdel(t *testing.T) {
 case "${0##*/}:$1" in
 getent:passwd) [ ! -e "$IDENTITY_REMOVED" ] || exit 2; printf '%s\n' 'sing-box:x:999:999::/var/lib/sing-box:/usr/sbin/nologin';;
 getent:group) [ ! -e "$IDENTITY_REMOVED" ] || exit 2; printf '%s\n' 'sing-box:x:999:';;
+cat:*) printf '1 0 8:1 / / rw - ext4 none rw\n';;
 find:*) exit 0;;
 pgrep:*) exit 1;;
 userdel:*) : > "$IDENTITY_REMOVED";;
@@ -271,7 +272,7 @@ esac
 	if err := os.WriteFile(commandPath, []byte(command), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"getent", "find", "pgrep", "userdel", "groupdel"} {
+	for _, name := range []string{"getent", "cat", "find", "pgrep", "userdel", "groupdel"} {
 		if err := os.Symlink(commandPath, filepath.Join(directory, name)); err != nil {
 			t.Fatal(err)
 		}

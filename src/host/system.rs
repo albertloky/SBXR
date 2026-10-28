@@ -18,6 +18,7 @@ pub struct CommandSpec {
     arguments: Vec<String>,
     directory: PathBuf,
     mutation: bool,
+    timeout: Option<Duration>,
 }
 impl CommandSpec {
     pub fn program(&self) -> &str {
@@ -38,6 +39,7 @@ impl CommandSpec {
             arguments: args.iter().map(|s| (*s).into()).collect(),
             directory: "/".into(),
             mutation,
+            timeout: None,
         }
     }
 }
@@ -84,6 +86,7 @@ impl Transport for NativeTransport {
                 | "/usr/bin/getent"
                 | "/usr/bin/pgrep"
                 | "/usr/bin/find"
+                | "/usr/bin/cat"
                 | "/usr/bin/ss"
                 | "/usr/bin/timedatectl"
                 | "/usr/bin/sing-box"
@@ -105,11 +108,11 @@ impl Transport for NativeTransport {
             command.program,
             &args,
             command.directory.to_str().ok_or(HostError::Unsafe)?,
-            if managed {
+            command.timeout.unwrap_or(if managed {
                 Duration::from_secs(300)
             } else {
                 Duration::from_secs(5)
-            },
+            }),
             process::OUTPUT_LIMIT,
             cancellation,
         )?;
@@ -271,18 +274,9 @@ impl<T: Transport> SystemRunner<T> {
             .collect()
     }
     fn group_exclusive(&self, gid: u32, stop: &Cancellation) -> Result<(), HostError> {
+        self.account_files(None, gid, stop)?;
         let gid = gid.to_string();
-        let root = self.root.to_str().ok_or(HostError::Unsafe)?;
-        let files = self.output(
-            "/usr/bin/find",
-            &[root, "-xdev", "-gid", &gid, "-print", "-quit"],
-            false,
-            stop,
-        )?;
-        if files.code() != 0
-            || !files.text()?.is_empty()
-            || self.pids(&["-G", &gid], stop)? != self.pids(&["-x", "sing-box"], stop)?
-        {
+        if self.pids(&["-G", &gid], stop)? != self.pids(&["-x", "sing-box"], stop)? {
             return Err(HostError::Foreign);
         }
         Ok(())
@@ -293,27 +287,12 @@ impl<T: Transport> SystemRunner<T> {
             if gid != group.gid {
                 return Err(HostError::Unsafe);
             }
+            self.account_files(Some(uid), gid, stop)?;
             let uid = uid.to_string();
             let gid = gid.to_string();
-            let config = self.path("/etc/sing-box/config.json");
-            let state = self.path("/var/lib/sing-box");
-            let children = format!("{state}/*");
-            let root = self.root.to_str().ok_or(HostError::Unsafe)?;
-            let files = self.output(
-                "/usr/bin/find",
-                &[
-                    root, "-xdev", "(", "-uid", &uid, "-o", "-gid", &gid, ")", "!", "-path",
-                    &config, "!", "-path", &state, "!", "-path", &children, "-print", "-quit",
-                ],
-                false,
-                stop,
-            )?;
             let mut processes = self.pids(&["-u", &uid], stop)?;
             processes.extend(self.pids(&["-G", &gid], stop)?);
-            if files.code() != 0
-                || !files.text()?.is_empty()
-                || processes != self.pids(&["-x", "sing-box"], stop)?
-            {
+            if processes != self.pids(&["-x", "sing-box"], stop)? {
                 return Err(HostError::Foreign);
             }
         } else if user.is_some() {
@@ -528,3 +507,6 @@ impl<T: Transport> CommandRunner for SystemRunner<T> {
 #[cfg(test)]
 #[path = "system_tests.rs"]
 mod tests;
+
+#[path = "system_mounts.rs"]
+mod mounts;

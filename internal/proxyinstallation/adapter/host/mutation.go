@@ -649,12 +649,12 @@ func (adapter Adapter) groupExclusive(ctx context.Context, spec SetupSpec, fact 
 	if !ok {
 		return false
 	}
-	owned := adapter.command(ctx, "find", adapter.path("/"), "-xdev", "-gid", strconv.FormatUint(uint64(gid), 10), "-print", "-quit")
+	exclusive, observed := adapter.accountFiles(ctx, spec, nil, gid)
 	groupProcesses := adapter.command(ctx, "pgrep", "-G", strconv.FormatUint(uint64(gid), 10))
 	packageProcesses := adapter.command(ctx, "pgrep", "-x", spec.PackageName)
 	groupPIDs, groupObserved := pidSet(groupProcesses)
 	packagePIDs, packageObserved := pidSet(packageProcesses)
-	return owned.Observed && owned.OK && owned.Fact == "" && groupObserved && packageObserved && reflect.DeepEqual(groupPIDs, packagePIDs)
+	return observed && exclusive && groupObserved && packageObserved && reflect.DeepEqual(groupPIDs, packagePIDs)
 }
 
 func serviceStopped(load, enabled, active, process, listener OperationResult, packageName string) bool {
@@ -820,13 +820,7 @@ func (adapter Adapter) identityExclusive(ctx context.Context, spec SetupSpec, ui
 	if !valid {
 		return false, true
 	}
-	configuration := adapter.path(spec.ConfigurationPath)
-	state := adapter.path(spec.StatePath)
-	result := adapter.command(ctx, "find", adapter.path("/"), "-xdev", "(", "-uid", strconv.FormatUint(uint64(uid), 10), "-o", "-gid", strconv.FormatUint(uint64(gid), 10), ")", "!", "-path", configuration, "!", "-path", state, "!", "-path", state+string(os.PathSeparator)+"*", "-print", "-quit")
-	if !result.Observed || !result.OK {
-		return false, false
-	}
-	return result.Fact == "", true
+	return adapter.accountFiles(ctx, spec, &uid, gid)
 }
 
 func (adapter Adapter) processExclusive(ctx context.Context, packageName string, uid, gid uint32, valid bool) (bool, bool) {
