@@ -1,7 +1,6 @@
 package host
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,19 +59,8 @@ func TestCommandInheritedPipesAreBounded(t *testing.T) {
 	}
 }
 
-func TestCommandDeadlineBoundsInheritedPipes(t *testing.T) {
-	script, marker := inheritedPipeFixture(t, "wait")
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	_, _, observed := commandOutput(ctx, "/bin/sh", "-c", script, "fixture", marker)
-	if elapsed := time.Since(started); elapsed >= 5*time.Second {
-		t.Fatalf("deadline did not bound drain: %v", elapsed)
-	}
-	if observed {
-		t.Fatal("cancelled command reported observed")
-	}
-}
+// Cancellation and deadline coverage lives in command_descendant_test.go,
+// which proves leaf termination rather than requiring a killed leaf to ack.
 
 // Keep the normal exit-code contract: bounded drainage is not a blanket refusal.
 func TestCommandCompletedOutputPreservesExitCode(t *testing.T) {

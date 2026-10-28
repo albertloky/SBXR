@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -245,10 +246,39 @@ func commandOutput(ctx context.Context, name string, arguments ...string) (strin
 	return "", -1, false
 }
 
-// Bound pipe draining separately from the direct child's lifetime. Generic host
-// commands have no owned process-group contract, so inherited descriptors do
-// not authorize signalling descendants. Incomplete output is never observed.
+// Bound pipe draining separately from the direct child's lifetime. Cancellation
+// kills the process group created for this command, including descendants that
+// retain its group. A command that exits normally may leave background work;
+// inherited descriptors alone do not authorize killing it. Escaped groups are
+// outside this contract. Incomplete output is never observed.
 func boundedCommandOutput(command *exec.Cmd, combined bool) ([]byte, error) {
+	// All callers supply fresh commands. Preserve any other child attributes,
+	// but never join a pre-existing group when installing group cancellation.
+	attributes := syscall.SysProcAttr{}
+	if command.SysProcAttr != nil {
+		attributes = *command.SysProcAttr
+	}
+	if attributes.Pgid != 0 || attributes.Setsid {
+		return nil, errors.New("bounded command requires a new process group")
+	}
+	attributes.Setpgid = true
+	command.SysProcAttr = &attributes
+	var cancellation sync.Mutex
+	reaping := false
+	if command.Cancel != nil {
+		command.Cancel = func() error {
+			cancellation.Lock()
+			defer cancellation.Unlock()
+			if reaping {
+				return os.ErrProcessDone
+			}
+			err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+			if errors.Is(err, syscall.ESRCH) {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+	}
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -267,21 +297,34 @@ func boundedCommandOutput(command *exec.Cmd, combined bool) ([]byte, error) {
 	var output bytes.Buffer
 	drained := make(chan error, 1)
 	go func() { _, err := io.Copy(&output, reader); drained <- err }()
-	waitErr := command.Wait()
+	// Observe exit without reaping: the child PID (and hence its group ID)
+	// must remain reserved until any group signal has completed. Cmd.Wait
+	// otherwise reaps before joining its cancellation callback.
+	exitErr := waitCommandExit(command.Process.Pid)
+	if exitErr != nil {
+		// Observation failed. Go's direct kill is PID-safe; retain the error.
+		_ = command.Process.Kill()
+	}
+	// Keep the child unreaped while inherited output drains, so cancellation
+	// can still stop its group if the leader has already exited.
 	timer := time.NewTimer(command.WaitDelay)
 	defer timer.Stop()
+	var drainErr error
 	select {
-	case drainErr := <-drained:
+	case drainErr = <-drained:
 		_ = reader.Close()
-		if drainErr != nil {
-			return output.Bytes(), errors.Join(waitErr, drainErr, exec.ErrWaitDelay)
-		}
-		return output.Bytes(), waitErr
 	case <-timer.C:
 		_ = reader.Close()
-		<-drained
-		return output.Bytes(), errors.Join(waitErr, exec.ErrWaitDelay)
+		drainErr = errors.Join(<-drained, exec.ErrWaitDelay)
 	}
+	cancellation.Lock()
+	reaping = true
+	cancellation.Unlock()
+	waitErr := errors.Join(command.Wait(), exitErr)
+	if drainErr != nil {
+		return output.Bytes(), errors.Join(waitErr, drainErr, exec.ErrWaitDelay)
+	}
+	return output.Bytes(), waitErr
 }
 
 func livePublicIPv4(ctx context.Context) string {
