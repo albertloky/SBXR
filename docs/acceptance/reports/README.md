@@ -7,6 +7,11 @@ source commit or change a recorded result. Raw evidence stays private under
 `.scratch/acceptance/`; those links are local-only and may be unavailable in
 a fresh clone. Start new work with the [current guide](../README.md).
 
+## Direct Rust diagnostics
+
+- [q202 Standard Review and DNS comparison — 2026-10-28](rust-q202-review-dns-comparison-2026-10-28.md)
+  — Review Ready/cancelled with restoration verified; intermittent query failure remains unexplained, and Apply/full qualification were not run.
+
 ## Local diagnostic preparation
 
 - [DNS child runtime inputs and ownership — 2026-10-27](dns-child-runtime-input-preparation-2026-10-27.md)
