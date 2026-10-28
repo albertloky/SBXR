@@ -107,6 +107,8 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 		}
 		names := make([]string, 0, len(release.Assets))
 		bound := gatewayRelease{tag: release.Tag, commit: release.Commit, assets: map[string]*gatewayAsset{}}
+		// Register the map before acquiring files so every failure closes partial ownership.
+		gateway.releases[index] = bound
 		for _, asset := range release.Assets {
 			names = append(names, asset.Name)
 			if !validSHA256(asset.SHA256) || asset.Size <= 0 || asset.Size > releaseAssetLimit(asset.Name) || bound.assets[asset.Name] != nil {
@@ -134,7 +136,6 @@ func newQualificationGateway(manifest, bundle json.RawMessage, assetRoot string)
 			gateway.close()
 			return nil, errors.New("qualification asset set refused")
 		}
-		gateway.releases[index] = bound
 	}
 	return gateway, nil
 }

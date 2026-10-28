@@ -92,6 +92,24 @@ class ReleaseTools(unittest.TestCase):
                             self.assertEqual(env["CC_" + target.replace("-", "_")], "musl-gcc")
                         self.assertEqual(cargo[1][0][-1], target)
 
+    def test_source_verification_requires_declared_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "script.sh"
+            source.write_bytes(b"inert source")
+            commit = "a" * 40
+            manifest = dict(schema="sbxr-rust-source-v1", commit=commit, provenance={}, exclusions=[], fixtures=[],
+                            files=[dict(path="script.sh", mode="0755", size=len(source.read_bytes()), sha256=hashlib.sha256(source.read_bytes()).hexdigest())])
+            raw = json.dumps(manifest).encode()
+            (root / "SOURCE-MANIFEST.json").write_bytes(raw)
+            digest = hashlib.sha256(raw).hexdigest()
+            source.chmod(0o755)
+            self.assertEqual(snapshot.verify(root, commit, digest)["outcome"], "verified-source-local")
+            for mode in (0o644, 0o777, 0o4755):
+                source.chmod(mode)
+                with self.subTest(mode=mode), self.assertRaises(ValueError):
+                    snapshot.verify(root, commit, digest)
+
     def test_source_snapshot_is_exact_deterministic_secret_excluding_and_not_uploaded(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -130,6 +148,8 @@ class ReleaseTools(unittest.TestCase):
                 extracted.mkdir()
                 for path,body in files.items():
                     target=extracted/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(body)
+                for entry in json.loads(files["SOURCE-MANIFEST.json"])["files"]:
+                    (extracted/entry["path"]).chmod(int(entry["mode"], 8))
                 self.assertEqual(snapshot.verify(extracted,commit,result["manifest_sha256"])["commit"],commit)
                 (extracted/"extra.rs").write_text("unreviewed")
                 with self.assertRaises(ValueError):snapshot.verify(extracted,commit,result["manifest_sha256"])

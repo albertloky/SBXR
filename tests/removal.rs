@@ -90,6 +90,7 @@ const PROXY: [RemovalEffect; 8] = [
     RemovalEffect::AptKey,
 ];
 struct FakeHost {
+    native_presentation: bool,
     root: TempRoot,
     executing: records::ReleaseIdentity,
     changed: bool,
@@ -118,6 +119,7 @@ impl FakeHost {
             .and_then(|r| finishing_release(r).ok())
             .unwrap_or_else(release);
         let host = Self {
+            native_presentation: false,
             root: TempRoot::new(),
             executing,
             changed: false,
@@ -212,6 +214,9 @@ impl FakeHost {
     }
 }
 impl RemovalHost for FakeHost {
+    fn is_native_system(&self) -> bool {
+        self.native_presentation
+    }
     fn effects_available(&self) -> bool {
         !self.unavailable
     }
@@ -1182,4 +1187,52 @@ fn historical_transport_migration_is_read_only_and_cannot_invent_a_removal_conve
     );
     assert!(removal.host().effects.is_empty());
     assert_eq!(removal.host().committed(), record);
+}
+
+#[test]
+fn removal_bridge_describes_native_and_injected_hosts_without_changing_outcomes() {
+    use sbxr::proxyinstallation::RemovalInstallation;
+    for native in [false, true] {
+        let mut host = FakeHost::new(Some(&running()));
+        host.native_presentation = native;
+        let mut installation = RemovalInstallation::new(host);
+        let review = installation.review(domain::Action::CompleteRemoval);
+        assert_eq!(review.status, domain::Status::Running);
+        assert!(review.prepared.is_some());
+        assert!(review.refusal.is_none());
+        let details = review.details.join(" ");
+        assert!(!details.contains("unavailable"), "{details}");
+        if native {
+            assert!(details.contains("Native"), "{details}");
+            assert!(!details.to_lowercase().contains("injected"));
+        } else {
+            assert!(details.contains("Injected"), "{details}");
+        }
+        let result = installation.execute(review.prepared.unwrap(), domain::Confirmation::Approved);
+        assert_eq!(result.outcome, domain::Outcome::RemovalComplete);
+        assert_eq!(result.status, domain::Status::NotInstalled);
+        assert_eq!(result.proxy_traffic, domain::Availability::CannotBeVerified);
+        assert_eq!(
+            result.outcome.code(),
+            "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"
+        );
+        assert_eq!(
+            result.message.contains("injected root"),
+            !native,
+            "{}",
+            result.message
+        );
+        installation.into_host().preserved();
+
+        let mut host = FakeHost::new(Some(&running()));
+        host.native_presentation = native;
+        let mut installation = RemovalInstallation::new(host);
+        let review = installation.review(domain::Action::CompleteRemoval);
+        let result = installation.execute(review.prepared.unwrap(), domain::Confirmation::Declined);
+        assert_eq!(result.outcome, domain::Outcome::Cancelled);
+        assert_eq!(result.status, domain::Status::Running);
+        let host = installation.into_host();
+        assert!(host.effects.is_empty());
+        host.preserved();
+    }
 }

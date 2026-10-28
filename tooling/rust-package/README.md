@@ -48,8 +48,8 @@ inspects the selected architecture, matching the Go command's selection.
 Inputs have bounded sizes and stable descriptor/path identity checks. Fixed
 asset names open relative to an existing directory descriptor with `NOFOLLOW`;
 FIFOs, directories, symlinks and observed late changes are refused. Outputs are
-exclusively created with mode `0600`; existing files and symlink targets are
-never replaced. Failed partial writes remain for inspection.
+exclusively created with mode `0600`, except executable bootstrap scripts use
+`0700`; existing files and symlink targets are never replaced. Failed partial writes remain for inspection.
 
 ## Commands
 
@@ -139,7 +139,10 @@ released identity. The inherited internal retained-commit key is always overridd
 Packaging still requires static ELF, correct architecture/entry/text, exact
 canonical metadata, pinned compiler comment and matching executable trailer.
 Authentication, signer/provenance and Acceptance Record checks remain separate.
-Native public **and private** dispatch stay closed pending qualification.
+Native public dispatch requires authenticated delivery/current-process admission;
+private dispatch requires its offline exact-pair/role/start-lock admission.
+Development builds refuse before native effects. These checks do not replace
+exact-candidate live qualification.
 
 The optional offline mechanics check uses only already installed tools:
 
@@ -195,8 +198,9 @@ it is not part of local validation and was not executed on this Mac. The workflo
 changes preserve Go reference/policy tests, race/vet/module verification,
 signatures, qualification/cleanup, exact bytes and manual stable publication.
 Repository-only Go qualification code is retained; no Go executable is shipped.
-Native public/private production gates remain closed, and the smoke checks prove
-refusal without installing files or executing root effects.
+The smoke checks prove non-root/development refusal without installing files or
+executing root effects; they do not exercise admitted native execution. See the
+[current native acceptance requirements](../../docs/rust-acceptance.md#conditional-native-setup-base-594add9).
 
 `source_snapshot.py --root REPO --commit FULL_COMMIT --output NEW_DIRECTORY`
 creates a local deterministic Git-object snapshot only after a clean final commit.

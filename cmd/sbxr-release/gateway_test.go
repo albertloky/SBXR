@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -45,6 +47,8 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Cleanup(gateway.close)
 
 	request := httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/albertloky/SBXR/releases/latest", nil)
 	request.Host = "api.github.com"
@@ -229,5 +233,109 @@ func testQualificationGatewaySubscriptionCandidate(t *testing.T, scope string) {
 			gateway.close()
 			t.Fatal("unbound manifest accepted")
 		}
+	}
+}
+
+func TestQualificationGatewayClosesPartialConstruction(t *testing.T) {
+	for _, failure := range []string{"metadata", "open", "digest", "asset-set", "later-release"} {
+		t.Run(failure, func(t *testing.T) {
+			root := t.TempDir()
+			var releases []map[string]any
+			var identities []syscall.Stat_t
+			for i, tag := range []string{"v2.0.0", "v2.0.1"} {
+				directory := filepath.Join(root, tag)
+				if err := os.Mkdir(directory, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				var assets []map[string]any
+				for _, name := range gatewayAssetNames {
+					body := []byte(tag + name)
+					filename := filepath.Join(directory, name)
+					if err := os.WriteFile(filename, body, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					var identity syscall.Stat_t
+					if err := syscall.Stat(filename, &identity); err != nil {
+						t.Fatal(err)
+					}
+					identities = append(identities, identity)
+					digest := sha256.Sum256(body)
+					assets = append(assets, map[string]any{"name": name, "size": len(body), "sha256": hex.EncodeToString(digest[:])})
+				}
+				identity := map[string]any{"repository": softwarelifecycle.Repository, "tag": tag, "commit": strings.Repeat("a", 40), "release_index_sha256": assets[1]["sha256"]}
+				releases = append(releases, map[string]any{"tag": tag, "sequence": 17 + i, "commit": strings.Repeat("a", 40), "release_identity": identity, "assets": assets})
+			}
+			// This descriptor belongs to the caller and must remain usable after refusal.
+			sentinel, err := os.Open(filepath.Join(root, "v2.0.0", gatewayAssetNames[0]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = sentinel.Close() })
+			descriptors := func() int {
+				directory, err := os.Open("/dev/fd")
+				if err != nil {
+					t.Fatal(err)
+				}
+				entries, err := directory.Readdirnames(-1)
+				_ = directory.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				count := 0
+				for _, entry := range entries {
+					fd, err := strconv.Atoi(entry)
+					if err != nil {
+						continue
+					}
+					var observed syscall.Stat_t
+					if syscall.Fstat(fd, &observed) != nil {
+						continue
+					}
+					for _, identity := range identities {
+						if observed.Dev == identity.Dev && observed.Ino == identity.Ino {
+							count++
+							break
+						}
+					}
+				}
+				return count
+			}
+			before := descriptors()
+			if before != 1 {
+				t.Fatalf("caller descriptors = %d", before)
+			}
+			assets := releases[0]["assets"].([]map[string]any)
+			switch failure {
+			case "metadata":
+				assets[2]["sha256"] = "invalid"
+			case "open":
+				if err := os.Remove(filepath.Join(root, "v2.0.0", gatewayAssetNames[2])); err != nil {
+					t.Fatal(err)
+				}
+			case "digest":
+				assets[2]["sha256"] = strings.Repeat("0", 64)
+			case "asset-set":
+				releases[0]["release_identity"].(map[string]any)["release_index_sha256"] = strings.Repeat("0", 64)
+			case "later-release":
+				releases[1]["assets"].([]map[string]any)[2]["sha256"] = "invalid"
+			}
+			manifest, err := json.Marshal(map[string]any{"schema": "sbxr-qualification-manifest-v1", "repository": softwarelifecycle.Repository, "releases": releases})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gateway, err := newQualificationGateway(manifest, json.RawMessage(`{"bundle":true}`), root)
+			if gateway != nil {
+				t.Cleanup(gateway.close)
+			}
+			if err == nil || gateway != nil {
+				t.Fatalf("construction = %v, %v", gateway, err)
+			}
+			if after := descriptors(); after != before {
+				t.Errorf("owned asset descriptors leaked: before=%d after=%d", before, after)
+			}
+			if _, err := sentinel.Stat(); err != nil {
+				t.Errorf("caller descriptor closed: %v", err)
+			}
+		})
 	}
 }

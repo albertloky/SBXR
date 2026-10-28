@@ -7,6 +7,11 @@ source commit or change a recorded result. Raw evidence stays private under
 `.scratch/acceptance/`; those links are local-only and may be unavailable in
 a fresh clone. Start new work with the [current guide](../README.md).
 
+## Local audit repairs
+
+- [Combined local audit repairs — 2026-10-28](local-audit-repairs-2026-10-28.md)
+  — reviewed Rust/Go/workflow repairs and bounded local evidence; unresolved design and live qualification gaps remain.
+
 ## Direct Rust diagnostics
 
 - [q202 Standard Review and DNS comparison — 2026-10-28](rust-q202-review-dns-comparison-2026-10-28.md)

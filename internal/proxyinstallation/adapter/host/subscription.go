@@ -332,6 +332,10 @@ func (adapter Adapter) publishSubscriptionFile(path string, body []byte, mode os
 	temporary := path + ".sbxr-next"
 	if destination, destinationErr := os.Lstat(adapter.path(path)); destinationErr == nil {
 		if staged, stagedErr := os.Lstat(adapter.path(temporary)); stagedErr == nil && os.SameFile(destination, staged) {
+			current, err := adapter.protectedServingFileWithLinks(path, mode, digest(body), 2)
+			if err != nil || !bytes.Equal(current, body) {
+				return false
+			}
 			if os.Remove(adapter.path(temporary)) != nil || adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) != nil {
 				return false
 			}
@@ -660,6 +664,19 @@ func (adapter Adapter) ReadSubscriptionLink(serving ServingAuthority, publicIPv4
 
 func (adapter Adapter) CleanupPreparedSubscription(ctx context.Context, input SubscriptionCleanupInput) bool {
 	if input.Resources != nil && input.Resources.HTTP {
+		serving := ServingAuthority{HTTP: true, LinkID: input.LinkID, CredentialSHA256: input.CredentialSHA256}
+		if !input.Resources.Valid() || input.Renewal != nil || !serving.Valid() || input.Serving != nil && *input.Serving != serving {
+			return false
+		}
+		for _, path := range []string{ServingTokenPath, SubscriptionCandidateTokenPath} {
+			body, err := adapter.clientPublicationFile(path, 0600, "")
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || len(body) != 44 || body[43] != '\n' || digest(body[:43]) != input.CredentialSHA256 || !adapter.removeSubscriptionPublication(path, body, 0600) {
+				return false
+			}
+		}
 		return adapter.cleanupHTTPSubscription(ctx, input)
 	}
 	if input.Resources == nil || !input.Resources.Valid() {
@@ -678,9 +695,9 @@ func (adapter Adapter) CleanupPreparedSubscription(ctx context.Context, input Su
 	if input.Serving != nil {
 		state = servingStateBytes(*input.Serving)
 	}
-	if token, err := adapter.protectedServingFile(ServingTokenPath, 0600, ""); err == nil {
+	if token, err := adapter.clientPublicationFile(ServingTokenPath, 0600, ""); err == nil && len(token) == 44 && token[43] == '\n' && digest(token[:43]) == input.CredentialSHA256 {
 		credential = token
-	} else if token, err = adapter.protectedServingFile(SubscriptionCandidateTokenPath, 0600, ""); err == nil {
+	} else if token, err = adapter.clientPublicationFile(SubscriptionCandidateTokenPath, 0600, ""); err == nil && len(token) == 44 && token[43] == '\n' && digest(token[:43]) == input.CredentialSHA256 {
 		credential = token
 	} else if token, err = adapter.protectedServingFile(SubscriptionCandidateTokenPath+".sbxr-next", 0600, ""); err == nil && len(token) == 44 && token[43] == '\n' && digest(token[:43]) == input.CredentialSHA256 {
 		credential = token
@@ -781,6 +798,10 @@ func (adapter Adapter) removeSubscriptionPublication(path string, body []byte, m
 	temporary := path + ".sbxr-next"
 	if destination, destinationErr := os.Lstat(adapter.path(path)); destinationErr == nil {
 		if staged, stagedErr := os.Lstat(adapter.path(temporary)); stagedErr == nil && os.SameFile(destination, staged) {
+			current, err := adapter.protectedServingFileWithLinks(path, mode, digest(body), 2)
+			if err != nil || !bytes.Equal(current, body) {
+				return false
+			}
 			return os.Remove(adapter.path(temporary)) == nil && adapter.syncOwnershipDirectory(adapter.path(filepath.Dir(path))) == nil
 		}
 	}
@@ -820,12 +841,16 @@ func (adapter Adapter) recoverEnablementServing(input SubscriptionCleanupInput) 
 }
 
 func (adapter Adapter) removeSubscriptionCandidates(serving *ServingAuthority, credentialSHA256 string) bool {
-	token, tokenErr := adapter.protectedServingFile(SubscriptionCandidateTokenPath, 0600, "")
+	// Publication-aware reads are limited to recovery; ordinary reads remain one-link.
+	token, tokenErr := adapter.clientPublicationFile(SubscriptionCandidateTokenPath, 0600, "")
 	if tokenErr == nil && (len(token) != 44 || token[43] != '\n' || digest(token[:43]) != credentialSHA256) || tokenErr != nil && !errors.Is(tokenErr, os.ErrNotExist) {
 		return false
 	}
-	state, stateErr := adapter.protectedServingFile(SubscriptionCandidateStatePath, 0600, "")
+	state, stateErr := adapter.clientPublicationFile(SubscriptionCandidateStatePath, 0600, "")
 	if stateErr == nil && (serving == nil || !bytes.Equal(state, servingStateBytes(*serving))) || stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
+		return false
+	}
+	if !adapter.removeSubscriptionPublication(SubscriptionCandidateTokenPath, token, 0600) || !adapter.removeSubscriptionPublication(SubscriptionCandidateStatePath, state, 0600) {
 		return false
 	}
 	return adapter.removeFile(SubscriptionCandidateTokenPath).OK && adapter.removeFile(SubscriptionCandidateStatePath).OK

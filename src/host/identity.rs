@@ -1,6 +1,5 @@
-//! Protected injected Client Identity adapter. Fixed file effects are real;
-//! native process/service/package observations must be supplied by a qualified
-//! backend before production entry can exist. No native constructor is provided.
+//! Protected Client Identity adapter with separate native and injected runtimes.
+//! Native construction retains installed authority and real process observations.
 mod effects;
 use super::{
     HostError,
@@ -77,6 +76,36 @@ pub struct ProtectedIdentityHost<'a, B> {
 fn refused(_: impl std::fmt::Debug) -> ci::Error {
     ci::Error::Authority
 }
+enum IdentityProxyRuntime<'a, B> {
+    Native(ProxyRuntimeHost<'a, runtime_handoff::LinuxPeers, super::process::NativeReadOnly>),
+    Injected(ProxyRuntimeHost<'a, View<'a, B>, View<'a, B>>),
+}
+
+// Keep construction shared by route verification and both cutover directions.
+// The constructor seam can only return the concrete native runtime; tests use
+// it to observe selection without accessing a native installation.
+fn identity_proxy_runtime<'a, B: PeerObservations + CommandRunner>(
+    root: &Path,
+    proof: &'a dyn InstalledEvidence,
+    backend: &'a B,
+    native: impl FnOnce() -> Result<
+        ProxyRuntimeHost<'a, runtime_handoff::LinuxPeers, super::process::NativeReadOnly>,
+        HostError,
+    >,
+) -> Result<IdentityProxyRuntime<'a, B>, HostError> {
+    if root == Path::new("/") {
+        return native().map(IdentityProxyRuntime::Native);
+    }
+    ProxyRuntimeHost::injected(
+        root,
+        proof,
+        View(backend),
+        View(backend),
+        root.join("identity-observation.sock"),
+    )
+    .map(IdentityProxyRuntime::Injected)
+}
+
 struct View<'a, B>(&'a B);
 impl<B: PeerObservations> PeerObservations for View<'_, B> {
     fn current(&self) -> Result<ProcessIdentity, runtime_handoff::Error> {
@@ -211,18 +240,20 @@ impl<'a, B: IdentityRuntime> ProtectedIdentityHost<'a, B> {
             .map_err(refused)?;
         Ok(body)
     }
+    fn proxy_runtime(&self) -> Result<IdentityProxyRuntime<'_, B>, ci::Error> {
+        identity_proxy_runtime(self.fs.path(), self.proof, &self.backend, || {
+            ProxyRuntimeHost::native_unreleased(self.proof)
+        })
+        .map_err(refused)
+    }
     fn gate(&self, guard: &IdentityGuard) -> Result<CutoverGate, ci::Error> {
-        let proxy = ProxyRuntimeHost::injected(
-            self.fs.path(),
-            self.proof,
-            View(&self.backend),
-            View(&self.backend),
-            self.fs.path().join("identity-observation.sock"),
-        )
-        .map_err(refused)?;
-        proxy
-            .prepare_cutover(&guard.owner, &self.context())
-            .map_err(refused)
+        let proxy = self.proxy_runtime()?;
+        let context = self.context();
+        match proxy {
+            IdentityProxyRuntime::Native(proxy) => proxy.prepare_cutover(&guard.owner, &context),
+            IdentityProxyRuntime::Injected(proxy) => proxy.prepare_cutover(&guard.owner, &context),
+        }
+        .map_err(refused)
     }
     fn subscription_material(&self, record: &OwnershipRecord) -> Result<(), ci::Error> {
         let Some(serving) = record.serving_authority() else {
@@ -513,15 +544,13 @@ impl<B: IdentityRuntime> ci::Host for ProtectedIdentityHost<'_, B> {
         record: &OwnershipRecord,
     ) -> Result<ci::StartupRoutes, ci::Error> {
         self.verify_guard(g)?;
-        let proxy = ProxyRuntimeHost::injected(
-            self.fs.path(),
-            self.proof,
-            View(&self.backend),
-            View(&self.backend),
-            self.fs.path().join("identity-observation.sock"),
-        )
-        .map_err(refused)?;
-        let route = proxy.verify_startup(record, &self.context()).is_ok();
+        let proxy = self.proxy_runtime()?;
+        let context = self.context();
+        let route = match proxy {
+            IdentityProxyRuntime::Native(proxy) => proxy.verify_startup(record, &context),
+            IdentityProxyRuntime::Injected(proxy) => proxy.verify_startup(record, &context),
+        }
+        .is_ok();
         let subscription = record.serving_authority().is_none()
             || self.backend.subscription_route(record).map_err(refused)?;
         Ok(ci::StartupRoutes {
@@ -579,5 +608,88 @@ impl<B: IdentityRuntime> ci::Host for ProtectedIdentityHost<'_, B> {
         self.backend
             .verify_identity_running(record)
             .map_err(refused)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    struct UnusedBackend;
+    impl PeerObservations for UnusedBackend {
+        fn current(&self) -> Result<ProcessIdentity, runtime_handoff::Error> {
+            panic!("constructor selection must not inspect a process")
+        }
+        fn peer(
+            &self,
+            _: &std::os::unix::net::UnixStream,
+        ) -> Result<ProcessIdentity, runtime_handoff::Error> {
+            panic!("constructor selection must not inspect a peer")
+        }
+    }
+    impl CommandRunner for UnusedBackend {
+        fn query(&self, _: Query, _: &CommandCancellation) -> Result<CommandOutput, HostError> {
+            panic!("constructor selection must not run commands")
+        }
+    }
+
+    #[test]
+    fn native_identity_runtime_uses_native_constructor_without_fixture_fallback() {
+        let archive = crate::release_acquisition::fixture_archive();
+        let proof = archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap();
+        let selected = Cell::new(false);
+        let result = identity_proxy_runtime(Path::new("/"), &proof, &UnusedBackend, || {
+            selected.set(true);
+            // A constructor refusal must propagate without trying the fixture
+            // route. No native files, services, or identity effects are touched.
+            Err(HostError::UnsupportedHost)
+        });
+        assert_eq!(result.err(), Some(HostError::UnsupportedHost));
+        assert!(selected.get());
+        // On an unsupported platform the real native constructor must reach
+        // its platform refusal, rather than the injected-root refusal. Its
+        // platform check runs before native filesystem access.
+        if super::super::linux::require_native_platform().is_err() {
+            let result = identity_proxy_runtime(Path::new("/"), &proof, &UnusedBackend, || {
+                ProxyRuntimeHost::native_unreleased(&proof)
+            });
+            assert_eq!(result.err(), Some(HostError::UnsupportedHost));
+        }
+        assert!(matches!(
+            ProxyRuntimeHost::injected(
+                Path::new("/"),
+                &proof,
+                View(&UnusedBackend),
+                View(&UnusedBackend),
+                Path::new("/identity-observation.sock").into(),
+            ),
+            Err(HostError::LiveUnavailable)
+        ));
+    }
+
+    #[test]
+    fn injected_identity_runtime_never_falls_back_to_native_construction() {
+        let archive = crate::release_acquisition::fixture_archive();
+        let proof = archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap();
+        let root = std::env::temp_dir().join(format!("missing-identity-{}", std::process::id()));
+        assert!(!root.exists());
+        let result = identity_proxy_runtime(&root, &proof, &UnusedBackend, || {
+            panic!("an injected root must never select the native constructor")
+        });
+        assert!(result.is_err());
+        assert!(!root.exists());
     }
 }

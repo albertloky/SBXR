@@ -16,6 +16,7 @@ pub struct TunnelOwnerInstallation<H: t::Host> {
     entropy: RefCell<Box<dyn Entropy>>,
     stop: Cancellation,
     mode: ExecutionMode,
+    last_check: Option<t::ConnectionCheck>,
 }
 impl<H: t::Host> TunnelOwnerInstallation<H> {
     pub fn new(host: H, mode: ExecutionMode) -> Self {
@@ -28,6 +29,7 @@ impl<H: t::Host> TunnelOwnerInstallation<H> {
             entropy: RefCell::new(entropy),
             stop: Cancellation::new(),
             mode,
+            last_check: None,
         }
     }
     pub fn with_cancellation(mut self, stop: Cancellation) -> Self {
@@ -151,6 +153,7 @@ impl<H: t::Host> Interface for TunnelOwnerInstallation<H> {
         prepared: PreparedAction,
         confirmation: Confirmation,
     ) -> crate::domain::Result {
+        self.last_check = None;
         if !Rc::ptr_eq(self.owner.get_mut(), &prepared.owner)
             || self.mode == ExecutionMode::NativeUnavailable
         {
@@ -207,7 +210,11 @@ impl<H: t::Host> Interface for TunnelOwnerInstallation<H> {
         match result {
             Ok((t::SetupOutcome::Cancelled,_))=>self.result(Outcome::Cancelled,Status::NotSetUp,"Tunnel setup cancelled."),
             Ok((t::SetupOutcome::CleanedUp,_))=>self.result(Outcome::CleanedUp,Status::NotSetUp,"Recorded setup resources were cleaned; Owner token, cloudflared and account resources remain unchanged."),
-            Ok((t::SetupOutcome::RunningConnectionPending,Some(check)))=>self.result(if check.verified(){Outcome::VmessConnectionVerified}else{Outcome::VmessConnectionPending},if check.local_running(){Status::Running}else{Status::ProblemDetected},check.message()),
+            Ok((t::SetupOutcome::RunningConnectionPending,Some(check)))=> {
+                let result = self.result(if check.verified(){Outcome::VmessConnectionVerified}else{Outcome::VmessConnectionPending},if check.local_running(){Status::Running}else{Status::ProblemDetected},check.message());
+                self.last_check = Some(check);
+                result
+            },
             Ok(_)=>self.result(Outcome::VmessConnectionPending,Status::Running,"Local setup is running; public VMess connection remains pending."),
             Err(t::Error::StaleReview)=>self.result(Outcome::Refused,Status::ProblemDetected,"Prepared tunnel facts changed. Review again."),
             Err(_)=>match self.state(){
@@ -216,5 +223,21 @@ impl<H: t::Host> Interface for TunnelOwnerInstallation<H> {
                 _=>self.result(Outcome::Refused,Status::ProblemDetected,"Tunnel authority or effects could not be verified. Preserve exact state."),
             }
         }
+    }
+    fn execute_output(
+        &mut self,
+        prepared: PreparedAction,
+        confirmation: Confirmation,
+        output: &mut dyn std::io::Write,
+    ) -> std::io::Result<crate::domain::Result> {
+        let result = self.execute(prepared, confirmation);
+        if let Some(check) = self.last_check.take() {
+            // Only typed stages and fixed problem descriptions reach the terminal.
+            writeln!(output, "VMess connection check stage: {:?}", check.stage())?;
+            if let Some(problem) = check.problem() {
+                writeln!(output, "VMess connection check problem: {problem}")?;
+            }
+        }
+        Ok(result)
     }
 }

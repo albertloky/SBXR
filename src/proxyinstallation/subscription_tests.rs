@@ -2774,3 +2774,6 @@ fn owner_http_cancellation_reaches_effect_context_and_recovers_only_cleanup() {
 
 #[path = "http_admission_tests.rs"]
 mod http_admission_tests;
+
+#[path = "merged_usr_tests.rs"]
+mod merged_usr_tests;

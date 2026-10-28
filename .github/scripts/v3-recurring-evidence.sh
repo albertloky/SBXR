@@ -25,7 +25,7 @@ mvp_required_checks() {
 submit_result() {
   test "$#" -eq 5
   local submit_host=$1 submit_key=$2 submit_known_hosts=$3 submit_manifest=$4 submit_facts=$5
-  local -a submit_remote=(ssh -T -i "$submit_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$submit_known_hosts" -o ConnectTimeout=15)
+  local -a submit_remote=(python3 "$(dirname "${BASH_SOURCE[0]}")/bounded-ssh.py" 30 -T -i "$submit_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$submit_known_hosts" -o ConnectTimeout=15)
   local submit_manifest_digest submit_request submit_request_digest submit_request_json submit_scenario submit_size submit_digest
   submit_manifest_digest="$(sha256sum "$submit_manifest" | cut -d' ' -f1)"
   submit_request="$("${submit_remote[@]}" -n "root@$submit_host" 'set -eu; request=/root/sbxr-qualification-evidence/request.json; test -f "$request"; test ! -L "$request"; test -O "$request"; test "$(find "$request" -prune -perm 0600 -links 1 -print)" = "$request"; sha256sum "$request" | cut -d" " -f1; cat "$request"')"
@@ -68,7 +68,7 @@ digest="$(sha256sum "$manifest" | cut -d' ' -f1)"
 directory="$(mktemp -d)"
 mkdir -m 0700 handoff/v3-scenarios
 printf '[]' > "$directory/previous.json"
-remote=(ssh -i "$2" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$3" -o ConnectTimeout=15 "root@$1")
+remote=(python3 "$(dirname "${BASH_SOURCE[0]}")/bounded-ssh.py" 30 -i "$2" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$3" -o ConnectTimeout=15 "root@$1")
 scenario="$(jq -r '.v3_attempt.required_scenarios[0]' "$manifest")"
 operation=operation-1
 reason=unexpected-failure
@@ -108,6 +108,8 @@ PYTHON
 stop_attempt() {
   status=$?
   trap - EXIT
+  # Each failure-notification/observation cleanup call gets a fresh 10s budget.
+  remote[2]=10
   if ! cleanup_mvp_observation; then status=1; fi
   if test "$status" -ne 0; then
     # Do not fetch raw output or run product cleanup against uncertain state.

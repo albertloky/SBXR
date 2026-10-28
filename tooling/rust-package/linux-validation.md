@@ -102,17 +102,20 @@ canonical metadata, pinned compiler comment, identity trailer, exact bootstrap
 and all index/digest bindings. Structural consistency never substitutes for
 Sigstore signatures, source/provenance, Acceptance Record or live qualification.
 
-## Gates and remaining source work
+## Admission and remaining validation
 
-Both public and private product dispatch remain closed. Proxy setup is currently
+Public dispatch requires authenticated delivery/current-process admission; private
+dispatch requires offline exact-pair/role/start-lock admission. Proxy setup is currently
 admitted only on Ubuntu 24.04 amd64; producing an arm64 artifact is not an arm64
 proxy deployment claim. `closed_dispatch.sh` checks only non-root refusal and
 private result codes, without installation or host-root effects.
 
-Current acquisition authenticates immutable public qualified releases. Candidate
-metadata/gateway trust is explicitly refused, so a reviewed authenticated
-candidate route and qualification activation are still needed before the five
-live candidate journeys can run. Do not bypass that boundary with a test verifier,
+Current acquisition has distinct authenticated stable and candidate routes. The
+candidate route binds the signed manifest, protected gateway and installed/current
+bytes; it grants no qualified stable authority. See the
+[current native acceptance requirements](../../docs/rust-acceptance.md#conditional-native-setup-base-594add9).
+The five exact-candidate live journeys still require their approved preparation
+and actual evidence. Do not bypass admission with a test verifier,
 URL override or environment switch. Native systemd/proc/cgroup, retained locks,
 crash durability and exact-finisher execution also require current-source Linux
 validation. The optional VMess profile needs separately bound two-node evidence.

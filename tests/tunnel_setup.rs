@@ -1342,3 +1342,114 @@ fn automatic_setup_check_keeps_durable_and_fresh_results_separate() {
     let wire: Value = serde_json::from_slice(&record).unwrap();
     assert!(wire.get("connection_verified").is_none());
 }
+
+#[test]
+fn owner_bridge_forwards_safe_check_diagnostics_without_changing_local_status() {
+    use sbxr::{
+        domain::{Action, Availability, Outcome, Status},
+        proxyinstallation::{ExecutionMode, Interface, TunnelOwnerInstallation},
+    };
+    for failure in [Some(ProbeProblem::Dns), Some(ProbeProblem::Http(403)), None] {
+        let host = TestHost::running().into_host();
+        host.state.borrow_mut().ws_failure = failure.map(|problem| (2, problem));
+        let mut bridge = TunnelOwnerInstallation::new(host, ExecutionMode::InjectedHost);
+        let prepared = bridge.review(Action::CheckVmessTunnel).prepared.unwrap();
+        let mut output = Vec::new();
+        let result = bridge
+            .execute_output(prepared, Confirmation::Approved, &mut output)
+            .unwrap();
+        assert_eq!(result.status, Status::Running);
+        assert_eq!(result.proxy_traffic, Availability::ProvedWorking);
+        assert_eq!(
+            result.outcome,
+            if failure.is_some() {
+                Outcome::VmessConnectionPending
+            } else {
+                Outcome::VmessConnectionVerified
+            }
+        );
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(if failure.is_some() {
+                "PublicWebSocket"
+            } else {
+                "Complete"
+            }),
+            "{output}"
+        );
+        if let Some(problem) = failure {
+            assert!(output.contains(&problem.to_string()), "{output}");
+        }
+        assert!(!output.contains(HOSTNAME));
+        assert!(!output.contains(TOKEN_ID));
+        assert!(!output.contains(&String::from_utf8(token()).unwrap()));
+        let prepared = bridge.review(Action::CheckVmessTunnel).prepared.unwrap();
+        let mut output = Vec::new();
+        assert_eq!(
+            bridge
+                .execute_output(prepared, Confirmation::Declined, &mut output)
+                .unwrap()
+                .outcome,
+            Outcome::Cancelled
+        );
+        assert!(output.is_empty(), "must not replay previous diagnostics");
+    }
+}
+
+#[test]
+fn terminal_renders_diagnostics_for_tunnel_setup_check_and_finish() {
+    use sbxr::proxyinstallation::{ExecutionMode, TunnelOwnerInstallation};
+    for journey in ["setup", "check", "finish"] {
+        let (host, input) = match journey {
+            "setup" => (TestHost::new(), format!("1\n2\ny\n{HOSTNAME}\ny\n0\n")),
+            "check" => (TestHost::running().into_host(), "1\n0\n".into()),
+            "finish" => {
+                let host = TestHost::new();
+                let stop = host.stop.clone();
+                host.state.borrow_mut().fail_effect = Some(Effect::StartConnector);
+                let mut setup = TunnelInstallation::new(host);
+                let prepared = setup
+                    .review_setup(HOSTNAME, configuration(HOSTNAME), &stop)
+                    .unwrap();
+                assert_eq!(
+                    setup.execute(prepared, Confirmation::Approved, &stop),
+                    Err(Error::Effect(Effect::StartConnector))
+                );
+                assert_eq!(
+                    setup.host().record().unwrap().recovery_direction(),
+                    RecoveryDirection::FinishSetup
+                );
+                (setup.into_host().reopen(), "1\ny\n0\n".into())
+            }
+            _ => unreachable!(),
+        };
+        host.state.borrow_mut().ws_failure = Some((2, ProbeProblem::Http(403)));
+        let mut bridge = TunnelOwnerInstallation::new(host, ExecutionMode::InjectedHost);
+        let mut output = Vec::new();
+        sbxr::terminal::run(&mut input.as_bytes(), &mut output, &mut bridge).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(
+            output
+                .matches("VMess connection check stage: PublicWebSocket")
+                .count(),
+            1,
+            "{journey}: {output}"
+        );
+        assert_eq!(
+            output
+                .matches("VMess connection check problem: HTTP 403 (unexpected status)")
+                .count(),
+            1,
+            "{journey}: {output}"
+        );
+        assert!(
+            output.contains("VMess public connection pending"),
+            "{journey}: {output}"
+        );
+        assert!(
+            output.contains("Proxy status: Running"),
+            "{journey}: {output}"
+        );
+        assert!(!output.contains(&String::from_utf8(token()).unwrap()));
+    }
+}

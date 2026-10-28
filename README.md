@@ -1,8 +1,9 @@
 # SBXR
 
 This isolated checkout contains the [Rust rewrite in progress](docs/rust-rewrite.md).
-Its Rust executable currently runs a local simulation only; the Go source below
-remains the product reference.
+Its Rust executable uses conditional native admission with no simulator fallback;
+the Go source below remains the product reference. Native implementation does not
+establish exact-candidate live qualification.
 
 SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs the `sbxr` executable and retains recovery for existing durable transactions. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
 

@@ -2,7 +2,7 @@
 
 This isolated workspace contains the Owner-requested Rust implementation and its
 local verification increments. It is not a qualified release. The zero-argument
-executable composes the native Owner/lifecycle path behind closed production
+executable composes the native Owner/lifecycle path behind authenticated native
 admission; it never falls back to simulation. The simulator remains an explicit
 library fixture. The current contract and remaining qualification are in
 [the acceptance matrix](rust-acceptance.md); early increments below describe
@@ -80,7 +80,7 @@ or Karing verification.
 | `src/release_https.rs` | Bounded certificate-verified public HTTPS, manual authorized redirects, asynchronous DNS and whole-request interruption |
 | `src/runtime_handoff.rs` | One-use authenticated descriptor lending, retained runtime starts, HTTP serving/watch composition and proxy cutover model |
 | `src/release_archive.rs` | Bounded in-memory single gzip/ustar member inspection, with no extraction or execution |
-| `src/private_roles.rs`, `src/host/runtime.rs` | Fixed silent private dispatch and protected injected lock/start checks; native dispatcher refuses |
+| `src/private_roles.rs`, `src/host/runtime.rs` | Fixed silent private dispatch with controlled-build and offline exact-pair/role/start-lock admission |
 | `src/removal.rs`, `src/host/linux/removal.rs`, `src/proxyinstallation/removal.rs` | Forward removal model, concrete Standard host/finalizer and shared Interface bridge |
 | `src/release_identity.rs` | Strict index/trailer bindings and explicit Rust/historical Go ELF inspection; no external authentication |
 | `src/subscription_artifact.rs` | Pure VLESS/VMess client encoding, HTTP link/token syntax and redacted secret-bearing types |
@@ -107,8 +107,9 @@ and now guard expiration of earlier Prepared Actions after every later Review,
 including Status and View details. Pure server configuration and HTTP Subscription Serving are now implemented
 through public library APIs. Cryptographic generation and structural release inspection are now integrated.
 Fixed Ubuntu system effects and offline signature verification are integrated library
-modules. Production acquisition/orchestration and Software Lifecycle remain separate
-integration scopes; the CLI still constructs only the Standard simulator.
+modules. The CLI composes native acquisition, Owner orchestration and Software
+Lifecycle behind the controlled-build and authenticated admission checks. Simulation
+remains an explicit library fixture, never a public-entry fallback.
 
 ## Local commands and evidence
 

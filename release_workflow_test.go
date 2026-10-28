@@ -90,7 +90,7 @@ func TestCandidateWorkflowCleanupRefusesDanglingTransportOwnership(t *testing.T)
 	}
 	var cleanup string
 	for _, line := range strings.Split(string(workflow), "\n") {
-		if !strings.Contains(line, `if ssh "${ssh_options[@]}"`) || !strings.Contains(line, "/transport-owned") {
+		if !strings.Contains(line, `if python3 .github/scripts/bounded-ssh.py 90 "${ssh_options[@]}"`) || !strings.Contains(line, "/transport-owned") {
 			continue
 		}
 		start := strings.Index(line, "'if test")

@@ -3,6 +3,7 @@ package host
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -230,11 +231,11 @@ func commandOutput(ctx context.Context, name string, arguments ...string) (strin
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	body, err := exec.CommandContext(commandCtx, name, arguments...).Output()
+	body, err := boundedCommandOutput(exec.CommandContext(commandCtx, name, arguments...), false)
 	if err == nil {
 		return string(body), 0, true
 	}
-	if commandCtx.Err() != nil {
+	if commandCtx.Err() != nil || errors.Is(err, exec.ErrWaitDelay) {
 		return "", -1, false
 	}
 	var exit *exec.ExitError
@@ -242,6 +243,45 @@ func commandOutput(ctx context.Context, name string, arguments ...string) (strin
 		return string(body), exit.ExitCode(), true
 	}
 	return "", -1, false
+}
+
+// Bound pipe draining separately from the direct child's lifetime. Generic host
+// commands have no owned process-group contract, so inherited descriptors do
+// not authorize signalling descendants. Incomplete output is never observed.
+func boundedCommandOutput(command *exec.Cmd, combined bool) ([]byte, error) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	command.Stdout = writer
+	if combined {
+		command.Stderr = writer
+	}
+	command.WaitDelay = 2 * time.Second
+	if err := command.Start(); err != nil {
+		_ = reader.Close()
+		_ = writer.Close()
+		return nil, err
+	}
+	_ = writer.Close()
+	var output bytes.Buffer
+	drained := make(chan error, 1)
+	go func() { _, err := io.Copy(&output, reader); drained <- err }()
+	waitErr := command.Wait()
+	timer := time.NewTimer(command.WaitDelay)
+	defer timer.Stop()
+	select {
+	case drainErr := <-drained:
+		_ = reader.Close()
+		if drainErr != nil {
+			return output.Bytes(), errors.Join(waitErr, drainErr, exec.ErrWaitDelay)
+		}
+		return output.Bytes(), waitErr
+	case <-timer.C:
+		_ = reader.Close()
+		<-drained
+		return output.Bytes(), errors.Join(waitErr, exec.ErrWaitDelay)
+	}
 }
 
 func livePublicIPv4(ctx context.Context) string {

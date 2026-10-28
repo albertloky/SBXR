@@ -564,7 +564,8 @@ jobs:
             installer-updater-vps.md
           if-no-files-found: error
           retention-days: 90
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+      - name: Attest qualification manifest
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
         with:
           subject-path: qualification-manifest.json
 
@@ -655,8 +656,9 @@ jobs:
             status=$?
             trap - EXIT
             restored=false
+            # Allow the service stop (30s), rollback hook (30s), and SSH overhead.
             for retry in {1..12}; do
-              if ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then exit 0; fi; test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 || exit 1; test -f /root/sbxr-qualification-v3/staging-owned && test ! -L /root/sbxr-qualification-v3/staging-owned || exit 1; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test ! -e /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then find /root/sbxr-qualification-v3 -depth -delete; else exit 1; fi'; then restored=true; break; fi
+              if python3 .github/scripts/bounded-ssh.py 90 "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then exit 0; fi; test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 || exit 1; test -f /root/sbxr-qualification-v3/staging-owned && test ! -L /root/sbxr-qualification-v3/staging-owned || exit 1; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test ! -e /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then find /root/sbxr-qualification-v3 -depth -delete; else exit 1; fi'; then restored=true; break; fi
               sleep 5
             done
             if test "$restored" != true; then
@@ -726,6 +728,18 @@ jobs:
           name: candidate-failure-state-${{ github.run_id }}
           path: candidate-failure-state.json
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Stage bounded candidate failure evidence
+        id: retained_evidence
+        if: always()
+        run: python3 .github/scripts/candidate-evidence.py retained-candidate-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && steps.retained_evidence.outcome == 'success'
+        with:
+          name: candidate-journey-failure-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: retained-candidate-evidence/
+          if-no-files-found: warn
           retention-days: 90
 
   owner-exception:
@@ -865,23 +879,40 @@ jobs:
         id: boundary
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGN_RESULT: ${{ needs.sign.result }}
           BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
         run: |
           set -euo pipefail
-          signed=false
-          echo 'signed=false' >> "$GITHUB_OUTPUT"
+          signed=unknown
+          echo 'signed=unknown' >> "$GITHUB_OUTPUT"
           echo 'recorded=false' >> "$GITHUB_OUTPUT"
           mkdir -m 0700 boundary
-          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | select(.name == "signed-qualification-manifest" and .expired == false) | .id')"
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --paginate --jq '.artifacts[] | select(.name == "signed-qualification-manifest" and .expired == false) | .id')"
           if test -n "$artifact_id"; then
             gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir boundary
             if gh attestation verify boundary/qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null; then
               jq -e --arg run "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" '(.schema == "sbxr-qualification-manifest-v1" or .schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and .repository == env.GITHUB_REPOSITORY and .workflow.path == ".github/workflows/candidate.yml" and .workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" and .workflow.commit == $commit and .workflow.run_id == $run and .workflow.run_url == $url' boundary/qualification-manifest.json >/dev/null
               signed=true
               echo 'signed=true' >> "$GITHUB_OUTPUT"
+            else
+              printf '%s\n' 'Signing state unknown: attestation verification failed; no cleanup authorized.' >&2
+              exit 1
             fi
           fi
-          if test "$signed" != true && gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name qualification-boundary-input --dir boundary/unsigned 2>/dev/null; then
+          if test "$signed" != true; then
+            # Artifact absence alone cannot prove that attestation never ran.
+            # A skipped signing job, or its positively skipped attestation step,
+            # is required before using the unsigned construction record.
+            # A rerun can inherit a boundary crossed by an earlier attempt.
+            test "$GITHUB_RUN_ATTEMPT" = 1
+            if test "$SIGN_RESULT" != skipped; then
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" --paginate --slurp > boundary/sign-jobs.json
+              jq -e '[.[].jobs[] | select(.name == "sign")] | length == 1 and (.[0] | .status == "completed" and ([.steps[] | select(.name == "Attest qualification manifest")] | length == 1 and .[0].conclusion == "skipped"))' boundary/sign-jobs.json >/dev/null
+            fi
+            signed=false
+            echo 'signed=false' >> "$GITHUB_OUTPUT"
+          fi
+          if test "$signed" = false && gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name qualification-boundary-input --dir boundary/unsigned 2>/dev/null; then
             echo 'recorded=true' >> "$GITHUB_OUTPUT"
           fi
 
@@ -1062,3 +1093,14 @@ jobs:
           facts_sha256="$(sha256sum "$directory/candidate-failure-verification-facts.json" | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum "$directory/candidate-failure-decision.json" | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-verification" and .outcome == "accepted" and .actions == [] and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256' "$directory/candidate-failure-verification-decision.json" >/dev/null
+      - name: Stage bounded candidate failure evidence
+        id: retained_evidence
+        if: always()
+        run: python3 .github/scripts/candidate-evidence.py retained-candidate-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && steps.retained_evidence.outcome == 'success'
+        with:
+          name: candidate-finalization-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: retained-candidate-evidence/
+          if-no-files-found: warn
+          retention-days: 90

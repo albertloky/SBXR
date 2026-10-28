@@ -366,6 +366,7 @@ LogLevel ERROR
         os.chmod(driver, 0o700)
         shutil.copyfile(source / "v3-recurring-evidence.sh", collector)
         os.chmod(collector, 0o700)
+        shutil.copyfile(source / "bounded-ssh.py", work / "bounded-ssh.py")
 
         request = evidence / "request.json"
         now = int(time.time())
@@ -563,7 +564,7 @@ def outer():
         copied = root / "source"
         copied.mkdir(mode=0o700)
         for filename in ("v3-packaged-live.sh", "v3-menu-session.py",
-                         "v3-recurring-evidence.sh", "mvp-observe.py"):
+                         "v3-recurring-evidence.sh", "mvp-observe.py", "bounded-ssh.py"):
             shutil.copyfile(source_dir / filename, copied / filename)
         shutil.copyfile(source_dir.parents[1] / "docs/acceptance/http-subscription-live.md",
                         copied / "http-subscription-live.md")

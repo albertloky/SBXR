@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -18,26 +19,29 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 )
 
 func TestGeneratedInstallerRefusesNonRootBeforeMutation(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "install.sh")
-	if err := buildBootstrapFile(bootstrapOptions{
-		version: "2.0.0", sequence: 17, tag: "v2.0.0",
-		commit: strings.Repeat("a", 40), output: output,
-		amd64ExecutableSHA256: strings.Repeat("b", 64), arm64ExecutableSHA256: strings.Repeat("c", 64),
-	}); err != nil {
+	fixture := newInstallerFixture(t)
+	if err := os.WriteFile(filepath.Join(fixture.root, "usr/bin/id"), []byte("#!/bin/bash\nprintf '1000\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-
-	command := exec.Command("bash", output)
+	before := installerAuthoritySnapshot(t, fixture.root)
+	command := exec.Command("bash", fixture.script)
 	command.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C"}
 	body, err := command.Output()
 	if err == nil || strings.TrimSpace(string(body)) != "SOFTWARE-LIFECYCLE-INSTALL-HOST-REFUSED" {
 		t.Fatalf("non-root install = %v, %q", err, body)
+	}
+	if after := installerAuthoritySnapshot(t, fixture.root); !reflect.DeepEqual(before, after) {
+		t.Fatal("non-root refusal changed installation authority")
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.root, "run/lock/sbxr.lock")); !os.IsNotExist(err) {
+		t.Fatalf("non-root refusal reached mutation: %v", err)
 	}
 }
 
@@ -1234,5 +1238,74 @@ func TestGeneratedInstallerRefusesOrphanedProxyResources(t *testing.T) {
 	kept, readErr := os.ReadFile(name)
 	if err == nil || !strings.Contains(string(body), "SOFTWARE-LIFECYCLE-INSTALL-PATH-REFUSED") || readErr != nil || string(kept) != "preserve existing resource" {
 		t.Fatalf("orphaned resource=%v %s", err, body)
+	}
+}
+
+// Execute only the download boundary, with inert local tools and no installer entry point.
+func TestInstallerDownloadDeadlinesAndClassification(t *testing.T) {
+	rust, err := os.ReadFile("../../tooling/rust-package/templates/install.sh.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range map[string]string{"go": bootstrapBody, "rust": string(rust)} {
+		t.Run(name, func(t *testing.T) {
+			start := strings.Index(source, "download() {")
+			if start < 0 {
+				t.Fatal("download boundary missing")
+			}
+			end := strings.Index(source[start:], "\nindex=")
+			if end < 0 {
+				t.Fatal("download boundary missing")
+			}
+			download := source[start : start+end]
+			root := t.TempDir()
+			bin := filepath.Join(root, "usr/bin")
+			if err := os.MkdirAll(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			sed, err := exec.LookPath("sed")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(sed, filepath.Join(bin, "sed")); err != nil {
+				t.Fatal(err)
+			}
+			for _, result := range []struct {
+				status     int
+				http, want string
+			}{
+				{28, "000", "unavailable"}, {28, "200", "unavailable"},
+				{6, "000", "unavailable"}, {7, "000", "unavailable"},
+				{35, "000", "unavailable"}, {60, "000", "unavailable"},
+				{22, "503", "unavailable"}, {22, "404", "refused"}, {63, "200", "refused"},
+			} {
+				t.Run(fmt.Sprintf("%d-%s", result.status, result.http), func(t *testing.T) {
+					// A stalled peer is simulated locally. The fake has no network capability;
+					// it refuses to simulate a timeout unless both fixed deadlines are supplied.
+					fake := fmt.Sprintf(`#!/bin/bash
+connect=''; total=''
+while [ "$#" -gt 0 ]; do
+ case "$1" in --connect-timeout) connect=$2; shift 2 ;; --max-time) total=$2; shift 2 ;; *) shift ;; esac
+done
+[ "$connect:$total" = '10:120' ] || exit 99
+/bin/sleep 0.05
+printf 'https://github.com/test\n%s'
+exit %d
+`, result.http, result.status)
+					if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(fake), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					script := fmt.Sprintf("ROOT=%q\nREPOSITORY=test\nTAG=v1.0.0\nrelease_unavailable() { echo unavailable; echo \"$1\"; exit 3; }\nrelease_refused() { echo refused; echo \"$1\"; exit 2; }\n", root) + download + "\ndownload_or_finish release-index.json ignored 1048576\n"
+					ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+					defer cancel()
+					command := exec.CommandContext(ctx, "bash", "-c", script)
+					command.WaitDelay = time.Second
+					output, err := command.CombinedOutput()
+					if err == nil || ctx.Err() != nil || !strings.HasPrefix(string(output), result.want+"\n") || !strings.Contains(string(output), fmt.Sprintf("download/curl asset=release-index.json exit=%d http=%s", result.status, result.http)) {
+						t.Fatalf("download = %v, %q", err, output)
+					}
+				})
+			}
+		})
 	}
 }

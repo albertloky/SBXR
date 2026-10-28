@@ -29,11 +29,15 @@ spec.loader.exec_module(menu)
 
 
 def run():
-    assert sys.platform.startswith('linux') and os.geteuid() == 0
+    if sys.flags.optimize:
+        raise RuntimeError("fixture-requires-enabled-assertions")
+    if not sys.platform.startswith('linux') or os.geteuid() != 0:
+        raise RuntimeError('requires root in disposable Linux VM')
     marker = Path('/run/sbxr-isolated-test-host')
-    assert marker.read_bytes() == b'disposable SBXR test VM\n'
-    assert fixture.identity(marker)[2:] == (0, 0, 1, 0o600) and not marker.is_symlink()
-    assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
+    if marker.read_bytes() != b'disposable SBXR test VM\n' or fixture.identity(marker)[2:] != (0, 0, 1, 0o600) or marker.is_symlink():
+        raise RuntimeError('isolated VM marker required')
+    if ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) != 0:
+        raise RuntimeError('subreaper setup failed')
     root = fixture.ROOT
     assert not os.path.lexists(root)
     root.mkdir(mode=0o700)

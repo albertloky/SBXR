@@ -63,7 +63,7 @@ class LockedAccountTests(unittest.TestCase):
             scripts = root / "checkout/.github/scripts"
             scripts.mkdir(parents=True)
             for filename in ("test_ssh_boundary.py", "v3-packaged-live.sh",
-                             "v3-menu-session.py", "v3-recurring-evidence.sh", "mvp-observe.py"):
+                             "v3-menu-session.py", "v3-recurring-evidence.sh", "mvp-observe.py", "bounded-ssh.py"):
                 shutil.copyfile(SOURCE / filename, scripts / filename)
             docs = root / "checkout/docs/acceptance"
             docs.mkdir(parents=True)

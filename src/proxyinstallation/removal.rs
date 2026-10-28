@@ -1,4 +1,4 @@
-//! Shared Interface bridge for the concrete, explicitly injected removal host.
+//! Shared Interface bridge for native and explicitly injected removal hosts.
 use super::*;
 use crate::removal::{Removal, RemovalAction, RemovalHost, RemovalOutcome};
 pub struct RemovalInstallation<H: RemovalHost> {
@@ -88,7 +88,7 @@ impl<H: RemovalHost> RemovalInstallation<H> {
         Review {
             mode:if module.host().is_native_system() { ExecutionMode::native_unreleased() } else { ExecutionMode::InjectedHost },
             status,legal_actions,prepared,
-            details:vec![if module.host().is_native_system() { "Native removal remains unavailable pending complete integration and qualification.".into() } else { "Injected protected removal of exactly recorded proxy and current auxiliary resources.".into() }],
+            details:vec![if module.host().is_native_system() { "Native protected removal of exactly recorded proxy and current auxiliary resources.".into() } else { "Injected protected removal of exactly recorded proxy and current auxiliary resources.".into() }],
             plan:vec!["Remove only the proved exact recorded resources and installed pair. Preserve unknown/shared resources. Committed removal finishes forward only.".into()],
             refusal:if status==Status::ProblemDetected {Some("Removal ownership, exact release or host effects cannot be safely verified.")} else {None},
         }
@@ -119,7 +119,11 @@ impl<H: RemovalHost> RemovalInstallation<H> {
             RemovalOutcome::Completed => result(
                 Outcome::RemovalComplete,
                 Status::NotInstalled,
-                "Exact owned removal completed in the injected root.",
+                if self.inner.get_mut().host().is_native_system() {
+                    "Exact owned removal completed on this host."
+                } else {
+                    "Exact owned removal completed in the injected root."
+                },
             ),
             RemovalOutcome::Declined => result(
                 Outcome::Cancelled,

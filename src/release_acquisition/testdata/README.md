@@ -15,6 +15,10 @@ No contained bytes are executed or extracted to disk by Rust tests.
 Positive downstream integration uses a private unit-test-only authenticated-claims
 constructor. Product builds cannot access it. The public acquisition entry uses
 real Sigstore verification and refuses a preserved genuine foreign-repository
-bundle before downloading assets. A genuine valid SBXR native/v0.2 fixture remains
-missing, so these fixtures do not demonstrate a complete positive signed release,
-production installation, restoration or live qualification.
+bundle before downloading assets. Subsequent
+[public-release fixtures](../../../tests/testdata/public_release/README.md) retain
+genuine SBXR proofs; `examples/verify_public_release.rs` exercises complete signed
+archive acquisition, installed-byte binding and disposable-root restoration when
+supplied the ignored matching archive. These local fixtures alone do not establish
+production installation or live qualification. Complete positive candidate
+acquisition still requires the matching original signed manifest.

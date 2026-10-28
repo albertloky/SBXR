@@ -508,7 +508,7 @@ download() {
   if [ -z "$url" ]; then
     url="https://github.com/$REPOSITORY/releases/download/$TAG/$name"
   fi
-  response=$("$ROOT/usr/bin/curl" --fail --silent --show-error --location --max-redirs 4 --max-filesize "$limit" --proto '=https' --proto-redir '=https' --output "$destination" --write-out $'%{url_effective}\n%{http_code}' "$url" 2>/dev/null)
+  response=$("$ROOT/usr/bin/curl" --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --max-redirs 4 --max-filesize "$limit" --proto '=https' --proto-redir '=https' --output "$destination" --write-out $'%{url_effective}\n%{http_code}' "$url" 2>/dev/null)
   status=$?
   effective=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '1p')
   http=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '2p')

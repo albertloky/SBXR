@@ -107,7 +107,7 @@ def verify(root, commit, manifest_sha256):
             if parent==root: break
             if parent.is_symlink(): raise ValueError("source symlink refused")
         before=candidate.stat()
-        if not stat.S_ISREG(before.st_mode) or before.st_size!=entry["size"]:
+        if not stat.S_ISREG(before.st_mode) or before.st_size!=entry["size"] or stat.S_IMODE(before.st_mode)!=int(entry["mode"],8):
             raise ValueError("source file refused")
         digest=hashlib.sha256()
         with candidate.open("rb") as source:

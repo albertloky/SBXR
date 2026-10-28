@@ -576,6 +576,9 @@ func (adapter Adapter) Apply(ctx context.Context, input OperationInput) Operatio
 		}
 		return OperationResult{OK: true, Fact: "package artifact absent"}
 	case RemoveConfigurationState:
+		if !adapter.removeBoundFile(spec.ConfigurationPath+".sbxr-next", input.SHA256, 0o640, 1<<20) {
+			return OperationResult{}
+		}
 		if !adapter.removeBoundFile(spec.ConfigurationPath, input.SHA256, 0o640, 1<<20) {
 			return OperationResult{}
 		}
@@ -942,7 +945,7 @@ func (adapter Adapter) installPackage(ctx context.Context, spec SetupSpec) Opera
 	defer cancel()
 	command := exec.CommandContext(commandCtx, "apt-get", "download", spec.PackageName+"="+spec.PackageVersion)
 	command.Dir = directory
-	if output, err := command.CombinedOutput(); err != nil || len(output) > 1<<20 {
+	if output, err := boundedCommandOutput(command, true); err != nil || len(output) > 1<<20 {
 		return OperationResult{}
 	}
 	body, err := os.ReadFile(packagePath)
@@ -1105,7 +1108,10 @@ func (adapter Adapter) command(ctx context.Context, name string, arguments ...st
 	if name == "/snap/bin/certbot" {
 		command = certbotCommand(commandCtx, name, arguments...)
 	}
-	output, err := command.CombinedOutput()
+	output, err := boundedCommandOutput(command, true)
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return OperationResult{Code: -1}
+	}
 	fact := strings.TrimSpace(string(output))
 	if len(fact) > 4096 {
 		fact = fact[:4096]

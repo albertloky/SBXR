@@ -209,6 +209,32 @@ impl<B: HttpRuntime> ProtectedHttpHost<'_, B> {
                 return Err(HostError::Foreign);
             }
         }
+        // Ubuntu's merged-/usr layout uses this exact root-owned relative
+        // alias. Inspect its protected canonical directory without following
+        // the link; ordinary ProtectedFs traversal remains NOFOLLOW, including
+        // inside injected fixture roots. Unmerged /lib is still scanned below.
+        let lib_alias = Resource {
+            path: "lib",
+            kind: Kind::Link("usr/lib"),
+        };
+        let canonical_lib = Resource {
+            path: "usr/lib",
+            kind: Kind::OwnedDirectory(Mode::from_raw_mode(0o755), self.fs.uid, self.fs.gid),
+        };
+        let merged_lib = if self
+            .fs
+            .metadata("lib")?
+            .is_some_and(|m| m.kind == rustix::fs::FileType::Symlink)
+        {
+            let alias = self.fs.observe(lib_alias)?.ok_or(HostError::Foreign)?;
+            if alias.gid != self.fs.gid {
+                return Err(HostError::Foreign);
+            }
+            let canonical = self.fs.observe(canonical_lib)?.ok_or(HostError::Foreign)?;
+            Some((alias, canonical))
+        } else {
+            None
+        };
         for unit in [
             "sbxr-subscription.service",
             "sbxr-subscription-firewall.service",
@@ -223,6 +249,10 @@ impl<B: HttpRuntime> ProtectedHttpHost<'_, B> {
                 "run/systemd/system.control",
                 "run/systemd/transient",
             ] {
+                if directory == "lib/systemd/system" && merged_lib.is_some() {
+                    // The same entries are checked through usr/lib above.
+                    continue;
+                }
                 for suffix in [
                     unit.to_owned(),
                     format!("{unit}.d"),
@@ -253,6 +283,12 @@ impl<B: HttpRuntime> ProtectedHttpHost<'_, B> {
             })
         {
             return Err(HostError::Foreign);
+        }
+        if let Some((alias, canonical)) = merged_lib
+            && (self.fs.observe(lib_alias)? != Some(alias)
+                || self.fs.observe(canonical_lib)? != Some(canonical))
+        {
+            return Err(HostError::Unsafe);
         }
         Ok(())
     }

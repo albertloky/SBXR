@@ -108,6 +108,8 @@ while True: time.sleep(1)
 
 
 def run():
+    if sys.flags.optimize:
+        raise RuntimeError("fixture-requires-enabled-assertions")
     if not sys.platform.startswith('linux') or os.geteuid() != 0:
         raise RuntimeError('requires root in disposable Linux/systemd VM')
     marker = Path('/run/sbxr-isolated-test-host')

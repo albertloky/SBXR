@@ -112,7 +112,7 @@ func currentSource(_ context.Context, _ string, _ string) (string, error) {
 
 func TestReleaseBuildUsesPinnedToolchain(t *testing.T) {
 	if runtime.Version() != "go1.26.6" {
-		t.Skip("release build is pinned to go1.26.6")
+		t.Fatalf("release build requires go1.26.6; running %s", runtime.Version())
 	}
 }
 

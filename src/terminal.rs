@@ -192,7 +192,8 @@ fn run_inner(
             Action::CheckVmessTunnel => {
                 let review = installation.review(action);
                 if let Some(prepared) = review.prepared {
-                    let result = installation.execute(prepared, Confirmation::Approved);
+                    let result =
+                        installation.execute_output(prepared, Confirmation::Approved, output)?;
                     write_result(output, &result)?;
                 } else {
                     writeln!(
@@ -220,7 +221,7 @@ fn run_inner(
                     _ => format!("{action}? [y/N]"),
                 };
                 let confirmation = confirmation(input, output, &question)?;
-                let result = installation.execute(prepared, confirmation);
+                let result = installation.execute_output(prepared, confirmation, output)?;
                 write_result(output, &result)?;
             }
             Action::CompleteRemoval | Action::FinishRemoval => {
@@ -536,7 +537,11 @@ fn tunnel_setup(
                             writeln!(output, "Native setup is unavailable.")?;
                             return Ok(false);
                         }
-                        let result = installation.execute(prepared, Confirmation::Approved);
+                        let result = installation.execute_output(
+                            prepared,
+                            Confirmation::Approved,
+                            output,
+                        )?;
                         write_result(output, &result)?;
                         return Ok(false);
                     }
