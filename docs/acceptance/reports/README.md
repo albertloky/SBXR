@@ -9,6 +9,10 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Local diagnostic preparation
 
+- [DNS child runtime inputs and ownership — 2026-10-27](dns-child-runtime-input-preparation-2026-10-27.md)
+  — frozen input hashes, inert watchdog checks and custody failure policy; no runtime result.
+- [DNS child single-session proposal — 2026-10-27](dns-child-racknerd-single-session-proposal-2026-10-27.md)
+  — bounded diagnostic scope and private mount construction; not release qualification.
 - [DNS child diagnostic: isolated Linux preparation — 2026-10-27](dns-child-diagnostic-linux-2026-10-27.md)
   — local builds, inert checks and supervisor source review; no runtime tracing or release qualification.
 
