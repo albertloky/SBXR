@@ -401,7 +401,7 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
 /// No unsupported/development host is silently redirected to the simulator.
 pub fn run_public_unreleased(
     input: &mut impl std::os::fd::AsFd,
-    output: &mut impl std::io::Write,
+    output: &mut (impl std::io::Write + std::os::fd::AsFd),
 ) -> Result<(), PublicEntryError> {
     super::require_live_adapter()?;
     let _trace = super::timing::enable();
@@ -420,7 +420,7 @@ pub fn run_public_unreleased(
 }
 fn run_public_selected(
     input: &mut impl std::os::fd::AsFd,
-    output: &mut impl std::io::Write,
+    output: &mut (impl std::io::Write + std::os::fd::AsFd),
     reviewed: Option<&std::sync::Arc<super::entry_input::ProtectedCandidateInput>>,
 ) -> Result<(), PublicEntryError> {
     super::require_live_adapter()?;
@@ -429,7 +429,7 @@ fn run_public_selected(
     let _signals = super::runtime::shutdown::Signals::native(stop.clone())
         .map_err(|_| HostError::Cancelled)?;
     let mut input = super::input::InterruptibleInput::new(input, stop.clone())?;
-    let mut output = super::input::InterruptibleOutput::new(output, stop.clone());
+    let mut output = super::input::InterruptibleOutput::native(output, stop.clone())?;
     let observer = super::linux::NativeObserver::open()?;
     let budget = match reviewed {
         Some(i) => crate::artifact_trust::SelectionBudget::until(i.selection_deadline()),

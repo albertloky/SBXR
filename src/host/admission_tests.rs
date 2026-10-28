@@ -209,9 +209,12 @@ fn native_constructor_refuses_development_before_transport_or_activation() {
     );
     assert!(super::super::require_live_adapter().is_err());
     let mut input = File::open("/dev/null").unwrap();
-    let mut output = Vec::new();
+    let (mut reader, mut output) = std::io::pipe().unwrap();
     assert!(crate::host::owner::run_public_unreleased(&mut input, &mut output).is_err());
-    assert!(output.is_empty());
+    drop(output);
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut bytes).unwrap();
+    assert!(bytes.is_empty());
 }
 #[test]
 fn a_prepared_journey_cannot_execute_or_disclose_after_process_evidence_changes() {
