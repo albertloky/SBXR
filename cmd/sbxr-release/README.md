@@ -207,7 +207,7 @@ exact applicability and audit boundary.
 
 
 `candidate-reservations` validates canonical read-only GitHub observations against
-that fixed reservation and emits the exact record for `reserved_identities` in
+the two fixed reservations and emits their exact records for `reserved_identities` in
 new preflight facts. `-policy` exposes the compiled record for observation collection;
 it is not an authorization result. `-allowed-draft-tags` names only the current
 workflow's candidate tags for later rechecks and cannot allow the reserved tag.

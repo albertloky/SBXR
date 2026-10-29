@@ -160,3 +160,36 @@ from manually changing releases or replacing trusted workflow code. Such observe
 changes stop the supported path. No repository security setting, signing authority,
 installed admission rule or historical signature is changed. This decision grants
 no live qualification, signing, deletion or publication permission.
+
+
+## Preserve the signed, unqualified second draft
+
+On 2026-10-29 the Owner separately approved extending the reservation to exactly
+two drafts. This supersedes the one-draft limit above, not its validation,
+non-promotion, failure-decision or qualification safeguards. The original
+v3.1.129/203 record and its unknown signing state remain unchanged.
+
+The second record pins v3.1.130/204, release 427453228, source
+`8ef6898573d8e7886d11c65b693f79d7c502787f`, run 40811037642, index digest
+`96d95146293481005b8977aac80c35e088a681d6c135cf2c00e7ee103b92e47c`, and all four
+asset IDs, sizes and digests. Its state is `signed-unqualified`: the authenticated
+manifest digest is
+`0fe088fd0cd19a7bd27e0dc62ab7c510736ba7991cc827d45a85d140749334bf`.
+The run was cancelled without successful live qualification. Retaining that
+signed identity neither makes it unsigned nor creates a burn or qualification.
+Its historical signed bytes and the original one-reservation chain remain intact;
+they cannot authorize promotion through the current policy.
+
+Every new candidate must bind both exact records. Read-only checks require both
+unchanged drafts and explicit absence of each release-tag and burn-tag ref.
+Missing, unavailable, duplicated or changed observations refuse; neither retained
+tag may use the current-candidate allowance. Both tags, sequences and release IDs
+are unavailable for reuse or promotion. With public/burn history through 202 and
+reservations 203 and 204, the next candidate is sequence 205, prospectively
+v3.1.131, subject to fresh history and collision checks. It must complete its own
+full qualification. The exception remains exactly these two identities, not an
+open-ended ignore-list. Further additions require a separate Owner decision.
+
+No existing draft, asset, tag, signature, stable release, repository permission or
+host setting is changed by this policy. It grants no signing, live test, cleanup,
+burn or publication authority.

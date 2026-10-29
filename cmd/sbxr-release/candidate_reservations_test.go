@@ -11,54 +11,61 @@ import (
 )
 
 func reservationFixture() reservationObservations {
-	r := approvedCandidateReservations()[0]
 	absent := reservationRef{State: "absent", Value: json.RawMessage("null")}
-	return reservationObservations{Tag: absent, Burn: absent, Releases: []reservationRelease{{Assets: r.Assets, Body: "Qualification pending.", Commit: r.Commit, Draft: true, ID: r.ReleaseID, Tag: r.Tag}}}
+	o := reservationObservations{Releases: []reservationRelease{}}
+	for _, r := range approvedCandidateReservations() {
+		o.Refs = append(o.Refs, reservationIdentityRefs{Tag: r.Tag, Release: absent, Burn: absent})
+		o.Releases = append(o.Releases, reservationRelease{Assets: r.Assets, Body: "Qualification pending.", Commit: r.Commit, Draft: true, ID: r.ReleaseID, Tag: r.Tag})
+	}
+	return o
 }
 
 func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *testing.T) {
-	for name, change := range map[string]func(*reservationObservations){
-		"missing draft":  func(o *reservationObservations) { o.Releases = []reservationRelease{} },
-		"duplicate page": func(o *reservationObservations) { o.Releases = append(o.Releases, o.Releases[0]) },
-		"other pending draft": func(o *reservationObservations) {
-			o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.130", Draft: true})
-		},
-		"published":        func(o *reservationObservations) { o.Releases[0].Draft = false },
-		"immutable":        func(o *reservationObservations) { o.Releases[0].Immutable = true },
-		"prerelease":       func(o *reservationObservations) { o.Releases[0].Prerelease = true },
-		"retagged":         func(o *reservationObservations) { o.Releases[0].Tag = "v3.1.130" },
-		"replacement id":   func(o *reservationObservations) { o.Releases[0].ID++ },
-		"changed commit":   func(o *reservationObservations) { o.Releases[0].Commit = strings.Repeat("a", 40) },
-		"changed body":     func(o *reservationObservations) { o.Releases[0].Body = "Qualified" },
-		"missing asset":    func(o *reservationObservations) { o.Releases[0].Assets = o.Releases[0].Assets[:3] },
-		"changed asset id": func(o *reservationObservations) { o.Releases[0].Assets[0].ID++ },
-		"changed digest":   func(o *reservationObservations) { o.Releases[0].Assets[0].Digest = strings.Repeat("a", 64) },
-		"changed size":     func(o *reservationObservations) { o.Releases[0].Assets[0].Size++ },
-		"new tag":          func(o *reservationObservations) { o.Tag.State = "present" },
-		"new burn":         func(o *reservationObservations) { o.Burn.State = "present" },
-		"unknown tag":      func(o *reservationObservations) { o.Tag.State = "unavailable" },
-	} {
-		t.Run(name, func(t *testing.T) {
-			o := reservationFixture()
-			change(&o)
-			if checkCandidateReservations(o, nil) {
-				t.Fatal("unsafe reservation accepted")
-			}
-		})
+	for index := range approvedCandidateReservations() {
+		for name, change := range map[string]func(*reservationObservations){
+			"missing draft":  func(o *reservationObservations) { o.Releases = []reservationRelease{} },
+			"duplicate page": func(o *reservationObservations) { o.Releases = append(o.Releases, o.Releases[index]) },
+			"other pending draft": func(o *reservationObservations) {
+				o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.131", Draft: true})
+			},
+			"published":        func(o *reservationObservations) { o.Releases[index].Draft = false },
+			"immutable":        func(o *reservationObservations) { o.Releases[index].Immutable = true },
+			"prerelease":       func(o *reservationObservations) { o.Releases[index].Prerelease = true },
+			"retagged":         func(o *reservationObservations) { o.Releases[index].Tag = "v3.1.131" },
+			"replacement id":   func(o *reservationObservations) { o.Releases[index].ID++ },
+			"changed commit":   func(o *reservationObservations) { o.Releases[index].Commit = strings.Repeat("a", 40) },
+			"changed body":     func(o *reservationObservations) { o.Releases[index].Body = "Qualified" },
+			"missing asset":    func(o *reservationObservations) { o.Releases[index].Assets = o.Releases[index].Assets[:3] },
+			"changed asset id": func(o *reservationObservations) { o.Releases[index].Assets[0].ID++ },
+			"changed digest":   func(o *reservationObservations) { o.Releases[index].Assets[0].Digest = strings.Repeat("a", 64) },
+			"changed size":     func(o *reservationObservations) { o.Releases[index].Assets[0].Size++ },
+			"new tag":          func(o *reservationObservations) { o.Refs[index].Release.State = "present" },
+			"new burn":         func(o *reservationObservations) { o.Refs[index].Burn.State = "present" },
+			"unknown tag":      func(o *reservationObservations) { o.Refs[index].Release.State = "unavailable" },
+		} {
+			t.Run(name, func(t *testing.T) {
+				o := reservationFixture()
+				change(&o)
+				if checkCandidateReservations(o, nil) {
+					t.Fatal("unsafe reservation accepted")
+				}
+			})
+		}
 	}
+
 	o := reservationFixture()
 	if !checkCandidateReservations(o, nil) {
 		t.Fatal("unchanged retained draft refused")
 	}
-	o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.130", Draft: true})
-	if !checkCandidateReservations(o, []string{"v3.1.130"}) {
+	o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.131", Draft: true})
+	if !checkCandidateReservations(o, []string{"v3.1.131"}) {
 		t.Fatal("current candidate draft refused")
 	}
-	if checkCandidateReservations(o, []string{"v3.1.129", "v3.1.130"}) {
+	if checkCandidateReservations(o, []string{"v3.1.129", "v3.1.131"}) {
 		t.Fatal("reserved tag allowlist accepted")
 	}
 	o.Releases[0].Draft = false
-	if checkCandidateReservations(o, []string{"v3.1.130"}) {
+	if checkCandidateReservations(o, []string{"v3.1.131"}) {
 		t.Fatal("current candidate hid old draft promotion")
 	}
 }
@@ -66,7 +73,7 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.130", 204
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.131", 205
 	facts.ReservedIdentities = approvedCandidateReservations()
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
 		t.Fatal(err)
@@ -79,7 +86,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 		},
 		"reserved tag":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.129" },
 		"reserved sequence": func(f *qualificationFacts) { f.Candidate.BSequence = 203 },
-		"skipped sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 205 },
+		"skipped sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 206 },
 		"published collision": func(f *qualificationFacts) {
 			r := qualifiedRelease(false)
 			r.Sequence = uint64Pointer(203)
@@ -117,7 +124,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 	if err != nil || !bytes.Equal(mustJSON(decision), []byte(initialNormalDecision)) {
 		t.Fatal("historical decision changed")
 	}
-	if !reservedCandidate("v3.1.129", 204, 8) || !reservedCandidate("v3.1.130", 203, 8) || !reservedCandidate("v3.1.130", 204, 426359967) {
+	if !reservedCandidate("v3.1.129", 204, 8) || !reservedCandidate("v3.1.131", 203, 8) || !reservedCandidate("v3.1.131", 205, 426359967) {
 		t.Fatal("reservation collision incomplete")
 	}
 }
@@ -151,9 +158,9 @@ args=sys.argv[1:]
 if args==['api','repos/albertloky/SBXR/releases?per_page=100','--paginate','--slurp']:
  if os.environ['CASE']=='unavailable':sys.exit(1)
  print(os.environ['PAGES']);sys.exit(0)
-if args[:2]==['api','--include'] and args[2] in ['repos/albertloky/SBXR/git/ref/tags/v3.1.129','repos/albertloky/SBXR/git/ref/tags/release-burned/v3.1.129']:
- code=403 if os.environ['CASE']=='ref-unavailable' else 404
- print('HTTP/2.0 '+str(code)+' Fixture\nContent-Type: application/json\n\n{}');sys.exit(1)
+if args[:2]==['api','--include'] and args[2] in ['repos/albertloky/SBXR/git/ref/tags/'+t for t in ['v3.1.129','v3.1.130','release-burned/v3.1.129','release-burned/v3.1.130']]:
+ code=403 if os.environ['CASE']=='ref-unavailable' or (os.environ['CASE']=='second-ref-unavailable' and args[2].endswith('v3.1.130')) else (200 if os.environ['CASE']=='second-burn-present' and args[2].endswith('release-burned/v3.1.130') else 404)
+ print('HTTP/2.0 '+str(code)+' Fixture\nContent-Type: application/json\n\n{}');sys.exit(0 if code==200 else 1)
 sys.exit(99)
 `
 	for name, body := range map[string]string{"go": goAdapter, "gh": ghAdapter} {
@@ -162,30 +169,35 @@ sys.exit(99)
 		}
 	}
 	r := approvedCandidateReservations()[0]
-	assets := []map[string]any{}
-	for _, a := range r.Assets {
-		assets = append(assets, map[string]any{"id": a.ID, "name": a.Name, "size": a.Size, "digest": "sha256:" + a.Digest})
+	releases := []any{}
+	for _, reservation := range approvedCandidateReservations() {
+		assets := []map[string]any{}
+		for _, a := range reservation.Assets {
+			assets = append(assets, map[string]any{"id": a.ID, "name": a.Name, "size": a.Size, "digest": "sha256:" + a.Digest})
+		}
+		releases = append(releases, map[string]any{"id": reservation.ReleaseID, "tag_name": reservation.Tag, "target_commitish": reservation.Commit, "draft": true, "prerelease": false, "immutable": false, "body": "Qualification pending.", "assets": assets})
 	}
-	release := map[string]any{"id": r.ReleaseID, "tag_name": r.Tag, "target_commitish": r.Commit, "draft": true, "prerelease": false, "immutable": false, "body": "Qualification pending.", "assets": assets}
-	for _, name := range []string{"retained", "published-without-digest", "current-candidate", "unexpected-candidate", "missing", "malformed", "unavailable", "ref-unavailable", "duplicate-page"} {
+	for _, name := range []string{"retained", "published-without-digest", "current-candidate", "unexpected-candidate", "missing", "malformed", "unavailable", "ref-unavailable", "second-ref-unavailable", "second-burn-present", "second-missing", "duplicate-page"} {
 		t.Run(name, func(t *testing.T) {
-			pages := any([]any{[]any{release}})
+			pages := any([]any{releases})
 			switch name {
 			case "published-without-digest", "current-candidate", "unexpected-candidate":
-				other := map[string]any{"id": 8, "tag_name": "v3.1.130", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
-				pages = []any{[]any{release, other}}
+				other := map[string]any{"id": 8, "tag_name": "v3.1.131", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
+				pages = []any{append(append([]any{}, releases...), other)}
 
+			case "second-missing":
+				pages = []any{releases[:1]}
 			case "missing":
 				pages = []any{[]any{}}
 			case "malformed":
 				pages = []any{map[string]any{}}
 			case "duplicate-page":
-				pages = []any{[]any{release}, []any{release}}
+				pages = []any{releases, releases}
 			}
 			raw, _ := json.Marshal(pages)
 			args := []string{filepath.Join(scripts, "check-candidate-reservations.sh")}
 			if name == "current-candidate" {
-				args = append(args, `["v3.1.130"]`)
+				args = append(args, `["v3.1.131"]`)
 			}
 			command := exec.Command("bash", args...)
 			command.Dir = root
@@ -223,15 +235,60 @@ func TestReservedDraftAllowsFreshCompleteQualificationAndPublication(t *testing.
 	if !decodeCanonical([]byte(boundary), &bf) || !decodeCanonical(bf.DraftVerificationFacts, &vf) || !decodeCanonical(vf.ConstructionFacts, &cf) || !decodeCanonical(cf.PreflightFacts, &pre) || !decodeCanonical(manifest, &m) {
 		t.Fatal("reservation chain decode")
 	}
-	if pre.Candidate.BSequence != 204 || len(pre.ReservedIdentities) != 1 || pre.ReservedIdentities[0].SigningState != "unknown" {
+	if pre.Candidate.BSequence != 205 || len(pre.ReservedIdentities) != 2 || pre.ReservedIdentities[0].SigningState != "unknown" || pre.ReservedIdentities[1].SigningState != "signed-unqualified" {
 		t.Fatal("reservation not bound to fresh sequence")
 	}
-	invalid := vf
-	invalid.Observations = append([]observedDraft(nil), vf.Observations...)
-	invalid.Observations[0].ReleaseID = 426359967
-	invalid.Observations[0].CreatedReleaseID = 426359967
-	if _, err := evaluateCandidateDraftVerification(invalid, mustJSON(invalid)); err == nil {
-		t.Fatal("reserved release ID reused by fresh qualification")
+	for _, reserved := range approvedCandidateReservations() {
+		invalid := vf
+		invalid.Observations = append([]observedDraft(nil), vf.Observations...)
+		invalid.Observations[0].ReleaseID = reserved.ReleaseID
+		invalid.Observations[0].CreatedReleaseID = reserved.ReleaseID
+		if _, err := evaluateCandidateDraftVerification(invalid, mustJSON(invalid)); err == nil {
+			t.Fatal("reserved release ID reused by fresh qualification")
+		}
 	}
 	assertCleanInstallOnlyPublication(t, binary, pre, m, document, result)
+}
+
+func TestSecondReservationCannotBeOmittedRelabeledOrReused(t *testing.T) {
+	facts := candidateFacts("v3")
+	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.131", 205
+	for name, mutate := range map[string]func(*qualificationFacts){
+		"old policy only": func(f *qualificationFacts) { f.ReservedIdentities = f.ReservedIdentities[:1] },
+		"signing unknown": func(f *qualificationFacts) { f.ReservedIdentities[1].SigningState = "unknown" },
+		"manifest changed": func(f *qualificationFacts) {
+			f.ReservedIdentities[1].QualificationManifestSHA256 = strings.Repeat("a", 64)
+		},
+		"tag reuse":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.130" },
+		"sequence reuse": func(f *qualificationFacts) { f.Candidate.BSequence = 204 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := facts
+			f.ReservedIdentities = approvedCandidateReservations()
+			mutate(&f)
+			if _, err := evaluateCandidatePreflight(f, mustJSON(f)); err == nil {
+				t.Fatal("second reservation bypassed")
+			}
+		})
+	}
+	for _, r := range approvedCandidateReservations() {
+		if !reservedCandidate(r.Tag, 0, 0) || !reservedCandidate("v3.1.131", r.Sequence, 0) || !reservedCandidate("v3.1.131", 205, r.ReleaseID) {
+			t.Fatal("reserved identity collision missed")
+		}
+	}
+	for _, mutate := range []func(*reservationObservations){
+		func(o *reservationObservations) { o.Refs = o.Refs[:1] },
+		func(o *reservationObservations) { o.Refs[1] = o.Refs[0] },
+		func(o *reservationObservations) { o.Refs[1].Release.Value = json.RawMessage(`{}`) },
+	} {
+		o := reservationFixture()
+		mutate(&o)
+		if checkCandidateReservations(o, nil) {
+			t.Fatal("incomplete or duplicated ref proof accepted")
+		}
+	}
+	if checkCandidateReservations(reservationFixture(), []string{"v3.1.130"}) {
+		t.Fatal("signed retained draft allowed as current candidate")
+	}
 }

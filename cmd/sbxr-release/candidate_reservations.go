@@ -12,14 +12,15 @@ import (
 // A reservation preserves unresolved authority. It is neither unsigned proof
 // nor a signed burn, and grants no cleanup, signing or publication action.
 type candidateReservation struct {
-	Assets             []observedAsset `json:"assets"`
-	Commit             string          `json:"commit"`
-	ReleaseID          int64           `json:"release_id"`
-	ReleaseIndexSHA256 string          `json:"release_index_sha256"`
-	RunID              string          `json:"run_id"`
-	Sequence           uint64          `json:"sequence"`
-	SigningState       string          `json:"signing_state"`
-	Tag                string          `json:"tag"`
+	Assets                      []observedAsset `json:"assets"`
+	Commit                      string          `json:"commit"`
+	QualificationManifestSHA256 string          `json:"qualification_manifest_sha256,omitempty"`
+	ReleaseID                   int64           `json:"release_id"`
+	ReleaseIndexSHA256          string          `json:"release_index_sha256"`
+	RunID                       string          `json:"run_id"`
+	Sequence                    uint64          `json:"sequence"`
+	SigningState                string          `json:"signing_state"`
+	Tag                         string          `json:"tag"`
 }
 
 // Source-controlled Owner decision of 2026-10-29. Return fresh values so callers
@@ -34,6 +35,17 @@ func approvedCandidateReservations() []candidateReservation {
 			{ID: 684172610, Name: "release-index.json", Size: 609, Digest: "44d06c277c7f116fbf76d67841524b9ececca2c6fbeb89521823e9b8858bc668"},
 			{ID: 684172607, Name: "sbxr-linux-amd64.tar.gz", Size: 6195309, Digest: "0dcb441160c1873b4833eaed4fae4c27632f2e8f6871f52a37f09c5948a4cdeb"},
 			{ID: 684172609, Name: "sbxr-linux-arm64.tar.gz", Size: 5321872, Digest: "b7a1b60e6f16f8f9de0406ca219d15e0901ca817a679cfa54095a09c2dee6d0e"},
+		},
+	}, {
+		Tag: "v3.1.130", Sequence: 204, ReleaseID: 427453228,
+		Commit: "8ef6898573d8e7886d11c65b693f79d7c502787f", RunID: "40811037642", SigningState: "signed-unqualified",
+		ReleaseIndexSHA256:          "96d95146293481005b8977aac80c35e088a681d6c135cf2c00e7ee103b92e47c",
+		QualificationManifestSHA256: "0fe088fd0cd19a7bd27e0dc62ab7c510736ba7991cc827d45a85d140749334bf",
+		Assets: []observedAsset{
+			{ID: 687290587, Name: "install.sh", Size: 76781, Digest: "f0e30ec1c69d12e15ab71c649d13f82502a913b5738d9762590f04e9f2523bf1"},
+			{ID: 687290585, Name: "release-index.json", Size: 609, Digest: "96d95146293481005b8977aac80c35e088a681d6c135cf2c00e7ee103b92e47c"},
+			{ID: 687290581, Name: "sbxr-linux-amd64.tar.gz", Size: 6223869, Digest: "ad40ce76868fa253cad6048a5eec3963d5e5e3b7a771001f2905877ba1f98dc9"},
+			{ID: 687290588, Name: "sbxr-linux-arm64.tar.gz", Size: 5273247, Digest: "a44812c96362a949c00353dcb73538fb430d2b1a4b6c7366ee8f719ddffa8b94"},
 		},
 	}}
 }
@@ -91,15 +103,27 @@ type reservationRef struct {
 	State string          `json:"state"`
 	Value json.RawMessage `json:"value"`
 }
+type reservationIdentityRefs struct {
+	Burn    reservationRef `json:"burn"`
+	Release reservationRef `json:"release"`
+	Tag     string         `json:"tag"`
+}
 type reservationObservations struct {
-	Burn     reservationRef       `json:"burn"`
-	Releases []reservationRelease `json:"releases"`
-	Tag      reservationRef       `json:"tag"`
+	Refs     []reservationIdentityRefs `json:"refs"`
+	Releases []reservationRelease      `json:"releases"`
 }
 
 func checkCandidateReservations(observed reservationObservations, allowed []string) bool {
-	if observed.Releases == nil || observed.Tag.State != "absent" || !bytes.Equal(observed.Tag.Value, []byte("null")) || observed.Burn.State != "absent" || !bytes.Equal(observed.Burn.Value, []byte("null")) {
+	policy := approvedCandidateReservations()
+	// The Owner-approved exception is exactly these two retained identities.
+	if len(policy) != 2 || observed.Releases == nil || len(observed.Refs) != len(policy) {
 		return false
+	}
+	for i, r := range policy {
+		refs := observed.Refs[i]
+		if refs.Tag != r.Tag || refs.Release.State != "absent" || !bytes.Equal(refs.Release.Value, []byte("null")) || refs.Burn.State != "absent" || !bytes.Equal(refs.Burn.Value, []byte("null")) {
+			return false
+		}
 	}
 	allow := map[string]bool{}
 	for _, tag := range allowed {
@@ -108,31 +132,33 @@ func checkCandidateReservations(observed reservationObservations, allowed []stri
 		}
 		allow[tag] = true
 	}
-	policy := approvedCandidateReservations()
-	if len(policy) != 1 {
-		return false
-	} // This reviewed isolation is intentionally bounded to one draft.
-	r := policy[0]
 	seenIDs := map[int64]bool{}
 	seenTags := map[string]bool{}
-	found := false
+	found := map[string]bool{}
 	for _, release := range observed.Releases {
 		if release.ID <= 0 || release.Tag == "" || seenIDs[release.ID] || seenTags[release.Tag] {
 			return false
 		}
 		seenIDs[release.ID] = true
 		seenTags[release.Tag] = true
-		if release.ID == r.ReleaseID || release.Tag == r.Tag {
+		reserved := false
+		for _, r := range policy {
+			if release.ID != r.ReleaseID && release.Tag != r.Tag {
+				continue
+			}
 			expected := reservationRelease{Assets: r.Assets, Body: "Qualification pending.", Commit: r.Commit, Draft: true, ID: r.ReleaseID, Tag: r.Tag}
-			if found || !reflect.DeepEqual(release, expected) {
+			if found[r.Tag] || !reflect.DeepEqual(release, expected) {
 				return false
 			}
-			found = true
-		} else if release.Draft && !allow[release.Tag] {
+			found[r.Tag] = true
+			reserved = true
+			break
+		}
+		if !reserved && release.Draft && !allow[release.Tag] {
 			return false
 		}
 	}
-	return found
+	return len(found) == len(policy)
 }
 
 func runCandidateReservations(args []string, input io.Reader, output io.Writer) error {
