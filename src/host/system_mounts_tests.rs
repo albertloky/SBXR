@@ -306,3 +306,44 @@ fn hidden_virtual_mount_cannot_prune_visible_data_after_overmount() {
     fs::write(f.root.join("data/hidden/foreign"), b"owned data").unwrap();
     assert!(runner(f).exclusive_accounts(&Cancellation::new()).is_err());
 }
+
+// systemd's normal binfmt_misc automount has two mount IDs at one path.
+const BINFMT_STACK: &str = "10 2 0:32 / /proc/sys/fs/binfmt_misc rw shared:13 - autofs systemd-1 rw\n11 10 0:35 / /proc/sys/fs/binfmt_misc rw shared:35 - binfmt_misc binfmt_misc rw\n";
+#[test]
+fn binfmt_automount_metadata_stack_preserves_nested_data_coverage() {
+    let mut f = Fixture::new();
+    f.table.push_str(BINFMT_STACK);
+    f.table
+        .push_str("12 11 8:9 / /proc/sys/fs/binfmt_misc/data rw - ext4 none rw\n");
+    fs::create_dir_all(f.root.join("proc/sys/fs/binfmt_misc/data")).unwrap();
+    let r = runner(f);
+    assert!(r.exclusive_accounts(&Cancellation::new()).is_ok());
+    fs::write(
+        r.root.join("proc/sys/fs/binfmt_misc/data/foreign"),
+        b"owned data",
+    )
+    .unwrap();
+    assert!(matches!(
+        r.exclusive_accounts(&Cancellation::new()),
+        Err(HostError::Foreign)
+    ));
+}
+#[test]
+fn binfmt_stack_never_hides_data_or_ambiguous_parentage() {
+    for stack in [
+        BINFMT_STACK.replace("- autofs", "- ext4"),
+        BINFMT_STACK.replace("- binfmt_misc", "- tmpfs"),
+        BINFMT_STACK.replace("11 10", "11 2"),
+        BINFMT_STACK.replace("10 2", "10 1"),
+        BINFMT_STACK.replace("0:32 /", "0:32 /subtree"),
+        format!("{BINFMT_STACK}12 10 8:9 / /proc/sys/fs/binfmt_misc/hidden rw - ext4 none rw\n"),
+        format!(
+            "{BINFMT_STACK}12 11 0:36 / /proc/sys/fs/binfmt_misc rw - binfmt_misc binfmt_misc rw\n"
+        ),
+    ] {
+        assert!(
+            mounts(format!("{TABLE}{stack}").as_bytes()).is_err(),
+            "{stack}"
+        );
+    }
+}

@@ -9,6 +9,8 @@ struct Mount {
     parent: u64,
     path: String,
     virtual_metadata: bool,
+    filesystem: String,
+    root: String,
 }
 fn mount_path(raw: &str) -> Result<String, HostError> {
     let mut out = String::new();
@@ -47,7 +49,6 @@ fn mounts(bytes: &[u8]) -> Result<Vec<Mount>, HostError> {
     }
     let mut result = Vec::new();
     let mut ids = BTreeSet::new();
-    let mut paths = BTreeSet::new();
     for line in text.lines() {
         let f: Vec<_> = line.split_ascii_whitespace().collect();
         let separator = f.iter().position(|s| *s == "-").ok_or(HostError::Unsafe)?;
@@ -63,22 +64,57 @@ fn mounts(bytes: &[u8]) -> Result<Vec<Mount>, HostError> {
         }
         number(dev[0])?;
         number(dev[1])?;
-        mount_path(f[3])?;
+        let root = mount_path(f[3])?;
         let path = mount_path(f[4])?;
-        // Stacked/ambiguous mounts cannot be mapped safely by pathname.
-        if !paths.insert(path.clone()) {
-            return Err(HostError::Unsafe);
-        }
         let virtual_metadata = matches!(
             f[separator + 1],
-            "proc" | "sysfs" | "cgroup" | "cgroup2" | "devpts"
+            "proc" | "sysfs" | "cgroup" | "cgroup2" | "devpts" | "binfmt_misc"
         );
         result.push(Mount {
             id,
             parent,
             path,
             virtual_metadata,
+            filesystem: f[separator + 1].into(),
+            root,
         });
+    }
+    // systemd overlays its binfmt automount with the kernel binfmt metadata
+    // filesystem. Collapse only that exact two-layer relationship. All other
+    // stacks still refuse: hidden data cannot be proved by a pathname scan.
+    let binfmt = "/proc/sys/fs/binfmt_misc";
+    let layers: Vec<_> = result.iter().filter(|m| m.path == binfmt).collect();
+    if layers.len() == 2 {
+        let lower = layers
+            .iter()
+            .find(|m| m.filesystem == "autofs")
+            .ok_or(HostError::Unsafe)?;
+        let upper = layers
+            .iter()
+            .find(|m| m.filesystem == "binfmt_misc")
+            .ok_or(HostError::Unsafe)?;
+        if lower.root != "/"
+            || upper.root != "/"
+            || upper.parent != lower.id
+            || !result
+                .iter()
+                .any(|m| m.id == lower.parent && m.path == "/proc" && m.filesystem == "proc")
+        {
+            return Err(HostError::Unsafe);
+        }
+        let (lower_id, upper_id, parent_id) = (lower.id, upper.id, lower.parent);
+        result.retain(|m| m.id != lower_id);
+        result
+            .iter_mut()
+            .find(|m| m.id == upper_id)
+            .ok_or(HostError::Unsafe)?
+            .parent = parent_id;
+        // A child of the hidden automount retains its old parent ID and is
+        // rejected below; only visible children of binfmt remain traversable.
+    }
+    let mut paths = BTreeSet::new();
+    if result.iter().any(|m| !paths.insert(m.path.clone())) {
+        return Err(HostError::Unsafe);
     }
     if !result.iter().any(|m| m.path == "/" && !m.virtual_metadata) {
         return Err(HostError::Unsafe);
