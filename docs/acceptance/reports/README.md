@@ -14,6 +14,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Direct Rust diagnostics
 
+- [q204 readiness refusal and offline diagnosis — 2026-10-29](q204-readiness-refusal-2026-10-29.md)
+  — signed candidate stopped before setup; restoration verified; DNS stall cause and failure-evidence HTTP 403 endpoint remain unresolved.
+
 - [q202 Standard Review and DNS comparison — 2026-10-28](rust-q202-review-dns-comparison-2026-10-28.md)
   — Review Ready/cancelled with restoration verified; intermittent query failure remains unexplained, and Apply/full qualification were not run.
 

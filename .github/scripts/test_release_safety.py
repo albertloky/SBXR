@@ -72,6 +72,32 @@ else:sys.exit(99)
                 self.assertEqual('recorded=true' in outputs,permitted and not signed)
                 self.assertEqual('signed=true' in outputs,signed)
 
+    def test_failure_operation_is_reported_without_tokens_or_status_loss(self):
+        text = WORKFLOW.read_text()
+        start = text.index('          signed=')
+        end = text.index('          mkdir -m 0700 boundary/burned', start)
+        shell = '\n'.join(line[10:] for line in text[start:end].splitlines())
+        for stage, expected, status in [
+            ('api', 'list current run artifacts: GET actions/runs/{run}/artifacts', 37),
+            ('download', 'download signed manifest artifact', 38),
+            ('attestation', 'verify signed manifest attestation', 1),
+        ]:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                gh = root / 'gh'
+                gh.write_text("#!/bin/sh\ncase \"$1 $2\" in\n 'api '*) [ \"$FAIL_STAGE\" != api ] || exit 37; echo 17;;\n 'run download') [ \"$FAIL_STAGE\" != download ] || exit 38;;\n 'attestation verify') exit 39;;\n *) exit 99;;\nesac\n")
+                gh.chmod(0o700)
+                env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH'],
+                           FAIL_STAGE=stage, GH_TOKEN='fixture-secret-never-log',
+                           GITHUB_OUTPUT=str(root/'output'), GITHUB_REPOSITORY='fixture/repo',
+                           GITHUB_RUN_ID='17', GITHUB_SHA='a'*40, GITHUB_RUN_ATTEMPT='1')
+                result = subprocess.run(['bash', '-c', 'set -euo pipefail\n'+shell],
+                                        cwd=root, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertIn('stopped at: '+expected+' (exit '+str(status)+')', result.stderr)
+                self.assertNotIn(env['GH_TOKEN'], result.stdout+result.stderr)
+                self.assertNotIn('recorded=true', (root/'output').read_text())
+
 class FailureDecisionTests(unittest.TestCase):
     def test_candidate_has_no_automatic_failure_mutations(self):
         text = WORKFLOW.read_text()

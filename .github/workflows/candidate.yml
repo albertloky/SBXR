@@ -882,13 +882,29 @@ jobs:
         run: |
           set -euo pipefail
           signed=unknown
+          failure_operation='initialize failure evidence'
+          report_failure_evaluation() {
+            local status="$1"
+            trap - EXIT
+            if test "$status" -ne 0; then
+              # Fixed labels only: do not echo commands, tokens, URLs or payloads.
+              set +e
+              printf 'Candidate failure evaluation stopped at: %s (exit %s)\n' "$failure_operation" "$status" >&2
+            fi
+            exit "$status"
+          }
+          trap 'report_failure_evaluation "$?"' EXIT
           echo 'signed=unknown' >> "$GITHUB_OUTPUT"
           echo 'recorded=false' >> "$GITHUB_OUTPUT"
           mkdir -m 0700 boundary
+          failure_operation='list current run artifacts: GET actions/runs/{run}/artifacts'
           artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --paginate --jq '.artifacts[] | select(.name == "signed-qualification-manifest" and .expired == false) | .id')"
           if test -n "$artifact_id"; then
+            failure_operation='download signed manifest artifact'
             gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir boundary
+            failure_operation='verify signed manifest attestation'
             if gh attestation verify boundary/qualification-manifest.json --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null; then
+              failure_operation='validate signed manifest identity'
               jq -e --arg run "$GITHUB_RUN_ID" --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" '(.schema == "sbxr-qualification-manifest-v1" or .schema == "sbxr-qualification-manifest-v2" or .schema == "sbxr-qualification-manifest-v3") and .repository == env.GITHUB_REPOSITORY and .workflow.path == ".github/workflows/candidate.yml" and .workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main" and .workflow.commit == $commit and .workflow.run_id == $run and .workflow.run_url == $url' boundary/qualification-manifest.json >/dev/null
               signed=true
               echo 'signed=true' >> "$GITHUB_OUTPUT"
@@ -904,18 +920,21 @@ jobs:
             # A rerun can inherit a boundary crossed by an earlier attempt.
             test "$GITHUB_RUN_ATTEMPT" = 1
             if test "$SIGN_RESULT" != skipped; then
+              failure_operation='read signing job conclusions: GET actions/runs/{run}/attempts/{attempt}/jobs'
               gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" --paginate --slurp > boundary/sign-jobs.json
               jq -e '[.[].jobs[] | select(.name == "sign")] | length == 1 and (.[0] | .status == "completed" and ([.steps[] | select(.name == "Attest qualification manifest")] | length == 1 and .[0].conclusion == "skipped"))' boundary/sign-jobs.json >/dev/null
             fi
             signed=false
             echo 'signed=false' >> "$GITHUB_OUTPUT"
           fi
+          failure_operation='download unsigned construction evidence'
           if test "$signed" = false && gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name qualification-boundary-input --dir boundary/unsigned 2>/dev/null; then
             echo 'recorded=true' >> "$GITHUB_OUTPUT"
           fi
 
           test "$signed" = true || exit 0
           mkdir -m 0700 boundary/burned boundary/failure-state boundary/records boundary/rechecked
+          failure_operation='read existing burn tags'
           git fetch --force --tags origin
           printf '[]' > boundary/existing-burns.json
           while read -r tag; do
@@ -923,6 +942,7 @@ jobs:
             jq -cS --argjson payload "$payload" '. + [$payload] | sort_by(.original_tag)' boundary/existing-burns.json > boundary/existing-burns.next
             mv boundary/existing-burns.next boundary/existing-burns.json
           done < <(git for-each-ref refs/tags/release-burned --format='%(refname:strip=3)')
+          failure_operation='read candidate failure-state artifact'
           if ! gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "candidate-failure-state-$GITHUB_RUN_ID" --dir boundary/failure-state 2>/dev/null; then
             cp boundary/candidate-failure-state.json boundary/failure-state/candidate-failure-state.json
           fi
@@ -932,6 +952,7 @@ jobs:
             entry="$(jq -c --arg tag "$tag" '.releases[] | select(.tag == $tag)' boundary/qualification-manifest.json)"
             test -n "$entry"
             printf '%s\n' "$entry" > "boundary/$tag.json"
+            failure_operation='recheck candidate release metadata and assets'
             .github/scripts/recheck-qualified-release.sh "boundary/$tag.json" "boundary/rechecked/$tag" "boundary/$tag.release.json"
             commit="$(jq -r .commit <<<"$entry")"
             tag_commit=null
@@ -940,8 +961,11 @@ jobs:
             jq -cS --argjson observation "$observation" '. + [$observation]' boundary/observations.json > boundary/observations.next
             mv boundary/observations.next boundary/observations.json
           done < <(jq -c '.[]' <<<"$BUILD_RELEASES")
+          failure_operation='construct failure facts and read run creation time: GET actions/runs/{run}'
           jq -cnS --slurpfile burned boundary/existing-burns.json --slurpfile failure_state boundary/failure-state/candidate-failure-state.json --slurpfile manifest boundary/qualification-manifest.json --slurpfile boundary_facts boundary/qualification-boundary-facts.json --slurpfile observations boundary/observations.json --arg observed_at "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)" --arg prior_decision_sha256 "$(sha256sum boundary/qualification-manifest.json | cut -d' ' -f1)" '{burned_identities:$burned[0],candidate_failure_state:$failure_state[0],construction_decision:$boundary_facts[0].draft_verification_facts.construction_decision,construction_facts:$boundary_facts[0].draft_verification_facts.construction_facts,observations:$observations[0],observed_at:$observed_at,prior_decision_sha256:$prior_decision_sha256,qualification_boundary_facts:$boundary_facts[0],qualification_manifest:$manifest[0],reason:"post-sign-qualification-failure",schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-finalization",workflow:$manifest[0].workflow}' | tr -d '\n' > boundary/candidate-failure-facts.json
+          failure_operation='evaluate candidate failure facts'
           go run ./cmd/sbxr-release qualification < boundary/candidate-failure-facts.json > boundary/candidate-failure-decision.json
+          failure_operation='validate failure decision binding'
           facts_sha256="$(sha256sum boundary/candidate-failure-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum boundary/qualification-manifest.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "failed-prerelease" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "finalize-failed-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/candidate-failure-decision.json >/dev/null
