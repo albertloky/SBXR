@@ -89,11 +89,8 @@ jobs:
           jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
           preflight_operation='check V3 declaration scope'
           jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and .support == {scope:"subscription-clean-install-only",sources:[],contract:"sbxr-subscription-update-v1"} and .owner_exception == null and .live89_correction_review == null' <<<"$V3_ATTEMPT" >/dev/null
-          preflight_operation='require resolved candidate drafts'
-          # Pending failure decisions must not lose their tag/sequence authority.
-          # Read only: a retained draft is never deleted to make preflight pass.
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > pending-release-observations.json
-          jq -e 'type == "array" and length > 0 and all(.[]; type == "array" and all(.[]; (.draft | type) == "boolean")) and ([.[][] | select(.draft == true)] | length == 0)' pending-release-observations.json >/dev/null
+          preflight_operation='bind retained candidate reservation'
+          go run ./cmd/sbxr-release candidate-reservations -policy > reserved-candidates.json
           preflight_operation='fetch source tags'
           git fetch --force --tags origin
           preflight_operation='collect release history'
@@ -115,10 +112,10 @@ jobs:
             --arg archive_remote_tag_object "$(git ls-remote --tags origin "refs/tags/$ARCHIVE_TAG" | cut -f1)" \
             --arg archive_tag_object "$(git rev-parse "$ARCHIVE_TAG")" \
             --arg archive_type "$(git cat-file -t "$ARCHIVE_TAG")" \
-            --argjson burned_identities "$burned" \
+            --argjson burned_identities "$burned" --slurpfile reserved reserved-candidates.json \
             --argjson b_sequence "$B_SEQUENCE" --arg b_tag "$B_TAG" \
             --arg checklist_sha256 "$(sha256sum "$V3_CHECKLIST" | cut -d' ' -f1)" --arg commit "$(git rev-parse HEAD)" --argjson latest_tag "$latest_tag" --slurpfile releases release-facts.json --arg remote_main "$(git rev-parse origin/main)" --argjson tags "$tags" --argjson support "$(jq -c .support <<<"$V3_ATTEMPT")" \
-            '{archive_commit:$archive_commit,archive_remote_commit:$archive_remote_commit,archive_remote_tag_object:$archive_remote_tag_object,archive_tag_object:$archive_tag_object,archive_type:$archive_type,burned_identities:$burned_identities,candidate:{a_sequence:0,a_tag:"",b_sequence:$b_sequence,b_tag:$b_tag,defect_issue_url:null,evidence_version:3,failed_normal_run_id:null,mode:"v3",support:$support},checklist_sha256:$checklist_sha256,commit:$commit,defect_issue:null,failed_normal_run:null,latest_tag:$latest_tag,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",stage:"candidate-preflight",tags:$tags}' | tr -d '\n' > candidate-preflight-facts.json
+            '{archive_commit:$archive_commit,archive_remote_commit:$archive_remote_commit,archive_remote_tag_object:$archive_remote_tag_object,archive_tag_object:$archive_tag_object,archive_type:$archive_type,burned_identities:$burned_identities,reserved_identities:$reserved[0],candidate:{a_sequence:0,a_tag:"",b_sequence:$b_sequence,b_tag:$b_tag,defect_issue_url:null,evidence_version:3,failed_normal_run_id:null,mode:"v3",support:$support},checklist_sha256:$checklist_sha256,commit:$commit,defect_issue:null,failed_normal_run:null,latest_tag:$latest_tag,releases:$releases[0],remote_main:$remote_main,schema:"sbxr-release-qualification-facts-v1",stage:"candidate-preflight",tags:$tags}' | tr -d '\n' > candidate-preflight-facts.json
           preflight_operation='attach verified public latest to preflight facts'
           jq -cS --slurpfile latest current-source-verification.json --slurpfile releases release-facts.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' candidate-preflight-facts.json | tr -d '\n' > candidate-preflight-facts.next
           mv candidate-preflight-facts.next candidate-preflight-facts.json
@@ -402,6 +399,9 @@ jobs:
               test "$(stat -c %s "$directory/$name")" -eq "$(jq -r .size <<<"$expected")"
               test "$(sha256sum "$directory/$name" | cut -d' ' -f1)" = "$(jq -r .sha256 <<<"$expected")"
             done < <(jq -c '.assets[]' <<<"$action")
+            allowed="$(jq -cS '[.[].tag] | sort' drafts.json)"
+            bash .github/scripts/check-candidate-reservations.sh "$allowed" > current-reservations.json
+            jq -e --slurpfile reserved current-reservations.json '.reserved_identities == $reserved[0]' candidate-preflight-facts.json >/dev/null
             gh api --method POST "repos/$repository/releases" -f tag_name="$tag" -f target_commitish="$commit" -f name="$(jq -r .name <<<"$action")" -f body="$(jq -r .body <<<"$action")" -F draft="$(jq -r .draft <<<"$action")" -F prerelease="$(jq -r .prerelease <<<"$action")" > release.json
             created_release_id="$(jq -r .id release.json)"
             current_tag=$tag
@@ -442,6 +442,7 @@ jobs:
           name: qualification-boundary-input
           path: |
             drafts.json
+            current-reservations.json
             candidate-preflight-facts.json
             candidate-preflight-decision.json
             candidate-draft-construction-facts.json
@@ -492,6 +493,14 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: qualification-boundary-input
+      - name: Verify current-run reservation before signing or host access
+        run: |
+          set -euo pipefail
+          # Draft visibility needs push access. Reuse this run's successful
+          # draft observation; never expand the read-only signing token.
+          go run ./cmd/sbxr-release candidate-reservations -policy > expected-reservations.json
+          cmp expected-reservations.json current-reservations.json
+          jq -e --slurpfile reserved expected-reservations.json '.reserved_identities == $reserved[0]' candidate-preflight-facts.json >/dev/null
       - name: Verify Acceptance VPS readiness before signing
         if: ${{ !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
         run: |

@@ -36,6 +36,11 @@ func mvpQualificationFixtureWithTransport(t *testing.T, binary string, late, htt
 
 func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSubscription, cleanOnly bool, proxyProfile ...string) (string, []byte, map[string]any) {
 	t.Helper()
+	return mvpQualificationFixtureWithReservations(t, binary, late, httpSubscription, cleanOnly, nil, proxyProfile...)
+}
+
+func mvpQualificationFixtureWithReservations(t *testing.T, binary string, late, httpSubscription, cleanOnly bool, reservations []candidateReservation, proxyProfile ...string) (string, []byte, map[string]any) {
+	t.Helper()
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.1", 84, 3
@@ -55,6 +60,10 @@ func mvpQualificationFixtureForSupport(t *testing.T, binary string, late, httpSu
 	}
 	if err := json.Unmarshal([]byte(qualificationDocument(t, scopeHistoryFixture(t, source))), &facts.SubscriptionHistory); err != nil {
 		t.Fatal(err)
+	}
+	if reservations != nil {
+		facts.ReservedIdentities = reservations
+		facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.130", highestSequence(facts)+1
 	}
 	attempt := recurringAttemptFixture(t, source)
 	attempt["schema"] = "sbxr-v3-qualification-attempt-v3"

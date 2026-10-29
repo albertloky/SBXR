@@ -114,6 +114,49 @@ explicit Owner decision for the exact run, commit, tag, sequence, release ID,
 asset identity and proposed effects, then freshly recheck the authenticated state.
 Changed or uncertain state stops the action. This change introduces no automatic
 resume or approval switch and does not make a failed qualification publishable.
-Candidate preflight refuses outstanding drafts rather than deleting them or reusing
-their pending sequence. Retained old drafts remain untouched; resolving them is a
-separate decision before another candidate can proceed.
+Candidate creation refuses unresolved drafts rather than deleting them or reusing
+their pending sequence. The exact reservation below is the sole reviewed exception.
+
+## Preserve one unknown-signing draft and reserve its identity
+
+On 2026-10-29 the Owner approved a fresh-start policy that preserves the old draft
+and evidence, reserves its version/sequence, and prevents accidental promotion.
+`candidate_reservations.go` pins draft `v3.1.129`, sequence 203, release 426359967,
+source `3656473eb694f18018c1ebbd95829dfe96ed8e3c`, run 40644460970, the release-index
+digest, and all four asset IDs, sizes and digests. Signing remains **unknown**.
+This source-controlled reservation is not a burn, attestation, unsigned proof,
+cleanup decision or acceptance evidence. No remote resource is changed to adopt it.
+
+The current workflow accepts that retained draft only while every pinned field
+agrees and both its release-tag and burn-tag refs remain explicitly absent.
+Missing, changed, duplicated or unavailable observations refuse. Other pending
+drafts still refuse, except the exact current workflow candidate tags during later
+checks; that allowance cannot exempt the reserved identity. The existing common
+release concurrency group remains serialized. The already write-authorized draft
+job checks observations immediately before each draft-creation request. Signing stays read-only and
+compares that successful current-run record with the compiled policy and preflight
+facts before host readiness or signing. Stable preflight and the final publication
+boundary recheck live metadata using their existing permissions; the final main
+check remains after the reservation check. No token permissions are expanded.
+
+New preflight facts bind the exact reservation into the existing decision and
+signed qualification chain. Sequence allocation counts it independently of public
+release history and burns. Tags and sequences at the reservation remain unavailable;
+all subsequent candidates require the exact record, even if public history advances.
+Pre-reservation historical facts retain their original interpretation. The old
+release ID cannot be reused by a new draft verification chain. Current qualification
+and publication replay refuse the reserved candidate, rather than rewriting its
+historical records or claiming it was never signed.
+
+A fresh candidate must still use the next sequence above all observed releases,
+burns and reservations and complete its own unchanged qualification requirements.
+With a highest public/burn sequence of 202, the next candidate uses 204, not 203.
+This is a narrowly reviewed one-draft mechanism, not a general ignore-list.
+Changing its policy or disposing of the draft requires another explicit decision.
+
+These protections cover the supported workflows and validators. They cannot make
+GitHub metadata reads and later operations atomic, or prevent a privileged operator
+from manually changing releases or replacing trusted workflow code. Such observed
+changes stop the supported path. No repository security setting, signing authority,
+installed admission rule or historical signature is changed. This decision grants
+no live qualification, signing, deletion or publication permission.

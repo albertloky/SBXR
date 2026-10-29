@@ -85,6 +85,7 @@ exit "$VERIFIER_STATUS"
 `,
 				"git": "#!/bin/sh\nprintf called > git-called\nexit 37\n",
 				"gh":  "#!/bin/sh\nprintf '[[]]\\n'\n",
+				"go":  "#!/bin/sh\ntest \"$*\" = 'run ./cmd/sbxr-release candidate-reservations -policy' || exit 99\nprintf '[]'\n",
 			} {
 				if err := os.WriteFile(filepath.Join(directory, name), []byte(source), 0o700); err != nil {
 					t.Fatal(err)

@@ -71,8 +71,8 @@ converted into a pass by retrying publication.
 
 Candidate failure decisions are proposals only: `candidate.yml` retains them and
 fails without automatic draft/tag deletion, burn signing or failed-prerelease
-publication. Outstanding drafts block new candidate preflight until separately
-resolved. Later effects need an explicit action-time Owner decision and fresh
+publication. Outstanding drafts block new draft creation except the exact
+source-controlled reservation described in ADR-0032. Later effects need an explicit action-time Owner decision and fresh
 identity/authentication checks; there is no automatic resume switch. See
 [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md).
 
@@ -204,3 +204,12 @@ normal qualification failure handling remain. Current publication/retry follows
 ADR-0032.
 See [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) for the
 exact applicability and audit boundary.
+
+
+`candidate-reservations` validates canonical read-only GitHub observations against
+that fixed reservation and emits the exact record for `reserved_identities` in
+new preflight facts. `-policy` exposes the compiled record for observation collection;
+it is not an authorization result. `-allowed-draft-tags` names only the current
+workflow's candidate tags for later rechecks and cannot allow the reserved tag.
+The shell adapter collects metadata and explicit HTTP404 ref observations; it
+performs no signing, mutation or cleanup. Missing/changed state refuses.

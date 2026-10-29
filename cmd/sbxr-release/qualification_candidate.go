@@ -18,24 +18,25 @@ import (
 )
 
 type qualificationFacts struct {
-	ArchiveCommit          string            `json:"archive_commit"`
-	ArchiveRemoteCommit    string            `json:"archive_remote_commit"`
-	ArchiveRemoteTagObject string            `json:"archive_remote_tag_object"`
-	ArchiveTagObject       string            `json:"archive_tag_object"`
-	ArchiveType            string            `json:"archive_type"`
-	BurnedIdentities       []burnedIdentity  `json:"burned_identities"`
-	Candidate              candidateRequest  `json:"candidate"`
-	ChecklistSHA256        string            `json:"checklist_sha256"`
-	Commit                 string            `json:"commit"`
-	DefectIssue            *defectIssue      `json:"defect_issue"`
-	FailedNormalRun        *failedNormalRun  `json:"failed_normal_run"`
-	LatestTag              *string           `json:"latest_tag"`
-	Releases               []observedRelease `json:"releases"`
-	RemoteMain             string            `json:"remote_main"`
-	Schema                 string            `json:"schema"`
-	Stage                  string            `json:"stage"`
-	SubscriptionHistory    *v3ReleaseHistory `json:"subscription_history,omitempty"`
-	Tags                   []string          `json:"tags"`
+	ArchiveCommit          string                 `json:"archive_commit"`
+	ArchiveRemoteCommit    string                 `json:"archive_remote_commit"`
+	ArchiveRemoteTagObject string                 `json:"archive_remote_tag_object"`
+	ArchiveTagObject       string                 `json:"archive_tag_object"`
+	ArchiveType            string                 `json:"archive_type"`
+	BurnedIdentities       []burnedIdentity       `json:"burned_identities"`
+	Candidate              candidateRequest       `json:"candidate"`
+	ChecklistSHA256        string                 `json:"checklist_sha256"`
+	Commit                 string                 `json:"commit"`
+	DefectIssue            *defectIssue           `json:"defect_issue"`
+	FailedNormalRun        *failedNormalRun       `json:"failed_normal_run"`
+	LatestTag              *string                `json:"latest_tag"`
+	Releases               []observedRelease      `json:"releases"`
+	RemoteMain             string                 `json:"remote_main"`
+	ReservedIdentities     []candidateReservation `json:"reserved_identities,omitempty"`
+	Schema                 string                 `json:"schema"`
+	Stage                  string                 `json:"stage"`
+	SubscriptionHistory    *v3ReleaseHistory      `json:"subscription_history,omitempty"`
+	Tags                   []string               `json:"tags"`
 }
 
 type burnedIdentity struct {
@@ -351,7 +352,7 @@ func validDraftTarget(target draftReleaseTarget) bool {
 }
 
 func validDraftObservation(observation observedDraft, action constructDraftAction, seenAssetIDs map[int64]bool) bool {
-	if observation.ReleaseID <= 0 || observation.CreatedReleaseID != observation.ReleaseID || observation.Draft != action.Draft || observation.Prerelease != action.Prerelease || observation.Immutable != action.Immutable || observation.Commit != action.Commit || observation.Sequence != action.Sequence || observation.Tag != action.Tag || observation.ReleaseIdentity != action.ReleaseIdentity || len(observation.Assets) != len(action.Assets) || len(observation.Downloads) != len(action.Assets) {
+	if reservedCandidate(observation.Tag, observation.Sequence, observation.ReleaseID) || observation.ReleaseID <= 0 || observation.CreatedReleaseID != observation.ReleaseID || observation.Draft != action.Draft || observation.Prerelease != action.Prerelease || observation.Immutable != action.Immutable || observation.Commit != action.Commit || observation.Sequence != action.Sequence || observation.Tag != action.Tag || observation.ReleaseIdentity != action.ReleaseIdentity || len(observation.Assets) != len(action.Assets) || len(observation.Downloads) != len(action.Assets) {
 		return false
 	}
 	for index, expected := range action.Assets {
@@ -384,7 +385,7 @@ func evaluateCandidatePreflight(facts qualificationFacts, document []byte) (qual
 		!validCommit(facts.ArchiveTagObject) || facts.ArchiveTagObject != facts.ArchiveRemoteTagObject ||
 		facts.ArchiveType != "tag" ||
 		!validSHA256(facts.ChecklistSHA256) || facts.BurnedIdentities == nil || facts.Releases == nil || facts.Tags == nil ||
-		!validObservedFacts(facts) {
+		!validObservedFacts(facts) || !validCandidateReservations(facts) || reservedCandidate(candidate.ATag, candidate.ASequence, 0) || reservedCandidate(candidate.BTag, candidate.BSequence, 0) {
 		return qualificationDecision{}, errors.New("candidate preflight refused")
 	}
 	if candidate.Mode == "v3" {
@@ -519,6 +520,11 @@ func qualifiedLatest(facts qualificationFacts) (observedRelease, bool) {
 
 func highestSequence(facts qualificationFacts) uint64 {
 	highest := uint64(16)
+	for _, reserved := range facts.ReservedIdentities {
+		if reserved.Sequence > highest {
+			highest = reserved.Sequence
+		}
+	}
 	for _, release := range facts.Releases {
 		if release.Sequence != nil && *release.Sequence > highest {
 			highest = *release.Sequence

@@ -102,6 +102,9 @@ The repository, immutable tag, commit SHA, and `release-index.json` SHA-256 that
 ### Release Sequence
 The authenticated positive integer that is the only authority for release order.
 
+### Retained Candidate Reservation
+A source-controlled decision preserving an unresolved candidate and reserving its exact tag, sequence and release identity. It is not a signed burn, proof of unsigned state, cleanup authority or successful qualification. Current qualification refuses reuse of that identity; a fresh candidate must carry the reservation and complete its own qualification.
+
 ### Qualified Stable Release
 GitHub's canonical immutable Latest release whose four assets, Release Identity, attestations, and Acceptance Record pass Release Qualification.
 

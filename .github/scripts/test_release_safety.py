@@ -130,31 +130,25 @@ print(json.dumps(dict(schema='sbxr-release-qualification-decision-v1',stage='can
                 self.assertEqual(json.loads((root/'drafts.json').read_text()),[entry])
                 self.assertEqual((root/'candidate-failure-decision.json').exists(),status != 0)
 
-    def test_pending_draft_gate_is_read_only_and_fails_closed(self):
+    def test_reservation_gate_and_decision_binding_are_required(self):
         text = WORKFLOW.read_text()
-        start = text.index("          preflight_operation='require resolved candidate drafts'")
-        end = text.index("          preflight_operation='fetch source tags'", start)
-        shell = '\n'.join(line[10:] for line in text[start:end].splitlines())
-        cases = [('empty', [[]], 0, True), ('published', [[{'draft': False}]], 0, True),
-                 ('retained', [[{'draft': True}]], 0, False),
-                 ('later-page', [[{'draft': False}], [{'draft': True}]], 0, False),
-                 ('missing-field', [[{}]], 0, False), ('wrong-type', [[{'draft': 'false'}]], 0, False),
-                 ('missing-page', [], 0, False), ('bad-page', [{}], 0, False),
-                 ('unavailable', [[]], 1, False)]
-        for name, pages, status, accepted in cases:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                gh = root/'gh'
-                gh.write_text('#!/bin/sh\n' +
-                              'test "$*" = "api repos/fixture/repo/releases?per_page=100 --paginate --slurp" || exit 99\n' +
-                              'printf "%s" "$FIXTURE_PAGES"\nexit "$FIXTURE_STATUS"\n')
-                gh.chmod(0o700)
-                env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH'],
-                           GITHUB_REPOSITORY='fixture/repo', FIXTURE_PAGES=json.dumps(pages),
-                           FIXTURE_STATUS=str(status))
-                result = subprocess.run(['bash', '-c', 'set -euo pipefail\n'+shell],
-                                        cwd=root, env=env, capture_output=True)
-                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+        self.assertIn('go run ./cmd/sbxr-release candidate-reservations -policy > reserved-candidates.json', text)
+        self.assertIn('bash .github/scripts/check-candidate-reservations.sh "$allowed" > current-reservations.json', text)
+        self.assertIn('cmp expected-reservations.json current-reservations.json', text)
+        self.assertIn('reserved_identities:$reserved[0]', text)
+        self.assertIn('.reserved_identities == $reserved[0]', text)
+        self.assertLess(text.index('Verify current-run reservation before signing or host access'),
+                        text.index('Verify Acceptance VPS readiness before signing'))
+        signing = text.split('\n  sign:', 1)[1].split('\n  acceptance-vps:', 1)[0]
+        self.assertIn('contents: read', signing)
+        self.assertNotIn('check-candidate-reservations.sh', signing)
+        self.assertLess(text.index('bash .github/scripts/check-candidate-reservations.sh "$allowed" > current-reservations.json'),
+                        text.index('gh api --method POST'))
+        stable = (HERE.parent/'workflows/stable.yml').read_text()
+        self.assertEqual(stable.count('bash .github/scripts/check-candidate-reservations.sh'), 2)
+        for workflow in (text, stable):
+            self.assertIn('group: installer-updater-release', workflow)
+            self.assertIn('cancel-in-progress: false', workflow)
 
     def test_failure_stop_remains_failed_with_or_without_proposal(self):
         text = WORKFLOW.read_text()

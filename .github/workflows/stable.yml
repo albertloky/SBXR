@@ -92,6 +92,8 @@ jobs:
           cd ..
 
           manifest=verified/qualification-manifest.json
+          allowed="$(jq -cS '[.releases[].tag] | sort' "$manifest")"
+          bash .github/scripts/check-candidate-reservations.sh "$allowed" > verified/current-reservations.json
           git fetch --force --tags origin
           if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
             python3 .github/scripts/live89-correction-review.py "$run_sha" > verified/live89-correction-review.json
@@ -390,6 +392,8 @@ jobs:
             tag="$(jq -r .tag <<<"$action")"
             release_id="$(jq -r .release_id <<<"$action")"
             jq -jr .body <<<"$action" | cmp - "verified/records/$tag.md"
+            allowed="$(jq -cS '[.releases[].tag] | sort' verified/qualification-manifest.json)"
+            bash .github/scripts/check-candidate-reservations.sh "$allowed" > current-reservations.json
             if test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" != "$remote_main"; then
               printf '%s\n' pending-review > publication-stage
               printf 'pending=true\n' >> "$GITHUB_OUTPUT"

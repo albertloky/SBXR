@@ -54,6 +54,14 @@ type gatewayOptions struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "candidate-reservations" {
+		if runCandidateReservations(os.Args[2:], os.Stdin, os.Stdout) != nil {
+			fmt.Fprintln(os.Stderr, "sbxr candidate reservation refused")
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "verify-public-latest" {
 		if len(os.Args) != 2 || writePublicLatestVerification(context.Background(), os.Stdout, githubadapter.New()) != nil {
 			fmt.Fprintln(os.Stderr, "sbxr public latest verification refused")
