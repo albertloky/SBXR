@@ -39,10 +39,13 @@ if answer != "y" or mode == "wrong-prompt": raise SystemExit(0)
 print("----- BEGIN SBXR CLIENT CONFIGURATION -----")
 print(json.dumps({"outbounds":[{"type":"fixture","credential":"test-only"}]}))
 print("----- END SBXR CLIENT CONFIGURATION -----")
+if mode in ("rust", "wrong-result", "duplicate-result"):
+    print("Code: " + ("PROXY-INSTALLATION-ACTION-REFUSED" if mode == "wrong-result" else "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"))
+    if mode == "duplicate-result": print("Code: PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED")
 print("Press Enter to preserve this configuration in terminal scrollback and return to the menu.", flush=True)
-sys.stdin.readline()
+event({"event":"continue","value":sys.stdin.readline().strip()})
 print("SBXR V3\nProxy status: Running\nSubscription status: Available")
-print("Code: PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED")
+print("Code: SOFTWARE-LIFECYCLE-STATUS-READY" if mode in ("rust", "missing-result") else "Code: PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED")
 print("1. View details\n2. Show client configuration\n3. Rotate Client Identity\n0. Exit", flush=True)
 event({"event":"exit","number":sys.stdin.readline().strip()})
 '''
@@ -72,6 +75,28 @@ remote_outside_disclose
         self.assertIn({"event":"disclosure-answer","answer":"y"},events)
         self.assertNotIn("rotation-answer",[item["event"] for item in events])
         self.assertIn({"event":"exit","number":"0"},events)
+
+    def test_rust_result_before_continuation(self):
+        result, events = self.invoke("rust")
+        self.assertEqual(result.returncode, 0, (result.stderr, events))
+        self.assertEqual(json.loads(result.stdout), CONFIGURATION)
+        self.assertIn({"event": "exit", "number": "0"}, events)
+
+    def test_wrong_or_duplicate_result_before_continuation_refuses(self):
+        for mode in ("wrong-result", "duplicate-result"):
+            with self.subTest(mode=mode):
+                result, events = self.invoke(mode)
+                self.assertNotEqual(result.returncode, 0)
+                # Disclosure was explicitly confirmed; the wrapper may already
+                # have streamed it, but must refuse the session result.
+                self.assertNotIn("continue", [item["event"] for item in events])
+                self.assertIn("phase=result-mismatch", result.stderr)
+
+    def test_continuation_without_disclosure_result_refuses(self):
+        result, events = self.invoke("missing-result")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("phase=result-mismatch", result.stderr)
+        self.assertNotIn("exit", [item["event"] for item in events])
 
     def test_missing_label_never_confirms_rotation(self):
         result,events=self.invoke("missing")

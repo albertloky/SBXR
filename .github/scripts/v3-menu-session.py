@@ -598,13 +598,23 @@ class MenuSession:
                 self.write("0\n")
                 return
 
-    def wait_line(self, expected):
+    def disclosure_continuation(self, expected):
+        # Rust emits the result before the scrollback pause; the retained Go
+        # frontend emits it in the following menu. Validate either ordering.
+        found = False
         while True:
             line = self.stream.line(self.deadline)
             if line is None:
                 raise ProtocolError("exit-before-continuation")
-            if line == expected:
-                return
+            if line == DISCLOSURE_PROMPT:
+                return found
+            if line.startswith("Code: "):
+                if found or line.removeprefix("Code: ") != expected:
+                    raise ProtocolError("result-mismatch")
+                found = True
+            elif (line == "SBXR V3" or line.endswith("? [y/N]") or
+                  line.startswith("Type REMOVE SBXR to confirm")):
+                raise ProtocolError("prompt-mismatch")
 
     def wait_unconfirmed_marker(self, expected):
         while True:
@@ -826,9 +836,12 @@ def drive(args, cancelled=None, timing=None):
         elif args.mode == "disclose":
             session.expect_prompt(PROMPTS[args.label])
             session.write("y\n")
-            session.wait_line(DISCLOSURE_PROMPT)
+            result_consumed = session.disclosure_continuation(args.expected)
             session.write("\n")
-            session.wait_code(args.expected)
+            if result_consumed:
+                session.return_to_menu()
+            else:
+                session.wait_code(args.expected)
         else:
             result_consumed = False
             if (args.label == "Start setup" and args.confirmation == "none" and
