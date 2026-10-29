@@ -98,3 +98,22 @@ main-divergence review above; a policy-only diff is not an automatic review resu
 This decision grants no new live-run or host/security-mutation scope. The approved
 local implementation is reviewed before any commit, push or remote release
 mutation; this ADR does not record such an operation or a stable publication.
+
+## Candidate failures require an action-time decision
+
+The Owner approved this workflow safety change on 2026-10-29. Candidate failures
+now retain bounded, screened evidence and validated failure proposals, then stop
+with a failed result. Neither partial draft construction nor later unsigned or
+signed qualification failure automatically deletes drafts/tags, signs or pushes
+burn records, or publishes failed prereleases. This supersedes automatic candidate
+failure finalization; historical burns and the explicit stable abandonment path
+retain their meaning. Required host/client/secret cleanup is unchanged.
+
+A proposal is not authorization. Before any later failure action, obtain a separate
+explicit Owner decision for the exact run, commit, tag, sequence, release ID,
+asset identity and proposed effects, then freshly recheck the authenticated state.
+Changed or uncertain state stops the action. This change introduces no automatic
+resume or approval switch and does not make a failed qualification publishable.
+Candidate preflight refuses outstanding drafts rather than deleting them or reusing
+their pending sequence. Retained old drafts remain untouched; resolving them is a
+separate decision before another candidate can proceed.

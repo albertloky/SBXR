@@ -89,6 +89,11 @@ jobs:
           jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
           preflight_operation='check V3 declaration scope'
           jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and .support == {scope:"subscription-clean-install-only",sources:[],contract:"sbxr-subscription-update-v1"} and .owner_exception == null and .live89_correction_review == null' <<<"$V3_ATTEMPT" >/dev/null
+          preflight_operation='require resolved candidate drafts'
+          # Pending failure decisions must not lose their tag/sequence authority.
+          # Read only: a retained draft is never deleted to make preflight pass.
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > pending-release-observations.json
+          jq -e 'type == "array" and length > 0 and all(.[]; type == "array" and all(.[]; (.draft | type) == "boolean")) and ([.[][] | select(.draft == true)] | length == 0)' pending-release-observations.json >/dev/null
           preflight_operation='fetch source tags'
           git fetch --force --tags origin
           preflight_operation='collect release history'
@@ -318,7 +323,7 @@ jobs:
           mkdir -m 0700 constructed downloaded
           printf '[]' > drafts.json
           current_tag=''
-          cleanup_unsigned_drafts() {
+          retain_unsigned_drafts() {
             status=$?
             trap - EXIT
             test "$status" -ne 0 || return 0
@@ -348,38 +353,10 @@ jobs:
             go run ./cmd/sbxr-release qualification < candidate-failure-facts.json > candidate-failure-decision.json
             facts_sha256="$(sha256sum candidate-failure-facts.json | cut -d' ' -f1)"
             jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$(sha256sum candidate-draft-construction-decision.json | cut -d' ' -f1)" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "cleanup" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "cleanup-draft" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' candidate-failure-decision.json >/dev/null
-            while read -r action; do
-              tag="$(jq -r .tag <<<"$action")"
-              release_id="$(jq -r .release_id <<<"$action")"
-              commit="$(jq -r .commit <<<"$action")"
-              if jq -e .delete_release <<<"$action" >/dev/null; then
-                jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.tag_name == $tag and .target_commitish == $commit and .id == $release_id and .draft == true and .prerelease == false' "$tag.cleanup-release.json" >/dev/null
-                gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-              fi
-              if jq -e .delete_tag <<<"$action" >/dev/null; then
-                test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$commit"
-                gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
-              fi
-            done < <(jq -c '.actions[]' candidate-failure-decision.json)
-            printf '[]' > candidate-failure-verified-observations.json
-            while read -r action; do
-              tag="$(jq -r .tag <<<"$action")"
-              release_id="$(jq -r .release_id <<<"$action")"
-              python3 "$GITHUB_WORKSPACE/.github/scripts/observe-github-resource.py" "repos/$GITHUB_REPOSITORY/releases/$release_id" | jq -e '.state == "absent"' >/dev/null
-              python3 "$GITHUB_WORKSPACE/.github/scripts/observe-github-resource.py" "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" | jq -e '.state == "absent"' >/dev/null
-              expected="$(jq -c --arg tag "$tag" '.observations[] | select(.tag == $tag)' candidate-failure-facts.json)"
-              observation="$(jq -cnS --argjson expected "$expected" '{assets:[],body:"",commit:$expected.commit,created_release_id:$expected.created_release_id,draft:false,immutable:false,prerelease:false,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:false,sequence:$expected.sequence,tag:$expected.tag,tag_commit:null}')"
-              jq -cS --argjson observation "$observation" '. + [$observation]' candidate-failure-verified-observations.json > candidate-failure-verified-observations.next
-              mv candidate-failure-verified-observations.next candidate-failure-verified-observations.json
-            done < <(jq -c '.actions[]' candidate-failure-decision.json)
-            jq -cnS --slurpfile failure_decision candidate-failure-decision.json --slurpfile failure_facts candidate-failure-facts.json --slurpfile observations candidate-failure-verified-observations.json '{burned_identities:$failure_facts[0].burned_identities,failure_decision:$failure_decision[0],failure_facts:$failure_facts[0],observations:$observations[0],schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-verification"}' | tr -d '\n' > candidate-failure-verification-facts.json
-            go run ./cmd/sbxr-release qualification < candidate-failure-verification-facts.json > candidate-failure-verification-decision.json
-            facts_sha256="$(sha256sum candidate-failure-verification-facts.json | cut -d' ' -f1)"
-            prior_decision_sha256="$(sha256sum candidate-failure-decision.json | cut -d' ' -f1)"
-            jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-verification" and .outcome == "accepted" and .actions == [] and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256' candidate-failure-verification-decision.json >/dev/null
+            printf '%s\n' 'Candidate failure actions require a separate explicit Owner decision; no draft or tag was deleted.' >&2
             exit "$status"
           }
-          trap cleanup_unsigned_drafts EXIT
+          trap retain_unsigned_drafts EXIT
           printf '[]' > built-releases.json
           while read -r release; do
             tag="$(jq -r .tag <<<"$release")"
@@ -460,6 +437,7 @@ jobs:
           trap - EXIT
           cp "$V3_CHECKLIST" installer-updater-vps.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: qualification-boundary-input
           path: |
@@ -474,6 +452,18 @@ jobs:
             native/*/evidence/native-*.json
             downloaded/*/release-index.json
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Stage bounded candidate failure evidence
+        id: retained_evidence
+        if: always()
+        run: python3 .github/scripts/candidate-evidence.py retained-candidate-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && steps.retained_evidence.outcome == 'success'
+        with:
+          name: candidate-draft-failure-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: retained-candidate-evidence/
+          if-no-files-found: warn
           retention-days: 90
 
   sign:
@@ -864,9 +854,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
-      attestations: write
-      contents: write
-      id-token: write
+      attestations: read
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -918,8 +907,6 @@ jobs:
 
           test "$signed" = true || exit 0
           mkdir -m 0700 boundary/burned boundary/failure-state boundary/records boundary/rechecked
-          git config user.name github-actions
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch --force --tags origin
           printf '[]' > boundary/existing-burns.json
           while read -r tag; do
@@ -949,48 +936,7 @@ jobs:
           facts_sha256="$(sha256sum boundary/candidate-failure-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum boundary/qualification-manifest.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "failed-prerelease" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "finalize-failed-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/candidate-failure-decision.json >/dev/null
-          : > boundary/burn-refs
-          while read -r action; do
-            tag="$(jq -r .tag <<<"$action")"
-            commit="$(jq -r .commit <<<"$action")"
-            jq -S .burn <<<"$action" > "boundary/burned/$tag.json"
-            jq -jr .body <<<"$action" > "boundary/records/$tag.md"
-            if jq -e .burn_required <<<"$action" >/dev/null; then
-              .github/scripts/prepare-burn-tag.sh "boundary/burned/$tag.json" "$tag" "$commit" >> boundary/burn-refs
-            fi
-          done < <(jq -c '.actions[]' boundary/candidate-failure-decision.json)
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
-        if: steps.boundary.outputs.signed == 'true'
-        with:
-          subject-path: boundary/burned/*.json
-      - name: Publish the complete attested burned ledger atomically
-        if: steps.boundary.outputs.signed == 'true'
-        env:
-          BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
-        run: |
-          set -euo pipefail
-          mapfile -t refs < <(sed '/^$/d' boundary/burn-refs)
-          test "${#refs[@]}" -eq 0 || git push --atomic origin "${refs[@]}"
-      - name: Publish the rechecked burned releases as failed prereleases
-        if: steps.boundary.outputs.signed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          while read -r action; do
-            tag="$(jq -r .tag <<<"$action")"
-            release_id="$(jq -r .release_id <<<"$action")"
-            commit="$(jq -r .commit <<<"$action")"
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > boundary/final-release.json
-            jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.id == $release_id and .tag_name == $tag and .target_commitish == $commit' boundary/final-release.json >/dev/null
-            if jq -e '.draft == true and .prerelease == false' boundary/final-release.json >/dev/null; then
-              gh release edit "$tag" --notes-file "boundary/records/$tag.md" --draft=false --prerelease --latest=false
-            else
-              jq -e '.draft == false and .prerelease == true and .immutable == true' boundary/final-release.json >/dev/null
-              jq -j .body boundary/final-release.json | cmp - "boundary/records/$tag.md"
-            fi
-          done < <(jq -c '.actions[]' boundary/candidate-failure-decision.json)
-      - name: Remove only this run's fully recorded unsigned drafts and tags
+      - name: Prepare only this run's unsigned failure decision
         if: steps.boundary.outputs.signed != 'true' && steps.boundary.outputs.recorded == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1032,67 +978,12 @@ jobs:
           go run ./cmd/sbxr-release qualification < boundary/unsigned/candidate-failure-facts.json > boundary/unsigned/candidate-failure-decision.json
           facts_sha256="$(sha256sum boundary/unsigned/candidate-failure-facts.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$(sha256sum boundary/unsigned/candidate-draft-construction-decision.json | cut -d' ' -f1)" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "cleanup" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "cleanup-draft" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/unsigned/candidate-failure-decision.json >/dev/null
-          while read -r action; do
-            tag="$(jq -r .tag <<<"$action")"
-            release_id="$(jq -r .release_id <<<"$action")"
-            commit="$(jq -r .commit <<<"$action")"
-            if jq -e .delete_release <<<"$action" >/dev/null; then
-              gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > boundary/unsigned/final-release.json
-              jq -e --arg tag "$tag" --arg commit "$commit" --argjson release_id "$release_id" '.id == $release_id and .tag_name == $tag and .target_commitish == $commit and .draft == true and .prerelease == false' boundary/unsigned/final-release.json >/dev/null
-              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-            fi
-            if jq -e .delete_tag <<<"$action" >/dev/null; then
-              test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" = "$commit"
-              gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
-            fi
-          done < <(jq -c '.actions[]' boundary/unsigned/candidate-failure-decision.json)
-      - name: Verify the observed candidate failure transition
-        if: always() && (steps.boundary.outputs.signed == 'true' || steps.boundary.outputs.recorded == 'true')
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Stop for an explicit candidate failure decision
+        if: always()
         run: |
-          set -euo pipefail
-          if test "${{ steps.boundary.outputs.signed }}" = true; then
-            directory=boundary
-            printf '[]' > "$directory/verified-burns.json"
-            printf '[]' > "$directory/verified-observations.json"
-            git fetch --force --tags origin
-            while read -r action; do
-              tag="$(jq -r .tag <<<"$action")"
-              expected="$(jq -cS .burn <<<"$action")"
-              actual="$(git tag -l --format='%(contents)' "release-burned/$tag" | jq -cS .)"
-              test "$actual" = "$expected"
-              jq -cS --argjson burn "$actual" '. + [$burn] | sort_by(.original_tag)' "$directory/verified-burns.json" > "$directory/verified-burns.next"
-              mv "$directory/verified-burns.next" "$directory/verified-burns.json"
-              .github/scripts/recheck-qualified-release.sh "$directory/$tag.json" "$directory/verified/$tag" "$directory/$tag.verified-release.json"
-              entry="$(jq -c --arg tag "$tag" '.observations[] | select(.tag == $tag)' "$directory/candidate-failure-facts.json")"
-              commit="$(jq -r .commit <<<"$entry")"
-              tag_commit="$(git rev-parse "refs/tags/$tag^{commit}")"
-              test "$tag_commit" = "$commit"
-              observation="$(jq -cnS --argjson expected "$entry" --slurpfile release "$directory/$tag.verified-release.json" --arg tag_commit "$tag_commit" '{assets:$expected.assets,body:$release[0].body,commit:$expected.commit,created_release_id:$expected.created_release_id,draft:$release[0].draft,immutable:($release[0].immutable // false),prerelease:$release[0].prerelease,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:true,sequence:$expected.sequence,tag:$expected.tag,tag_commit:$tag_commit}')"
-              jq -cS --argjson observation "$observation" '. + [$observation]' "$directory/verified-observations.json" > "$directory/verified-observations.next"
-              mv "$directory/verified-observations.next" "$directory/verified-observations.json"
-            done < <(jq -c '.actions[]' "$directory/candidate-failure-decision.json")
-          else
-            directory=boundary/unsigned
-            jq -cS .burned_identities "$directory/candidate-failure-facts.json" > "$directory/verified-burns.json"
-            printf '[]' > "$directory/verified-observations.json"
-            while read -r action; do
-              tag="$(jq -r .tag <<<"$action")"
-              release_id="$(jq -r .release_id <<<"$action")"
-              python3 "$GITHUB_WORKSPACE/.github/scripts/observe-github-resource.py" "repos/$GITHUB_REPOSITORY/releases/$release_id" | jq -e '.state == "absent"' >/dev/null
-              python3 "$GITHUB_WORKSPACE/.github/scripts/observe-github-resource.py" "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" | jq -e '.state == "absent"' >/dev/null
-              expected="$(jq -c --arg tag "$tag" '.observations[] | select(.tag == $tag)' "$directory/candidate-failure-facts.json")"
-              observation="$(jq -cnS --argjson expected "$expected" '{assets:[],body:"",commit:$expected.commit,created_release_id:$expected.created_release_id,draft:false,immutable:false,prerelease:false,release_id:$expected.release_id,release_identity:$expected.release_identity,release_present:false,sequence:$expected.sequence,tag:$expected.tag,tag_commit:null}')"
-              jq -cS --argjson observation "$observation" '. + [$observation]' "$directory/verified-observations.json" > "$directory/verified-observations.next"
-              mv "$directory/verified-observations.next" "$directory/verified-observations.json"
-            done < <(jq -c '.actions[]' "$directory/candidate-failure-decision.json")
-          fi
-          jq -cnS --slurpfile burned "$directory/verified-burns.json" --slurpfile failure_decision "$directory/candidate-failure-decision.json" --slurpfile failure_facts "$directory/candidate-failure-facts.json" --slurpfile observations "$directory/verified-observations.json" '{burned_identities:$burned[0],failure_decision:$failure_decision[0],failure_facts:$failure_facts[0],observations:$observations[0],schema:"sbxr-release-qualification-facts-v1",stage:"candidate-failure-verification"}' | tr -d '\n' > "$directory/candidate-failure-verification-facts.json"
-          go run ./cmd/sbxr-release qualification < "$directory/candidate-failure-verification-facts.json" > "$directory/candidate-failure-verification-decision.json"
-          facts_sha256="$(sha256sum "$directory/candidate-failure-verification-facts.json" | cut -d' ' -f1)"
-          prior_decision_sha256="$(sha256sum "$directory/candidate-failure-decision.json" | cut -d' ' -f1)"
-          jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-verification" and .outcome == "accepted" and .actions == [] and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256' "$directory/candidate-failure-verification-decision.json" >/dev/null
+          printf '%s\n' 'Candidate qualification did not succeed. Available failure proposals and evidence are retained; deletion, burn signing and failed-release publication require a separate explicit Owner decision.' >&2
+          printf '%s\n' 'Candidate failure actions pending Owner decision. This run remains failed; no release/tag deletion, burn or failed-release publication was performed.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       - name: Stage bounded candidate failure evidence
         id: retained_evidence
         if: always()

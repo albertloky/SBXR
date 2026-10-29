@@ -45,7 +45,7 @@ func TestWorkflowCleanupRefusesUnavailableGitHubObservations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := workflowRun(t, ".github/workflows/candidate.yml", "cleanup-unqualified", "Remove only this run's fully recorded unsigned drafts and tags")
+	candidate := workflowRun(t, ".github/workflows/candidate.yml", "cleanup-unqualified", "Prepare only this run's unsigned failure decision")
 	end := strings.Index(candidate, "jq -cnS --slurpfile construction_decision")
 	if end < 0 {
 		t.Fatal("candidate observation boundary missing")
@@ -58,15 +58,8 @@ func TestWorkflowCleanupRefusesUnavailableGitHubObservations(t *testing.T) {
 		t.Fatal("stable observation boundary missing")
 	}
 	stable = "set -euo pipefail\nmanifest=failure/qualification-manifest.json\n" + stable[start:end]
-	verification := workflowRun(t, ".github/workflows/candidate.yml", "cleanup-unqualified", "Verify the observed candidate failure transition")
-	start = strings.Index(verification, "directory=boundary/unsigned")
-	end = strings.Index(verification[start:], "\nfi\n") + start
-	if start < 0 || end < start {
-		t.Fatal("candidate verification boundary missing")
-	}
-	verification = "set -euo pipefail\n" + verification[start:end]
 	target := map[string]any{"tag": "v2.0.0", "commit": strings.Repeat("a", 40), "release_id": 71, "created_release_id": 71, "sequence": 17, "assets": []any{}, "release_identity": map[string]any{"repository": "albertloky/SBXR", "tag": "v2.0.0", "commit": strings.Repeat("a", 40), "release_index_sha256": strings.Repeat("b", 64)}}
-	for name, script := range map[string]string{"candidate observation": candidate, "candidate verification": verification, "stable observation": stable} {
+	for name, script := range map[string]string{"candidate observation": candidate, "stable observation": stable} {
 		for _, codes := range [][2]string{{"404", "404"}, {"401", "404"}, {"403", "404"}, {"500", "404"}, {"transport", "404"}, {"404", "403"}} {
 			// Stable's fetched Git tag observation is separate; only its release
 			// classification is under test here.

@@ -69,6 +69,13 @@ request may already have succeeded. Only explicit abandonment invokes the stable
 failure finalizer and burn path. No failed test or incomplete cleanup can be
 converted into a pass by retrying publication.
 
+Candidate failure decisions are proposals only: `candidate.yml` retains them and
+fails without automatic draft/tag deletion, burn signing or failed-prerelease
+publication. Outstanding drafts block new candidate preflight until separately
+resolved. Later effects need an explicit action-time Owner decision and fresh
+identity/authentication checks; there is no automatic resume switch. See
+[ADR-0032](../../docs/adr/0032-qualified-publication-retry.md).
+
 An old clean-install-only candidate already finalized as an immutable failed
 prerelease can recover only with its authenticated `prepublication-failure` burn,
 original complete successful acceptance chain and exact unchanged identity,

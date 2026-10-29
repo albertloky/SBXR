@@ -290,8 +290,9 @@ trust store, gateway, credential or service was changed by these checks.
    and assets; `sign` contacts the Acceptance VPS as root *before* keyless signing
    and attestation. `acceptance-vps` creates the protected handoff/ephemeral gateway
    keys and runs the retained root transport, including service, hosts/NAT and
-   system-CA effects. Failure finalization can sign burn evidence, publish failed
-   prereleases and delete unsigned drafts/tags. Cancelling after signing is not
+   system-CA effects. Candidate failures now retain proposals and stop before burn
+   signing, failed prerelease publication or unsigned draft/tag deletion; each needs a separate
+   explicit action-time Owner decision under ADR-0032. Cancelling after signing is not
    an artifact-only boundary. Before dispatch, either review a separate bounded
    preparation-only change or obtain explicit permission for those exact combined
    effects. Stable publication remains a separate approved `stable.yml` dispatch.

@@ -72,6 +72,111 @@ else:sys.exit(99)
                 self.assertEqual('recorded=true' in outputs,permitted and not signed)
                 self.assertEqual('signed=true' in outputs,signed)
 
+class FailureDecisionTests(unittest.TestCase):
+    def test_candidate_has_no_automatic_failure_mutations(self):
+        text = WORKFLOW.read_text()
+        for forbidden in ('gh api --method DELETE', 'prepare-burn-tag.sh',
+                          'git push', '--draft=false', 'subject-path: boundary/burned'):
+            self.assertNotIn(forbidden, text)
+        failure = text.split('\n  cleanup-unqualified:', 1)[1]
+        self.assertIn('contents: read', failure)
+        self.assertIn('attestations: read', failure)
+        self.assertNotIn('id-token:', failure)
+        self.assertNotIn('continue-on-error:', failure)
+        self.assertIn('candidate-failure-finalization', failure)
+        self.assertIn('all(.actions[];', failure)
+
+    def test_partial_construction_trap_retains_draft_and_original_failure(self):
+        text = WORKFLOW.read_text()
+        start = text.index('          retain_unsigned_drafts() {')
+        end = text.index("          printf '[]' > built-releases.json", start)
+        shell = '\n'.join(line[10:] for line in text[start:end].splitlines())
+        for status in (0, 37):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                scripts = root/'.github/scripts'
+                scripts.mkdir(parents=True)
+                # Substitute external observation and decision producers only;
+                # execute the actual trap, jq bindings and filesystem retention.
+                recheck = scripts/'recheck-qualified-release.sh'
+                recheck.write_text('#!/bin/sh\ncp release.json "$3"\n')
+                recheck.chmod(0o700)
+                (scripts/'observe-github-resource.py').write_text("print('{\"state\":\"absent\"}')\n")
+                go = root/'go'
+                go.write_text("""#!/usr/bin/env python3
+import hashlib,json,sys
+raw=sys.stdin.buffer.read();facts=json.loads(raw);digest=hashlib.sha256(raw).hexdigest()
+action=dict(type='cleanup-draft',tag='v2.0.0',release_id=71,commit='a'*40,delete_release=True,delete_tag=False,facts_sha256=digest,prior_decision_sha256=facts['prior_decision_sha256'])
+print(json.dumps(dict(schema='sbxr-release-qualification-decision-v1',stage='candidate-failure-finalization',outcome='cleanup',facts_sha256=digest,prior_decision_sha256=facts['prior_decision_sha256'],actions=[action])))
+""")
+                go.chmod(0o700)
+                gh = root/'gh'
+                gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> attempted-mutation\nexit 99\n')
+                gh.chmod(0o700)
+                entry = dict(tag='v2.0.0',sequence=17,commit='a'*40,release_id=71,
+                             assets=[],release_identity={'repository':'fixture/repo'})
+                (root/'drafts.json').write_text(json.dumps([entry]))
+                (root/'release.json').write_text(json.dumps(dict(id=71,tag_name='v2.0.0',target_commitish='a'*40,draft=True,prerelease=False,assets=[],body='')))
+                (root/'candidate-draft-construction-facts.json').write_text(json.dumps({'preflight_facts':{'burned_identities':[]}}))
+                (root/'candidate-draft-construction-decision.json').write_text('{}')
+                env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH'],
+                           GITHUB_WORKSPACE=str(root), GITHUB_SHA='a'*40, GITHUB_REPOSITORY='fixture/repo',
+                           GITHUB_WORKFLOW_REF='fixture/ref', GITHUB_RUN_ID='17', GITHUB_SERVER_URL='https://github.com',
+                           BUILD_RELEASES=json.dumps([entry]))
+                result = subprocess.run(['bash','-c','set -euo pipefail\ncurrent_tag=\n'+shell+'\nexit '+str(status)],
+                                        cwd=root,env=env,capture_output=True)
+                self.assertFalse((root/'attempted-mutation').exists(), 'automatic failure mutation attempted')
+                self.assertEqual(result.returncode,status,result.stderr)
+                self.assertEqual(json.loads((root/'drafts.json').read_text()),[entry])
+                self.assertEqual((root/'candidate-failure-decision.json').exists(),status != 0)
+
+    def test_pending_draft_gate_is_read_only_and_fails_closed(self):
+        text = WORKFLOW.read_text()
+        start = text.index("          preflight_operation='require resolved candidate drafts'")
+        end = text.index("          preflight_operation='fetch source tags'", start)
+        shell = '\n'.join(line[10:] for line in text[start:end].splitlines())
+        cases = [('empty', [[]], 0, True), ('published', [[{'draft': False}]], 0, True),
+                 ('retained', [[{'draft': True}]], 0, False),
+                 ('later-page', [[{'draft': False}], [{'draft': True}]], 0, False),
+                 ('missing-field', [[{}]], 0, False), ('wrong-type', [[{'draft': 'false'}]], 0, False),
+                 ('missing-page', [], 0, False), ('bad-page', [{}], 0, False),
+                 ('unavailable', [[]], 1, False)]
+        for name, pages, status, accepted in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                gh = root/'gh'
+                gh.write_text('#!/bin/sh\n' +
+                              'test "$*" = "api repos/fixture/repo/releases?per_page=100 --paginate --slurp" || exit 99\n' +
+                              'printf "%s" "$FIXTURE_PAGES"\nexit "$FIXTURE_STATUS"\n')
+                gh.chmod(0o700)
+                env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ['PATH'],
+                           GITHUB_REPOSITORY='fixture/repo', FIXTURE_PAGES=json.dumps(pages),
+                           FIXTURE_STATUS=str(status))
+                result = subprocess.run(['bash', '-c', 'set -euo pipefail\n'+shell],
+                                        cwd=root, env=env, capture_output=True)
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_failure_stop_remains_failed_with_or_without_proposal(self):
+        text = WORKFLOW.read_text()
+        start = text.index('      - name: Stop for an explicit candidate failure decision')
+        end = text.index('      - name:', start+10)
+        step = text[start:end]
+        self.assertIn('if: always()', step)
+        shell = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        for proposal in (None, 'cleanup', 'failed-prerelease'):
+            with self.subTest(proposal=proposal), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if proposal:
+                    (root/'candidate-failure-decision.json').write_text(json.dumps({'outcome': proposal}))
+                summary = root/'summary'
+                result = subprocess.run(['bash', '-c', shell], cwd=root,
+                                        env=dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)), capture_output=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('pending Owner decision', summary.read_text())
+                if proposal:
+                    self.assertEqual(json.loads((root/'candidate-failure-decision.json').read_text()),
+                                     {'outcome': proposal})
+
 class FixtureAdmissionTests(unittest.TestCase):
     def test_optimized_fixture_refuses_before_any_host_access(self):
         for filename in ('test_mvp_startup_cleanup.py', 'test_mvp_protected_menu.py'):
@@ -92,7 +197,7 @@ class FixtureAdmissionTests(unittest.TestCase):
 class EvidenceTests(unittest.TestCase):
     def test_failed_workflow_preserves_only_screened_staging(self):
         text = WORKFLOW.read_text()
-        for job, end in [('acceptance-vps', 'owner-exception'), ('cleanup-unqualified', None)]:
+        for job, end in [('drafts', 'sign'), ('acceptance-vps', 'owner-exception'), ('cleanup-unqualified', None)]:
             body = text.split('\n  '+job+':', 1)[1]
             if end:
                 body = body.split('\n  '+end+':', 1)[0]
@@ -123,9 +228,11 @@ class EvidenceTests(unittest.TestCase):
             (root/'boundary').mkdir()
             facts = json.dumps(dict(schema='sbxr-release-qualification-facts-v1', stage='candidate-failure-finalization')).encode()
             (root/'boundary/candidate-failure-facts.json').write_bytes(facts)
+            (root/'candidate-failure-facts.json').write_bytes(facts)
             (root/'boundary/candidate-failure-decision.json').write_bytes(b'')
             with redirect_stderr(io.StringIO()):
-                self.assertEqual(module.stage(root, root/'retained'), 1)
+                self.assertEqual(module.stage(root, root/'retained'), 2)
+            self.assertEqual((root/'retained/candidate-failure-facts.json').read_bytes(), facts)
             self.assertEqual((root/'retained/boundary/candidate-failure-facts.json').read_bytes(), facts)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

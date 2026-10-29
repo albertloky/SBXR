@@ -84,6 +84,7 @@ if test "$FIXTURE" = interrupted; then kill -TERM "$$"; fi
 exit "$VERIFIER_STATUS"
 `,
 				"git": "#!/bin/sh\nprintf called > git-called\nexit 37\n",
+				"gh":  "#!/bin/sh\nprintf '[[]]\\n'\n",
 			} {
 				if err := os.WriteFile(filepath.Join(directory, name), []byte(source), 0o700); err != nil {
 					t.Fatal(err)
@@ -124,6 +125,7 @@ exit "$VERIFIER_STATUS"
 			command := exec.CommandContext(t.Context(), "bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry)
 			command.Dir = directory
 			command.Env = []string{
+				"GITHUB_REPOSITORY=fixture/repo",
 				"PATH=" + directory + ":" + os.Getenv("PATH"),
 				"V3_CHECKLIST=unused", "V3_ATTEMPT=" + attempt, "GH_TOKEN=" + token,
 				"SIGNED_URL=https://release-assets.githubusercontent.com/fixture?" + signedQuery,
@@ -246,8 +248,7 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		"candidate-preflight-decision.json",
 		`.facts_sha256 == $facts_sha256`,
 		`select(.type == "build-release")`,
-		"prepare-burn-tag.sh",
-		"git push --atomic origin",
+		"Stop for an explicit candidate failure decision",
 		"releases/latest",
 		"gh attestation verify",
 		"ubuntu-24.04",

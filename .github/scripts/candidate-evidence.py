@@ -26,7 +26,7 @@ def stage(root, destination):
     paths += [root / 'handoff/v3-scenarios' / (str(index) + suffix)
               for index in range(1, 65) for suffix in ('-facts.json', '-decision.json')]
     paths += [root / directory / ('candidate-failure-' + kind + '.json')
-              for directory in ('boundary', 'boundary/unsigned')
+              for directory in ('', 'boundary', 'boundary/unsigned')
               for kind in ('facts', 'decision', 'verification-facts', 'verification-decision')]
     retained, total, rejected = [], 0, 0
     for path in paths:

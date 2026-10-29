@@ -212,7 +212,7 @@ func TestStablePublicationRequiresExplicitManualDispatch(t *testing.T) {
 	}
 }
 
-func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t *testing.T) {
+func TestCandidateFailuresStopAndExplicitAbandonmentRetainsVerifiedFinalization(t *testing.T) {
 	candidateBody, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -232,23 +232,19 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	candidate, stable, recheck, burn := string(candidateBody), string(stableBody), string(recheckBody), string(burnBody)
 	assertLive89WorkflowPartition(t, candidate)
 	for _, required := range []string{
-		"--draft=false --prerelease --latest=false",
 		"post-sign-qualification-failure",
-		"Publish the rechecked burned releases as failed prereleases",
-		"fully recorded unsigned drafts",
+		"Stop for an explicit candidate failure decision",
+		"Prepare only this run's unsigned failure decision",
 		`stage:"candidate-failure-finalization"`,
 		"candidate-failure-facts.json",
 		"candidate-failure-decision.json",
 		`all(.actions[]; .type == "finalize-failed-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)`,
-		`jq -jr .body <<<"$action"`,
-		`if jq -e .burn_required <<<"$action"`,
-		`stage:"candidate-failure-verification"`,
-		"candidate-failure-verification-decision.json",
 	} {
 		if !strings.Contains(candidate, required) {
-			t.Fatalf("candidate.yml omitted qualified-failure contract %q", required)
+			t.Fatalf("candidate.yml omitted retained failure contract %q", required)
 		}
 	}
+
 	for _, required := range []string{
 		"operation:",
 		"- publish",
@@ -291,16 +287,18 @@ func TestReleaseFailuresWithdrawOnlyRecheckedTargetsAndBurnQualifiedIdentities(t
 	if strings.Count(candidate, ".github/scripts/recheck-qualified-release.sh") < 2 || strings.Count(stable, ".github/scripts/recheck-qualified-release.sh") < 2 {
 		t.Fatal("release mutations do not share the exact qualified-target recheck")
 	}
-	if !strings.Contains(burn, "git rev-parse -q --verify") || !strings.Contains(burn, "$(cat \"$payload\")") || strings.Count(candidate, ".github/scripts/prepare-burn-tag.sh") < 1 || strings.Count(stable, ".github/scripts/prepare-burn-tag.sh") < 2 {
+	if !strings.Contains(burn, "git rev-parse -q --verify") || !strings.Contains(burn, "$(cat \"$payload\")") || strings.Count(stable, ".github/scripts/prepare-burn-tag.sh") < 2 {
 		t.Fatal("burn evidence is not exact and retry-safe")
 	}
 	candidateFailure := candidate[strings.Index(candidate, "cleanup-unqualified:"):]
 	if !strings.Contains(candidateFailure, "gh attestation verify boundary/qualification-manifest.json") ||
 		!strings.Contains(candidateFailure, `.workflow.ref == "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main"`) ||
-		strings.Index(candidateFailure, "git push --atomic origin") > strings.Index(candidateFailure, `gh release edit "$tag"`) ||
+		!strings.Contains(candidateFailure, "Stop for an explicit candidate failure decision") ||
+		strings.Contains(candidateFailure, "git push") ||
+		strings.Contains(candidateFailure, "gh release edit") ||
 		strings.Contains(candidateFailure, `jq -nS --arg original_tag`) ||
 		strings.Contains(candidateFailure, `write-failed-acceptance-record.sh`) {
-		t.Fatal("candidate failure handling does not verify and burn every identity before release mutation")
+		t.Fatal("candidate failure handling must authenticate observations and stop before release mutation")
 	}
 	stableFailure := stable[strings.Index(stable, "finalize-failure:"):]
 	if !strings.Contains(stableFailure, "if: always() && inputs.operation == 'abandon'") || strings.Contains(stableFailure, "needs.preflight.result") || strings.Contains(stableFailure, "needs.publish.result") {
