@@ -274,18 +274,31 @@ class MenuSessionDeadlineTest(unittest.TestCase):
     def test_protected_cleanup_services_stderr_until_the_wrapper_finishes(self):
         with tempfile.TemporaryDirectory() as temporary:
             done=Path(temporary)/"done"
+            entered=Path(temporary)/"entered"
             child=("import os,signal,sys,pathlib\n"
-                   "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[1]).write_text('done');sys.exit(0)\n"
+                   "def finish(*_):\n"
+                   " pathlib.Path(sys.argv[2]).touch()\n"
+                   " written=os.write(2,b'X'*131072)\n"
+                   " pathlib.Path(sys.argv[1]).write_text(str(written))\n"
+                   " sys.exit(0)\n"
                    "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nsys.stdin.read()")
             journal=io.StringIO()
-            session=menu.MenuSession([sys.executable,"-c",child,str(done)],io.BytesIO(),time.monotonic()+5,
+            session=menu.MenuSession([sys.executable,"-c",child,str(done),str(entered)],io.BytesIO(),time.monotonic()+5,
                                      timing=menu.PhaseTiming(journal,time.monotonic()+5))
             try:
                 self.assertEqual(session.stream.line(session.deadline),"READY")
                 # Exercise the post-admission cleanup handshake on this OS.
                 session.protected_wrapper=True
                 session.stop()
-                self.assertTrue(done.exists(),"stderr must not block lawful wrapper cleanup")
+                evidence = dict(returncode=session.returncode,
+                                handler_entered=entered.exists(),
+                                stderr_bytes=session.stream.diagnostics.total,
+                                stderr_exceeded=session.stream.diagnostics.exceeded)
+                self.assertTrue(done.exists(),
+                                f"stderr must not block lawful wrapper cleanup: {evidence}")
+                self.assertEqual(done.read_text(), "131072", evidence)
+                self.assertEqual(session.stream.diagnostics.total, 131072, evidence)
+                self.assertEqual(session.returncode, 0, evidence)
                 self.assertTrue(session.cleaned)
             finally:
                 if session.process.returncode is None:session.stop()
