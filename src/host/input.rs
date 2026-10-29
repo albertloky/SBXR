@@ -360,6 +360,122 @@ mod output_tests {
     fn native_pipe_backpressure_cancels_without_inherited_flag_changes() {
         bounded_child("native-pipe");
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_pty_slave_backpressure_cancels_without_descriptor_changes() {
+        bounded_child("pty-slave");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pty_slave_child() {
+        use rustix::{
+            fs::{OFlags, fcntl_getfl, fstat},
+            io::fcntl_getfd,
+            pty::{OpenptFlags, ioctl_tiocgptpeer, openpt, unlockpt},
+        };
+        use std::{
+            fs::File,
+            io::IsTerminal,
+            time::{Duration, Instant},
+        };
+
+        // Allocate only this child's pair. Linux needs no grantpt/chmod/chown;
+        // unlock affects only the newly allocated master's slave-open lock.
+        // NOCTTY prevents controlling-terminal acquisition. No tcsetattr or
+        // existing terminal is involved, and master is never used as output.
+        let open_flags = OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC;
+        let master = openpt(open_flags).unwrap();
+        unlockpt(&master).unwrap();
+        let mut slave = File::from(ioctl_tiocgptpeer(&master, open_flags).unwrap());
+        assert!(slave.is_terminal());
+        let identity = |fd: &dyn AsFd| {
+            let stat = fstat(fd).unwrap();
+            (stat.st_dev, stat.st_ino, stat.st_rdev, stat.st_mode)
+        };
+        let slave_identity = identity(&slave);
+        let master_identity = identity(&master);
+        let slave_flags = fcntl_getfl(&slave).unwrap();
+        let slave_fd_flags = fcntl_getfd(&slave).unwrap();
+        let master_flags = fcntl_getfl(&master).unwrap();
+        let master_fd_flags = fcntl_getfd(&master).unwrap();
+        assert!(!slave_flags.contains(OFlags::NONBLOCK));
+        let stop = Cancellation::new();
+        let mut out = InterruptibleOutput::native(&mut slave, stop.clone()).unwrap();
+        let native = out
+            .native
+            .as_ref()
+            .expect("PTY slave must use native output");
+        assert_eq!(identity(&native.fd), slave_identity);
+        assert!(fcntl_getfl(&native.fd).unwrap().contains(OFlags::NONBLOCK));
+        assert!(
+            fcntl_getfd(&native.fd)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert_eq!(fcntl_getfl(&*out.output).unwrap(), slave_flags);
+        assert_eq!(fcntl_getfd(&*out.output).unwrap(), slave_fd_flags);
+
+        // Never drain the master while filling/writing. Plain x is unaffected
+        // by default output postprocessing; no fixture termios changes needed.
+        let mut filled = 0;
+        loop {
+            match native.write(&[b'x'; 4096]) {
+                Ok(n) => {
+                    assert!(n > 0);
+                    filled += n;
+                }
+                Err(rustix::io::Errno::AGAIN) => break,
+                Err(rustix::io::Errno::INTR) => continue,
+                other => panic!("fill PTY slave: {other:?}"),
+            }
+            assert!(filled <= 4 * 1024 * 1024, "PTY fixture did not fill");
+        }
+        assert!(filled > 0);
+        out.flush().unwrap(); // Must not wait for the unread master to drain.
+        let payload = vec![b'x'; 8 * 1024 * 1024];
+        let cancel = stop.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            cancel.cancel();
+        });
+        let started = Instant::now();
+        let result = out.write_all(&payload);
+        worker.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(stop.is_cancelled());
+        assert_eq!(result.unwrap_err().to_string(), "Owner session cancelled");
+        assert!(out.write_all(b"synthetic-sensitive-artifact").is_err());
+        assert!(out.flush().is_err());
+        drop(out);
+        assert_eq!(identity(&slave), slave_identity);
+        assert_eq!(fcntl_getfl(&slave).unwrap(), slave_flags);
+        assert_eq!(fcntl_getfd(&slave).unwrap(), slave_fd_flags);
+        assert_eq!(identity(&master), master_identity);
+        assert_eq!(fcntl_getfl(&master).unwrap(), master_flags);
+        assert_eq!(fcntl_getfd(&master).unwrap(), master_fd_flags);
+        drop(slave);
+
+        // Drain after cancellation/drop. Linux returns EIO after the final slave
+        // closes; a leaked adapter descriptor would instead hang, caught by the
+        // parent's three-second timeout and kill/reap guard.
+        let mut received = 0;
+        let mut bytes = [0; 4096];
+        loop {
+            match rustix::io::read(&master, &mut bytes) {
+                Ok(0) | Err(rustix::io::Errno::IO) => break,
+                Ok(n) => {
+                    assert!(bytes[..n].iter().all(|b| *b == b'x'));
+                    received += n;
+                    assert!(received <= filled + payload.len());
+                }
+                Err(rustix::io::Errno::INTR) => continue,
+                other => panic!("drain PTY master: {other:?}"),
+            }
+        }
+        assert!(received > 0);
+        drop(master);
+    }
+
     #[test]
     #[ignore = "invoked only by timeout-controlled parent tests"]
     fn blocked_output_child() {
@@ -370,6 +486,11 @@ mod output_tests {
             time::{Duration, Instant},
         };
         let mode = std::env::var("SBXR_OUTPUT_TEST").unwrap();
+        #[cfg(target_os = "linux")]
+        if mode == "pty-slave" {
+            pty_slave_child();
+            return;
+        }
         let (mut reader, mut writer): (File, File) = if mode == "socket" {
             let (r, w) = UnixStream::pair().unwrap();
             (OwnedFd::from(r).into(), OwnedFd::from(w).into())
