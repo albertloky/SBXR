@@ -347,3 +347,83 @@ fn binfmt_stack_never_hides_data_or_ambiguous_parentage() {
         );
     }
 }
+
+#[test]
+fn immediate_prunes_match_all_descendant_traversal_results() {
+    use std::os::unix::fs::MetadataExt;
+    let mut f = Fixture::new();
+    f.table.push_str(BINFMT_STACK);
+    f.table.push_str("12 11 8:9 / /proc/sys/fs/binfmt_misc/data rw - ext4 none rw\n13 4 8:1 /source /data/bind rw - ext4 none rw\n14 13 0:9 / /data/bind/inner rw - tmpfs none rw\n15 14 8:9 / /data/bind/inner/a[*]? rw - ext4 none rw\n");
+    let all = mounts(f.table.as_bytes()).unwrap();
+    for mount in &all {
+        let path = f.root.join(mount.path.trim_start_matches('/'));
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("entry"), b"fixture").unwrap();
+    }
+    fs::create_dir_all(f.root.join("etc/sing-box")).unwrap();
+    fs::write(f.root.join("etc/sing-box/config.json"), b"fixture").unwrap();
+    fs::write(f.root.join("var/lib/sing-box/owned"), b"fixture").unwrap();
+    let metadata = fs::metadata(&f.root).unwrap();
+    for uid in [Some(metadata.uid()), None] {
+        for mount in all.iter().filter(|m| !m.virtual_metadata) {
+            let optimized = scan_args(&f.root, mount, &all, uid, metadata.gid());
+            // Reference is the original all-descendant prune expression. Keep
+            // the exact ownership/exception tail; enumerate all matches rather
+            // than stopping at the first so a hidden coverage loss is visible.
+            let descendants: Vec<_> = all
+                .iter()
+                .filter(|m| m.path != mount.path && within(&m.path, &mount.path))
+                .collect();
+            let mut reference = optimized[..2].to_vec();
+            let tail = if descendants.is_empty() {
+                2
+            } else {
+                reference.push("(".into());
+                for (i, child) in descendants.iter().enumerate() {
+                    if i > 0 {
+                        reference.push("-o".into());
+                    }
+                    reference.extend([
+                        "-path".into(),
+                        literal(
+                            &f.root
+                                .join(child.path.trim_start_matches('/'))
+                                .to_string_lossy(),
+                        ),
+                    ]);
+                }
+                reference.extend([")".into(), "-prune".into(), "-o".into()]);
+                optimized.iter().position(|s| s == "-prune").unwrap() + 2
+            };
+            reference.extend_from_slice(&optimized[tail..]);
+            let collect = |mut args: Vec<String>| {
+                assert_eq!(args.pop().as_deref(), Some("-quit"));
+                let out = Command::new("/usr/bin/find").args(args).output().unwrap();
+                assert!(out.status.success(), "{:?}", out.stderr);
+                let mut paths: Vec<_> = String::from_utf8(out.stdout)
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect();
+                paths.sort();
+                paths
+            };
+            assert_eq!(
+                collect(optimized.clone()),
+                collect(reference),
+                "{} uid={uid:?}",
+                mount.path
+            );
+            let prune_count = optimized[..tail]
+                .iter()
+                .filter(|s| s.as_str() == "-path")
+                .count();
+            assert_eq!(
+                prune_count,
+                all.iter()
+                    .filter(|m| m.path != mount.path && m.parent == mount.id)
+                    .count()
+            );
+        }
+    }
+}

@@ -167,11 +167,13 @@ fn scan_args(root: &Path, mount: &Mount, all: &[Mount], uid: Option<u32>, gid: u
             .into_owned()
     };
     let mut args = vec![local(&mount.path), "-xdev".into()];
-    // Prune every nested mount, including same-device bind mounts. Each data
-    // mount is visited independently, even beneath a pruned virtual mount.
+    // The validated topology makes each immediate child a traversal barrier.
+    // Deeper descendants are already behind that prune; listing them again
+    // adds per-entry comparisons without changing coverage. Every data mount
+    // is still scanned independently, including below virtual and bind mounts.
     let children: Vec<_> = all
         .iter()
-        .filter(|m| m.path != mount.path && within(&m.path, &mount.path))
+        .filter(|m| m.path != mount.path && m.parent == mount.id)
         .collect();
     if !children.is_empty() {
         args.push("(".into());
