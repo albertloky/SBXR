@@ -97,6 +97,14 @@ impl Transport for Fixture {
                 CommandOutput::completed(0, table.into_bytes())
             }
             "/usr/bin/find" => {
+                assert!(command.timeout.unwrap() <= Duration::from_secs(30));
+                if self.scans.borrow().is_empty() {
+                    if self.fault == "slow-complete" {
+                        std::thread::sleep(Duration::from_millis(5100));
+                    } else if self.fault == "budget-exhausted" {
+                        std::thread::sleep(Duration::from_millis(60));
+                    }
+                }
                 if self.fault == "timeout" {
                     return Err(HostError::Timeout);
                 }
@@ -426,4 +434,33 @@ fn immediate_prunes_match_all_descendant_traversal_results() {
             );
         }
     }
+}
+
+#[test]
+fn complete_ownership_walk_can_exceed_metadata_query_budget() {
+    let mut f = Fixture::new();
+    f.fault = "slow-complete";
+    let r = runner(f);
+    assert!(
+        r.account_files(Some(999), 998, &Cancellation::new())
+            .is_ok()
+    );
+    assert_eq!(r.transport.reads.get(), 2);
+    assert_eq!(r.transport.scans.borrow().len(), 7);
+}
+
+#[test]
+fn ownership_walk_exhaustion_never_restarts_budget_or_accepts_partial_scan() {
+    let mut f = Fixture::new();
+    f.fault = "budget-exhausted";
+    let r = runner(f);
+    let result = r.account_files_until(
+        Some(999),
+        998,
+        &Cancellation::new(),
+        Instant::now() + Duration::from_millis(40),
+    );
+    assert!(matches!(result, Err(HostError::Timeout)));
+    assert_eq!(r.transport.reads.get(), 1);
+    assert_eq!(r.transport.scans.borrow().len(), 1);
 }

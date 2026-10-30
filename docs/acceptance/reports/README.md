@@ -31,6 +31,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [q205 administrative cleanup closeout — 2026-10-30](q205-administrative-cleanup-2026-10-30.md)
+  — separately approved package/residual cleanup completed; build205 remains unqualified, with exact-source CI and remaining five-journey/product-scan limits recorded.
+
 - [Installer repair and fresh readiness — 2026-09-26](installer-repair-readiness-2026-09-26.md)
   — repair passed native amd64/arm64 verification; fresh dispatch stopped before
   candidate creation because the reconstructed four-operation CA budget is short.

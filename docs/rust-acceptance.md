@@ -12,6 +12,10 @@ closed-gate increment notes describe their named revisions, not an additional
 current blanket refusal. Conditional code availability does not authorize or
 establish a live installation or stable release.
 
+## Latest dated qualification closeout
+
+[q205 administrative cleanup, 2026-10-30](acceptance/reports/q205-administrative-cleanup-2026-10-30.md) records completed approved cleanup of the failed build205 installation, exact candidate/source/CI bindings, preservation limits and remaining qualification work. It supersedes older missing-evidence/residue statements only where the dated observations resolve them; it does not qualify build205 or change the finite scope below.
+
 ## Scope reconciliation
 
 Current supported creation is clean install, Standard VLESS/REALITY, optional

@@ -229,7 +229,13 @@ impl<T: Transport> SystemRunner<T> {
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
             false,
         );
-        command.timeout = Some(remaining);
+        // Reading mount metadata remains an ordinary bounded query. Walking
+        // every data mount shares the larger whole-scan budget below.
+        command.timeout = Some(if program == "/usr/bin/cat" {
+            remaining.min(Duration::from_secs(5))
+        } else {
+            remaining
+        });
         let out = self.transport.run(&command, stop)?;
         if stop.cancelled() {
             return Err(HostError::Cancelled);
@@ -248,7 +254,18 @@ impl<T: Transport> SystemRunner<T> {
         gid: u32,
         stop: &Cancellation,
     ) -> Result<(), HostError> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // A complete filesystem walk is not a five-second metadata query:
+        // the captured q205 root alone required 5.47s, and all mounts 6.03s.
+        // Keep one finite, cancellable budget, never a fresh one per mount.
+        self.account_files_until(uid, gid, stop, Instant::now() + Duration::from_secs(30))
+    }
+    fn account_files_until(
+        &self,
+        uid: Option<u32>,
+        gid: u32,
+        stop: &Cancellation,
+        deadline: Instant,
+    ) -> Result<(), HostError> {
         let path = vec![self.path("/proc/self/mountinfo")];
         let before = self.scan_output("/usr/bin/cat", &path, stop, deadline)?;
         let all = mounts(before.bytes())?;
