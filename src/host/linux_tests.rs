@@ -2298,3 +2298,30 @@ fn cancelled_native_begin_refuses_before_lock_or_command_even_without_proof() {
 
 #[path = "linux/readiness_tests.rs"]
 mod readiness;
+
+#[test]
+fn pending_http_activation_removal_accepts_quiet_owned_material_but_not_foreign_bytes() {
+    for foreign in [false, true] {
+        let root = Root::new();
+        let (host, runtime) = http_removal_host(&root, true);
+        runtime.active.set(false);
+        let record = read_ownership(&host.inner.fs).unwrap().unwrap();
+        assert!(matches!(
+            record.http_operation().unwrap(),
+            Some(crate::records::HttpOperation::Enablement { checkpoint: 23, .. })
+        ));
+        let before = record.encode().unwrap();
+        if foreign {
+            root.write(crate::host::subscription::UNIT, b"foreign unit", 0o644);
+        }
+        let removal = crate::proxyinstallation::RemovalInstallation::new(host);
+        let review = removal.review(Action::CompleteRemoval);
+        assert_eq!(review.prepared.is_some(), !foreign);
+        assert_eq!(
+            fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+            before
+        );
+        assert!(!runtime.active.get());
+        assert!(runtime.firewall.get());
+    }
+}

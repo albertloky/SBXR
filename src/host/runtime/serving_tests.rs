@@ -46,6 +46,13 @@ impl Root {
         fs::metadata(&self.0).unwrap().uid()
     }
     fn setup(&self, archive: &AuthenticatedArchive) -> (OwnershipRecord, Vec<u8>) {
+        self.setup_state(archive, false)
+    }
+    fn setup_state(
+        &self,
+        archive: &AuthenticatedArchive,
+        pending: bool,
+    ) -> (OwnershipRecord, Vec<u8>) {
         let configuration =
             include_bytes!("../../../tests/testdata/server_configuration/standard.json").to_vec();
         let mut record = OwnershipRecord::new_standard(
@@ -68,7 +75,9 @@ impl Root {
         for _ in 1..HTTP_ENABLEMENT_CHECKPOINTS.len() {
             record = record.advance_http_enablement().unwrap();
         }
-        record = record.commit_http_enablement().unwrap();
+        if !pending {
+            record = record.commit_http_enablement().unwrap();
+        }
         self.write("usr/local/bin/sbxr", archive.executable(), 0o755);
         self.write(
             "var/lib/sbxr/installed.json",
@@ -377,10 +386,10 @@ fn peers(root: &Root, a: &AuthenticatedArchive, bad_image: bool) -> ObservedPeer
 }
 #[test]
 fn concrete_controller_starts_subscription_through_sandbox_safe_borrow_without_unlocking_owner() {
-    for restart in [false, true] {
+    for (pending, restart) in [(false, false), (false, true), (true, false)] {
         let root = Root::new();
         let a = crate::release_acquisition::fixture_archive();
-        let (record, _) = root.setup(&a);
+        let (record, _) = root.setup_state(&a, pending);
         let proof = a
             .bind_current(
                 a.executable(),
@@ -396,7 +405,9 @@ fn concrete_controller_starts_subscription_through_sandbox_safe_borrow_without_u
             effect: Box::new(|action, ctx| {
                 assert_eq!(
                     action,
-                    if restart {
+                    if pending {
+                        ServiceAction::EnableSubscription
+                    } else if restart {
                         ServiceAction::RestartSubscription
                     } else {
                         ServiceAction::StartSubscription
@@ -424,7 +435,13 @@ fn concrete_controller_starts_subscription_through_sandbox_safe_borrow_without_u
             socket,
         )
         .unwrap();
-        controller.start_subscription(restart, &context()).unwrap();
+        if pending {
+            controller.enable_subscription(&context()).unwrap();
+            assert!(record.http_operation().unwrap().is_some());
+            assert!(runtime_handoff::select_http_authority(&record, true).is_ok());
+        } else {
+            controller.start_subscription(restart, &context()).unwrap();
+        }
         assert_eq!(called.load(Ordering::SeqCst), 1);
         owner.verify().unwrap();
         assert!(matches!(

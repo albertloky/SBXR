@@ -531,3 +531,6 @@ impl crate::artifact_trust::AcquisitionTransport for NeverNetwork {
         panic!("unreleased entry must not acquire")
     }
 }
+
+#[path = "quiescence_tests.rs"]
+mod quiescence_tests;

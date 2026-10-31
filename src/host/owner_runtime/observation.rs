@@ -168,14 +168,32 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         }
         Ok(true)
     }
+    pub(super) fn quiescence_for_removal(&self, u: U, c: &StartContext) -> Result<bool, HostError> {
+        self.quiescence_state(u, c, u == U::Subscription)
+    }
     pub(super) fn quiescence(&self, u: U, c: &StartContext) -> Result<bool, HostError> {
+        self.quiescence_state(u, c, false)
+    }
+    fn quiescence_state(
+        &self,
+        u: U,
+        c: &StartContext,
+        allow_failed: bool,
+    ) -> Result<bool, HostError> {
         self.fs
             .directory_entries("sys/fs/cgroup/system.slice", Mode::from_raw_mode(0o755))?
             .ok_or(HostError::Foreign)?;
         let active = self.property(u, P::ActiveState, c)?;
         let pid = self.property(u, P::MainPid, c)?;
         let group = self.property(u, P::ControlGroup, c)?;
-        if active != "inactive" || pid != "0" || (!group.is_empty() && group != u.cgroup()) {
+        // A failed serving start is removable only with the same independent
+        // process, cgroup and listener absence proof. Ordinary startup keeps
+        // requiring inactive; a retained failure marker is not a running process.
+        if (active != "inactive" && !(allow_failed && active == "failed"))
+            || pid != "0"
+            || (!group.is_empty() && group != u.cgroup())
+            || (allow_failed && self.property(u, P::ControlPid, c)? != "0")
+        {
             return Ok(false);
         }
         if u == U::Proxy {

@@ -88,7 +88,7 @@ impl<I: OwnerIo> AuxiliaryRuntime for OwnerRuntime<'_, I> {
             fingerprint: sha256_hex(image.as_bytes()),
             serving_running: active,
             quiescent: !active
-                && self.quiescence(U::Subscription, &c)?
+                && self.quiescence_for_removal(U::Subscription, &c)?
                 && self.io.port_available(8443, &c)?,
             firewall_rules: self.text(Observation::Firewall, &c)?,
         })
