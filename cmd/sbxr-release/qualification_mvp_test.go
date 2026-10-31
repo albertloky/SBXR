@@ -77,6 +77,11 @@ func mvpQualificationFixtureWithReservations(t *testing.T, binary string, late, 
 	if len(proxyProfile) > 0 {
 		attempt["proxy_profile"] = proxyProfile[0]
 	}
+	if httpSubscription && cleanOnly {
+		packages := attempt["packages"].(map[string]any)
+		packages["certbot"] = v3SoftwarePackage{}
+		packages["snap"] = v3SoftwarePackage{}
+	}
 	attempt["after_snap_refresh"] = attempt["packages"]
 	if late {
 		archival, err := os.ReadFile("testdata/r24-late-confirmation.json")

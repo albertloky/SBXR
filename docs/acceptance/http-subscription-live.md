@@ -13,6 +13,20 @@ facts, request/hash chain, actual observations and validation/submission deadlin
 The baseline is release-order evidence, not a source to install. Historical repair
 scope keeps its original baseline/history restriction.
 
+For this exact fresh HTTP scope, Certbot and snap are not qualification
+prerequisites. In both `packages` and `after_snap_refresh`, represent each unused
+package with the explicit canonical empty receipt:
+`{"architecture":"","name":"","repository":"","sha256":"","size":0,"version":""}`.
+This means **not used by this qualification**, not an assertion that the package
+is absent from the host. Do not install, refresh or download it merely to fill a
+legacy field. Preserve unrelated installed packages and observe their actual
+state separately. Karing and the pinned proxy package still require current,
+verified identities. Any nonempty Certbot/snap receipt must remain fully valid;
+partial receipts refuse. Before/after sets must still match. Historical HTTPS,
+repair and recurring/source attempts retain their package requirements and old
+populated HTTP declarations remain readable. The declaration, signed manifest
+and every scenario must bind the same exact package set.
+
 The signed attempt may select `proxy_profile: "vless-vmess"` for the optional
 two-node setup. Omit `proxy_profile` for the existing VLESS-only qualification;
 its checks remain unchanged. No other nonempty profile is accepted. The two-node

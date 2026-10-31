@@ -685,7 +685,7 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||
 		!independentID(attempt.VPSID, "vps") || !independentID(attempt.OutsideRunnerID, "runner") || !independentID(attempt.MacRunnerID, "mac") || !regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`).MatchString(attempt.MacOSVersion) || !validSHA256(attempt.VPSIdentitySHA256) ||
-		attempt.ProxyPackage != expectedV3AttemptPackageIdentity(attempt, preflight) || !validV3Packages(attempt.Packages) || !validV3Packages(attempt.AfterSnapRefresh) ||
+		attempt.ProxyPackage != expectedV3AttemptPackageIdentity(attempt, preflight) || !validV3Packages(attempt.Packages, attempt) || !validV3Packages(attempt.AfterSnapRefresh, attempt) ||
 		attempt.Packages.Karing != attempt.AfterSnapRefresh.Karing || (!mvp && attempt.Packages.Certbot == attempt.AfterSnapRefresh.Certbot) || (mvp && attempt.Packages != attempt.AfterSnapRefresh) || preflight.LatestTag == nil {
 		return false
 	}
@@ -714,7 +714,14 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 	return seen[*preflight.LatestTag] && slices.Equal(attempt.RequiredScenarios, attemptScenarios(attempt))
 }
 
-func validV3Packages(packages v3QualificationPackages) bool {
+func validV3Packages(packages v3QualificationPackages, attempt v3QualificationAttempt) bool {
+	// Fresh HTTP qualification uses neither snap nor Certbot. An exact empty
+	// receipt means not used by this qualification, not absent from the host.
+	// Historical/source journeys still require their original package proofs.
+	unusedTLS := attempt.Schema == "sbxr-v3-qualification-attempt-v3" &&
+		attempt.EvidencePolicy == softwarelifecycle.MVPHTTPEvidencePolicy &&
+		attempt.Support != nil && attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly &&
+		attempt.Sources != nil && len(attempt.Sources) == 0
 	for _, item := range []struct {
 		actual                         v3SoftwarePackage
 		name, repository, architecture string
@@ -724,9 +731,15 @@ func validV3Packages(packages v3QualificationPackages) bool {
 		{packages.Karing, "karing", "https://github.com/KaringX/karing", packages.Karing.Architecture},
 	} {
 		p := item.actual
+		if unusedTLS && item.name != "karing" && p == (v3SoftwarePackage{}) {
+			continue
+		}
 		if p.Name != item.name || p.Repository != item.repository || p.Architecture != item.architecture || !validSHA256(p.SHA256) || p.Size <= 0 || !regexp.MustCompile(`^[0-9]+(?:[.-][0-9]+){0,5}$`).MatchString(p.Version) {
 			return false
 		}
+	}
+	if unusedTLS && packages.Certbot == (v3SoftwarePackage{}) {
+		return packages.Karing.Architecture == "macos-arm64" || packages.Karing.Architecture == "macos-amd64"
 	}
 	version := strings.Split(packages.Certbot.Version, ".")
 	if len(version) < 2 {
