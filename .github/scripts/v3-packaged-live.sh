@@ -21,6 +21,13 @@ menu_session_action() {
   menu_session_driver action "$label" "${expected#Code: }" --confirmation "$confirmation"
 }
 
+# The public Recover menu emits review_recover() before considering approval.
+# Ready has no recovery direction, so the internal recover() result is never
+# emitted and no confirmation must be sent. Other states still fail exactly.
+menu_session_recover_ready() {
+  menu_session_driver action Recover SOFTWARE-LIFECYCLE-STATUS-READY "$@"
+}
+
 menu_session_details() {
   menu_session_driver details 'View details'
 }

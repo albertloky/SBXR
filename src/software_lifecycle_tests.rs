@@ -109,6 +109,9 @@ fn local_ready_and_check_are_independent_from_proxy_configuration_and_do_not_cre
     );
     let mut m = root.module();
     assert_eq!(m.status().code, Code::StatusReady);
+    let review = m.review_recover();
+    assert_eq!(review.code, Code::StatusReady);
+    assert!(review.recovery_direction.is_none());
     assert_eq!(m.check().code, Code::CheckReleaseUnavailable);
     assert_eq!(m.transport.calls, 1);
     assert_eq!(m.update().code, Code::UpdateReleaseRefused);

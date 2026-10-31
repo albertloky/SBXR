@@ -844,12 +844,14 @@ class MenuSessionCleanupTest(unittest.TestCase):
 
 
 class MenuSessionDriverTest(unittest.TestCase):
-    def invoke(self,spec,*arguments,timeout=5):
+    def invoke(self,spec,*arguments,timeout=5,ready_recovery=False):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary); executable=root/"sbxr"
             executable.write_text(FIXTURE); executable.chmod(0o700)
             env=dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec))
-            result=subprocess.run([sys.executable,str(DRIVER),*arguments,"--executable",str(executable),"--timeout",str(timeout)],
+            command = (["bash", "-c", 'source "$1"; shift; menu_session_recover_ready "$@"', "fixture", str(DRIVER.with_name("v3-packaged-live.sh"))]
+                       if ready_recovery else [sys.executable,str(DRIVER),*arguments])
+            result=subprocess.run([*command,"--executable",str(executable),"--timeout",str(timeout)],
                                   env=env,text=True,capture_output=True,timeout=10)
             events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()] if (root/"events.jsonl").exists() else []
             return result,events
@@ -1055,6 +1057,33 @@ class MenuSessionDriverTest(unittest.TestCase):
                 result,events=self.invoke(spec,"action",label,code)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(events,[{"selected":"7"},{"exit":"0"}])
+
+    def test_ready_recovery_reproduces_internal_code_mismatch(self):
+        spec={"label":"Recover", "kind":"action", "actual":"SOFTWARE-LIFECYCLE-STATUS-READY"}
+        result,events=self.invoke(spec,"action","Recover","SOFTWARE-LIFECYCLE-RECOVER-NOT-REQUIRED")
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn("phase=result-mismatch code=SOFTWARE-LIFECYCLE-STATUS-READY",result.stderr)
+        self.assertEqual(events,[{"selected":"7"}])
+
+    def test_ready_recovery_wrapper_matches_public_review_without_confirmation(self):
+        spec={"label":"Recover", "kind":"action", "actual":"SOFTWARE-LIFECYCLE-STATUS-READY"}
+        result,events=self.invoke(spec,ready_recovery=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(events,[{"selected":"7"},{"exit":"0"}])
+
+    def test_ready_recovery_wrapper_refuses_other_states_and_confirmation(self):
+        for code in ("STATUS-RECOVERY-REQUIRED", "STATUS-UPDATE-IN-PROGRESS", "STATUS-UNKNOWN",
+                     "RECOVER-NOT-REQUIRED", "RECOVER-REFUSED", "RECOVER-PRIOR-RESTORED"):
+            with self.subTest(code=code):
+                spec={"label":"Recover", "kind":"action", "actual":"SOFTWARE-LIFECYCLE-"+code}
+                result,events=self.invoke(spec,ready_recovery=True)
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn("phase=result-mismatch",result.stderr)
+                self.assertEqual(events,[{"selected":"7"}])
+        spec=self.lifecycle_spec("Recover")
+        result,events=self.invoke(spec,ready_recovery=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(events,[{"selected":"7"}])
 
     def lifecycle_spec(self, label):
         return {"label":label, "prompt":label+" SBXR? [y/N]", "kind":"action",

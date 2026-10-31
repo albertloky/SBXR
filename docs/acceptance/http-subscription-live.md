@@ -68,6 +68,17 @@ Use exactly these five journeys in order:
    removal, exact owned absence and outside rejection, unrelated-resource/SSH
    preservation, and actual client, process, capture and secret cleanup.
 
+For an optional ready-state Recover observation, source the current
+`.github/scripts/v3-packaged-live.sh` and call `menu_session_recover_ready`
+(with `--executable`/`--timeout` if needed). The public menu displays
+`SOFTWARE-LIFECYCLE-STATUS-READY` from its recovery review and returns without
+confirmation when no direction exists. `RECOVER-NOT-REQUIRED` is an internal
+approved-method result, not this public menu result. Do not send approval to
+obtain it or accept recovery-required, unknown, failed or restored states as
+Ready. This observation does not add a recovery journey to the five above.
+Check still requires the exact result appropriate to the authenticated release;
+Complete removal still requires its explicit phrase and completed result.
+
 For `vless-vmess`, the same five journeys require the following additional exact
 evidence. A one-or-two-node condition is never sufficient:
 

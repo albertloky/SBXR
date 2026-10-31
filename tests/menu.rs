@@ -117,7 +117,7 @@ impl sbxr::software_lifecycle::Interface for ReadOnlyLifecycle {
         panic!("Update is excluded")
     }
     fn review_recover(&mut self) -> sbxr::software_lifecycle::Result {
-        Self::result(sbxr::software_lifecycle::Code::RecoverNotRequired)
+        Self::result(sbxr::software_lifecycle::Code::StatusReady)
     }
     fn recover(&mut self, _: sbxr::domain::Confirmation) -> sbxr::software_lifecycle::Result {
         panic!("ready lifecycle must not mutate")
@@ -140,7 +140,8 @@ fn native_frames_are_consumed_by_the_retained_qualification_driver() {
     // its process-owning constructor: no subprocess/session cleanup, ps, native
     // signalling, socket or system adapter from that module can run here.
     const PARSER: &str = r#"
-import importlib.util,json,sys
+import importlib.util,json,sys,subprocess
+from pathlib import Path
 spec=importlib.util.spec_from_file_location('driver',sys.argv[1]);driver=importlib.util.module_from_spec(spec);spec.loader.exec_module(driver)
 data=json.load(sys.stdin)
 class Lines:
@@ -152,7 +153,10 @@ s.choose(data['label'])
 if data['label']=='View details':
  s.wait_unconfirmed_marker(driver.DETAILS_PROMPT);s.write('\n');s.return_to_menu()
 elif data['label']=='Recover':
- s.wait_unconfirmed_marker('No recovery is available. If a change is in progress, wait for it to finish.');s.return_to_menu()
+ # Resolve the actual operator wrapper's arguments, without launching SBXR.
+ args=subprocess.check_output(['bash','-c', 'source "$1"; menu_session_driver() { printf "%s\\n" "$@"; }; menu_session_recover_ready', 'fixture', str(Path(sys.argv[1]).with_name('v3-packaged-live.sh'))],text=True).splitlines()
+ assert args==['action','Recover','SOFTWARE-LIFECYCLE-STATUS-READY'],args
+ s.wait_code(args[2])
 else:s.wait_code('SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT')
 assert writes==data['writes'],writes
 print('retained parser accepted')
