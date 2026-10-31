@@ -308,6 +308,9 @@ func TestCandidateConstructsDraftsAndSignsTheQualificationBoundary(t *testing.T)
 		t.Fatal("qualification attestation is not the final signing step")
 	}
 	cleanup := workflow[strings.Index(workflow, "cleanup-unqualified:"):]
+	if !strings.Contains(cleanup, "    permissions:\n      actions: read\n      attestations: read\n      contents: write\n") {
+		t.Fatal("candidate failure observations need the approved job-scoped draft access")
+	}
 	if strings.Contains(cleanup, "A_TAG:") || strings.Contains(cleanup, "B_TAG:") || !strings.Contains(cleanup, "BUILD_RELEASES:") {
 		t.Fatal("unsigned cleanup is not limited to releases built by this run")
 	}
