@@ -158,8 +158,8 @@ args=sys.argv[1:]
 if args==['api','repos/albertloky/SBXR/releases?per_page=100','--paginate','--slurp']:
  if os.environ['CASE']=='unavailable':sys.exit(1)
  print(os.environ['PAGES']);sys.exit(0)
-if args[:2]==['api','--include'] and args[2] in ['repos/albertloky/SBXR/git/ref/tags/'+t for t in ['v3.1.129','v3.1.130','release-burned/v3.1.129','release-burned/v3.1.130']]:
- code=403 if os.environ['CASE']=='ref-unavailable' or (os.environ['CASE']=='second-ref-unavailable' and args[2].endswith('v3.1.130')) else (200 if os.environ['CASE']=='second-burn-present' and args[2].endswith('release-burned/v3.1.130') else 404)
+if args[:2]==['api','--include'] and args[2] in ['repos/albertloky/SBXR/git/ref/tags/'+t for t in ['v3.1.129','v3.1.130','v3.1.131','release-burned/v3.1.129','release-burned/v3.1.130','release-burned/v3.1.131']]:
+ code=403 if os.environ['CASE']=='ref-unavailable' or (os.environ['CASE']=='third-ref-unavailable' and args[2].endswith('v3.1.131')) or (os.environ['CASE']=='second-ref-unavailable' and args[2].endswith('v3.1.130')) else (200 if (os.environ['CASE']=='third-burn-present' and args[2].endswith('release-burned/v3.1.131')) or os.environ['CASE']=='second-burn-present' and args[2].endswith('release-burned/v3.1.130') else 404)
  print('HTTP/2.0 '+str(code)+' Fixture\nContent-Type: application/json\n\n{}');sys.exit(0 if code==200 else 1)
 sys.exit(99)
 `
@@ -177,7 +177,7 @@ sys.exit(99)
 		}
 		releases = append(releases, map[string]any{"id": reservation.ReleaseID, "tag_name": reservation.Tag, "target_commitish": reservation.Commit, "draft": true, "prerelease": false, "immutable": false, "body": "Qualification pending.", "assets": assets})
 	}
-	for _, name := range []string{"retained", "published-without-digest", "current-candidate", "unexpected-candidate", "missing", "malformed", "unavailable", "ref-unavailable", "second-ref-unavailable", "second-burn-present", "second-missing", "duplicate-page"} {
+	for _, name := range []string{"retained", "published-without-digest", "current-candidate", "unexpected-candidate", "missing", "malformed", "unavailable", "ref-unavailable", "second-ref-unavailable", "second-burn-present", "second-missing", "third-missing", "third-ref-unavailable", "third-burn-present", "duplicate-page"} {
 		t.Run(name, func(t *testing.T) {
 			pages := any([]any{releases})
 			switch name {
@@ -185,6 +185,8 @@ sys.exit(99)
 				other := map[string]any{"id": 8, "tag_name": "v3.1.132", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
 				pages = []any{append(append([]any{}, releases...), other)}
 
+			case "third-missing":
+				pages = []any{releases[:2]}
 			case "second-missing":
 				pages = []any{releases[:1]}
 			case "missing":
