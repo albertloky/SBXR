@@ -194,7 +194,7 @@ func TestCandidatePreflightRetainsDiagnosticsWithoutChangingDecisionArtifact(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	preflight, _, _ := strings.Cut(string(body), "\n  build:")
+	preflight, _, _ := strings.Cut(string(body), "\n  rust-native:")
 	var diagnosticUpload, decisionUpload string
 	for _, step := range strings.Split(preflight, "\n      - ") {
 		if strings.Contains(step, "name: candidate-preflight-diagnostics\n") {

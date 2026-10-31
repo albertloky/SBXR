@@ -3,6 +3,11 @@ name: Construct qualified drafts
 on:
   workflow_dispatch:
     inputs:
+      inventory_only:
+        description: Read only the fixed retained q205 draft; skip all candidate and VPS actions
+        type: boolean
+        required: false
+        default: false
       b_tag:
         description: V3 candidate tag
         required: true
@@ -29,7 +34,7 @@ env:
 
 jobs:
   preflight:
-    if: github.ref == 'refs/heads/main'
+    if: ${{ !inputs.inventory_only && (github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -174,6 +179,7 @@ jobs:
           retention-days: 1
 
   rust-native:
+    if: ${{ !inputs.inventory_only }}
     needs: preflight
     strategy:
       fail-fast: true
@@ -230,6 +236,7 @@ jobs:
           retention-days: 1
 
   build:
+    if: ${{ !inputs.inventory_only }}
     needs: [preflight, rust-native]
     strategy:
       fail-fast: true
@@ -289,6 +296,7 @@ jobs:
           retention-days: 1
 
   drafts:
+    if: ${{ !inputs.inventory_only }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     permissions:
@@ -468,6 +476,7 @@ jobs:
           retention-days: 90
 
   sign:
+    if: ${{ !inputs.inventory_only }}
     needs: [preflight, drafts]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -569,7 +578,7 @@ jobs:
           subject-path: qualification-manifest.json
 
   acceptance-vps:
-    if: ${{ !fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
+    if: ${{ !inputs.inventory_only && (!fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review) }}
     needs: [preflight, sign]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -742,7 +751,7 @@ jobs:
           retention-days: 90
 
   owner-exception:
-    if: ${{ fromJSON(inputs.v3_attempt || '{}').owner_exception }}
+    if: ${{ !inputs.inventory_only && (fromJSON(inputs.v3_attempt || '{}').owner_exception) }}
     needs: [preflight, sign]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -799,7 +808,7 @@ jobs:
           retention-days: 90
 
   live89-correction:
-    if: ${{ fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
+    if: ${{ !inputs.inventory_only && (fromJSON(inputs.v3_attempt || '{}').live89_correction_review) }}
     needs: [preflight, sign]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -858,9 +867,10 @@ jobs:
           retention-days: 90
 
   cleanup-unqualified:
-    if: always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success'
+    if: always() && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success'))
     needs: [preflight, drafts, sign, acceptance-vps, owner-exception, live89-correction]
     runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.inventory_only && 10 || 360 }}
     permissions:
       actions: read
       attestations: read
@@ -869,11 +879,25 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
+      - name: Inspect only the fixed retained q205 draft
+        if: inputs.inventory_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/inspect-retained-q205.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always() && inputs.inventory_only
+        with:
+          name: retained-q205-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: q205-inventory/
+          if-no-files-found: error
+          retention-days: 90
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: ${{ !inputs.inventory_only }}
         with:
           go-version-file: go.mod
           cache: false
       - name: Evaluate exact candidate failure observations
+        if: ${{ !inputs.inventory_only }}
         id: boundary
         env:
           GH_TOKEN: ${{ github.token }}
@@ -970,7 +994,7 @@ jobs:
           prior_decision_sha256="$(sha256sum boundary/qualification-manifest.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "failed-prerelease" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "finalize-failed-release" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/candidate-failure-decision.json >/dev/null
       - name: Prepare only this run's unsigned failure decision
-        if: steps.boundary.outputs.signed != 'true' && steps.boundary.outputs.recorded == 'true'
+        if: ${{ !inputs.inventory_only && (steps.boundary.outputs.signed != 'true' && steps.boundary.outputs.recorded == 'true') }}
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
@@ -1012,17 +1036,17 @@ jobs:
           facts_sha256="$(sha256sum boundary/unsigned/candidate-failure-facts.json | cut -d' ' -f1)"
           jq -e --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$(sha256sum boundary/unsigned/candidate-draft-construction-decision.json | cut -d' ' -f1)" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "candidate-failure-finalization" and .outcome == "cleanup" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and all(.actions[]; .type == "cleanup-draft" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256)' boundary/unsigned/candidate-failure-decision.json >/dev/null
       - name: Stop for an explicit candidate failure decision
-        if: always()
+        if: ${{ !inputs.inventory_only && (always()) }}
         run: |
           printf '%s\n' 'Candidate qualification did not succeed. Available failure proposals and evidence are retained; deletion, burn signing and failed-release publication require a separate explicit Owner decision.' >&2
           printf '%s\n' 'Candidate failure actions pending Owner decision. This run remains failed; no release/tag deletion, burn or failed-release publication was performed.' >> "$GITHUB_STEP_SUMMARY"
           exit 1
       - name: Stage bounded candidate failure evidence
         id: retained_evidence
-        if: always()
+        if: ${{ !inputs.inventory_only && (always()) }}
         run: python3 .github/scripts/candidate-evidence.py retained-candidate-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always() && steps.retained_evidence.outcome == 'success'
+        if: ${{ !inputs.inventory_only && (always() && steps.retained_evidence.outcome == 'success') }}
         with:
           name: candidate-finalization-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: retained-candidate-evidence/

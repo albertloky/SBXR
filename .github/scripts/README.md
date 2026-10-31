@@ -380,3 +380,14 @@ it only to interpret historical records at
 The [DNS fixture review runbook](dns-child-fixture-review.md) documents the
 repository-local fixture/supervisor source, inert tests and remaining runtime
 prerequisites. It grants no tracing or signal-fixture execution authority.
+
+## Fixed retained q205 inventory
+
+The Owner-approved `candidate.yml` boolean `inventory_only` mode runs only
+`cleanup-unqualified` on main. All candidate, signing and VPS jobs and ordinary
+failure steps are disabled. The job retains its approved contents-write token,
+but `inspect-retained-q205.py` requests only fixed GETs for release 427637410,
+its four pinned assets and two refs. Assets are hashed, never executed. A denial
+or mismatch stops without retry. The ten-minute job uploads local observations;
+it does not alter the draft, tags, assets or qualification result. Reads are not
+an atomic snapshot. Normal candidate dispatch defaults this mode to false.

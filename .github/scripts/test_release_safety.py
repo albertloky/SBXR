@@ -105,7 +105,7 @@ class FailureDecisionTests(unittest.TestCase):
                           'git push', '--draft=false', 'subject-path: boundary/burned'):
             self.assertNotIn(forbidden, text)
         failure = text.split('\n  cleanup-unqualified:', 1)[1]
-        self.assertIn('contents: read', failure)
+        self.assertIn('    permissions:\n      actions: read\n      attestations: read\n      contents: write\n', failure)
         self.assertIn('attestations: read', failure)
         self.assertNotIn('id-token:', failure)
         self.assertNotIn('continue-on-error:', failure)
@@ -181,7 +181,7 @@ print(json.dumps(dict(schema='sbxr-release-qualification-decision-v1',stage='can
         start = text.index('      - name: Stop for an explicit candidate failure decision')
         end = text.index('      - name:', start+10)
         step = text[start:end]
-        self.assertIn('if: always()', step)
+        self.assertIn('if: ${{ !inputs.inventory_only && (always()) }}', step)
         shell = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
         for proposal in (None, 'cleanup', 'failed-prerelease'):
             with self.subTest(proposal=proposal), tempfile.TemporaryDirectory() as directory:
@@ -221,8 +221,12 @@ class EvidenceTests(unittest.TestCase):
             body = text.split('\n  '+job+':', 1)[1]
             if end:
                 body = body.split('\n  '+end+':', 1)[0]
-            self.assertIn('if: always()\n        run: python3 .github/scripts/candidate-evidence.py', body)
-            self.assertIn("if: always() && steps.retained_evidence.outcome == 'success'", body)
+            if job == 'cleanup-unqualified':
+                self.assertIn('if: ${{ !inputs.inventory_only && (always()) }}\n        run: python3 .github/scripts/candidate-evidence.py', body)
+                self.assertIn("if: ${{ !inputs.inventory_only && (always() && steps.retained_evidence.outcome == 'success') }}", body)
+            else:
+                self.assertIn('if: always()\n        run: python3 .github/scripts/candidate-evidence.py', body)
+                self.assertIn("if: always() && steps.retained_evidence.outcome == 'success'", body)
             self.assertIn('path: retained-candidate-evidence/', body)
         module = load('candidate-evidence')
         with tempfile.TemporaryDirectory() as directory:

@@ -45,14 +45,14 @@ func assertLive89WorkflowPartition(t *testing.T, workflow string) map[string]liv
 	t.Helper()
 	jobs := live89WorkflowJobs(t, workflow)
 	guard := "!fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review"
-	normal := guard
+	normal := "!inputs.inventory_only && (" + guard + ")"
 	needs := []string{"preflight", "drafts", "sign", "acceptance-vps", "owner-exception"}
-	condition := "always() && needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'"
+	condition := "always() && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'"
 	if jobs["acceptance-vps"].If != "${{ "+normal+" }}" {
 		t.Fatal("ordinary live entry must exclude archival correction")
 	}
 	needs = append(needs, "live89-correction")
-	condition += " && needs.live89-correction.result != 'success'"
+	condition += " && needs.live89-correction.result != 'success'))"
 	actual := slices.Clone(jobs["cleanup-unqualified"].Needs)
 	slices.Sort(actual)
 	slices.Sort(needs)
@@ -90,7 +90,7 @@ func TestLive89CorrectionWorkflowBinding(t *testing.T) {
 	}
 	workflow := string(data)
 	jobs := assertLive89WorkflowPartition(t, workflow)
-	if jobs["live89-correction"].If != "${{ fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}" {
+	if jobs["live89-correction"].If != "${{ !inputs.inventory_only && (fromJSON(inputs.v3_attempt || '{}').live89_correction_review) }}" {
 		t.Fatal("correction entry must require its exact declaration")
 	}
 	if strings.Count(workflow, `python3 .github/scripts/live89-correction-review.py "$GITHUB_SHA"`) != 3 {

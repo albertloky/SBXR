@@ -193,3 +193,18 @@ open-ended ignore-list. Further additions require a separate Owner decision.
 No existing draft, asset, tag, signature, stable release, repository permission or
 host setting is changed by this policy. It grants no signing, live test, cleanup,
 burn or publication authority.
+
+## Read-only inventory of the retained q205 draft
+
+On 2026-10-31 the Owner approved changing only `cleanup-unqualified` repository
+contents permission from read to write so its token can inspect private draft
+metadata, then separately approved a fixed `inventory_only` dispatch mode in
+that job. This token has real write capability; the mode itself performs only
+GETs and local evidence collection. All other jobs and ordinary failure steps
+are explicitly excluded, including candidate construction, signing, publication,
+deletion and VPS work. It accepts no alternate release target, credentials or
+additional permissions. A mismatch or access failure stops without retry.
+
+The pinned q205 metadata and four downloaded asset hashes are observations for a
+separately approved reservation decision, not qualification or publication proof.
+Neither this mode nor its retained artifact changes any draft, asset or tag.

@@ -1,0 +1,34 @@
+{
+  "tag": "v3.1.131",
+  "release_id": 427637410,
+  "sequence": 205,
+  "source": "d4836de007708a77c2bff6e32d5e766eeefaa51e",
+  "signing_state": "signed-unqualified",
+  "manifest_sha256": "075aa2762751c3ac21d20bb1123db18755077dc85b70bec7f5054c2cf85e49f0",
+  "assets": [
+    {
+      "id": 687941902,
+      "name": "install.sh",
+      "size": 76781,
+      "digest": "sha256:b9867b20e7f737cf144a09078d2ed7ec8c8e8f4a2ecad4bf9bc64ad1d7af11e1"
+    },
+    {
+      "id": 687941904,
+      "name": "release-index.json",
+      "size": 609,
+      "digest": "sha256:fc56560d8a687cc2130ce9e6688c9881dbbd80a721280eafc823d18103fb536f"
+    },
+    {
+      "id": 687941905,
+      "name": "sbxr-linux-amd64.tar.gz",
+      "size": 6223933,
+      "digest": "sha256:878c4f450c8962c892a0f4fe5aa62080a25f97988a20d540cc8cc4cb82fe87f7"
+    },
+    {
+      "id": 687941901,
+      "name": "sbxr-linux-arm64.tar.gz",
+      "size": 5273213,
+      "digest": "sha256:18068729f1793802e22d56466cfd34235f5652ce1ac45c2fa40af0fca4bcb435"
+    }
+  ]
+}
