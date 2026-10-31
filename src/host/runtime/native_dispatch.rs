@@ -30,11 +30,24 @@ impl NativePrivateRuntime {
             Instant::now() + runtime_handoff::START_TIMEOUT,
         );
         let _signals = super::shutdown::Signals::native(context.stop.clone())?;
+        context
+            .diagnostics
+            .stage(crate::runtime_handoff::diagnostics::Stage::Admission);
         let admission =
             crate::host::admission_private::OfflinePrivateAdmission::native(role, &context)
-                .map_err(refused)?;
+                .map_err(|error| {
+                    if role == Role::SubscriptionServing {
+                        context
+                            .diagnostics
+                            .emit(false, Err(context.check().err().unwrap_or(Error::Refused)));
+                    }
+                    refused(error)
+                })?;
         let installed = admission.record();
         if commit != installed.release_identity().commit() {
+            if role == Role::SubscriptionServing {
+                context.diagnostics.emit(false, Err(Error::Refused));
+            }
             return Err(Error::Refused);
         }
         match role {
@@ -43,7 +56,12 @@ impl NativePrivateRuntime {
                 // loaded build identity, protected installed pair and complete
                 // sandbox checks form the ordinary local contract. The Owner
                 // independently checks full child bytes when lending authority.
-                let host = ServingRuntimeHost::native_unreleased(&admission).map_err(refused)?;
+                let host = ServingRuntimeHost::native_unreleased(&admission).map_err(|error| {
+                    context
+                        .diagnostics
+                        .emit(false, Err(context.check().err().unwrap_or(Error::Refused)));
+                    refused(error)
+                })?;
                 if runtime_handoff::serve_subscription(&host, &Module::new(), &context)
                     == Code::Stopped
                 {

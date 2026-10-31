@@ -4,6 +4,7 @@
 //! selects an executable from arguments/environment. Native dispatch must supply
 //! authenticated installed identity and complete fresh protected host observations.
 //! A private CLI role alone is never permission. Legacy TLS remains refused.
+pub mod diagnostics;
 mod sandbox;
 use crate::{
     private_roles::Role,
@@ -14,6 +15,7 @@ use crate::{
     server_configuration::ServerConfiguration,
     subscription_serving::{Cancellation, Code, Generation, Module, State},
 };
+use diagnostics::{Diagnostics, Stage};
 use rustix::{
     fs::{self, AtFlags, FileType, FlockOperation, Mode, OFlags, Stat},
     io::{self as rio, Errno, IoSlice, IoSliceMut},
@@ -86,6 +88,7 @@ pub struct StartContext {
     pub stop: Cancellation,
     deadline: Instant,
     parents: Vec<Cancellation>,
+    pub diagnostics: Diagnostics,
 }
 impl StartContext {
     pub fn new(stop: Cancellation, deadline: Instant) -> Self {
@@ -93,6 +96,7 @@ impl StartContext {
             stop,
             deadline: deadline.min(Instant::now() + START_TIMEOUT),
             parents: Vec::new(),
+            diagnostics: Diagnostics::new(),
         }
     }
     pub fn deadline(&self) -> Instant {
@@ -529,6 +533,7 @@ impl<'a> Handoff<'a> {
         observations: &impl PeerObservations,
         context: &StartContext,
     ) -> Result<(), Error> {
+        context.diagnostics.stage(Stage::LenderAccept);
         let (mut connection, _) = loop {
             context.check()?;
             match self.listener.accept() {
@@ -542,9 +547,11 @@ impl<'a> Handoff<'a> {
         };
         drop(self.listener);
         connection.set_nonblocking(true).map_err(refused)?;
+        context.diagnostics.stage(Stage::LenderBinding);
         if let Some(proof) = self.binding {
             proof.verify_binding().map_err(refused)?;
         }
+        context.diagnostics.stage(Stage::LenderPeer);
         let expected = observations.peer(&connection)?;
         let accepted = match &self.expected {
             ExpectedPeer::Exact(exact) => &expected == exact,
@@ -556,12 +563,15 @@ impl<'a> Handoff<'a> {
         if !accepted {
             return Err(Error::Refused);
         }
+        context.diagnostics.stage(Stage::LenderRole);
         read_role(&mut connection, self.role, context)?;
+        context.diagnostics.stage(Stage::LenderRecheck);
         self.owner.verify()?;
         if observations.peer(&connection)? != expected {
             return Err(Error::Refused);
         }
         let duplicate = self.owner.descriptor()?;
+        context.diagnostics.stage(Stage::LenderSend);
         send_descriptor(&connection, &duplicate, context)
     }
 }
@@ -580,12 +590,20 @@ pub fn with_runtime_start(
         stop: Cancellation::new(),
         deadline: context.deadline,
         parents,
+        diagnostics: Diagnostics::new(),
     };
     thread::scope(|scope| {
         let _cancel_on_unwind = CancelOnDrop(handoff_context.stop.clone());
         let worker = thread::Builder::new()
             .name("sbxr-runtime-handoff".into())
-            .spawn_scoped(scope, || offer.accept(observations, &handoff_context));
+            .spawn_scoped(scope, || {
+                let serving = offer.role == Role::SubscriptionServing;
+                let result = offer.accept(observations, &handoff_context);
+                if serving && result.is_err() {
+                    handoff_context.diagnostics.emit(true, result);
+                }
+                result
+            });
         let Ok(worker) = worker else {
             return false;
         };
@@ -793,7 +811,7 @@ pub fn acquire_runtime_start(
 }
 
 /// The fixed unit, not a user-selected command. Byte parity is fixture-tested.
-pub const SERVING_UNIT: &str = "[Unit]\nDescription=SBXR Subscription Serving\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/sbxr --subscription-serving\nUser=root\nGroup=root\nRestart=no\nKillMode=control-group\nTimeoutStopSec=10s\nSendSIGKILL=yes\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictNamespaces=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nInaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next /proc /run/dbus\nTemporaryFileSystem=/run/systemd:ro,mode=000\nStandardInput=null\nStandardOutput=null\nStandardError=null\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n";
+pub const SERVING_UNIT: &str = "[Unit]\nDescription=SBXR Subscription Serving\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/sbxr --subscription-serving\nUser=root\nGroup=root\nRestart=no\nKillMode=control-group\nTimeoutStopSec=10s\nSendSIGKILL=yes\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\nProtectSystem=strict\nProtectHome=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictNamespaces=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nInaccessiblePaths=/var/lib/sbxr/subscription-token /var/lib/sbxr/subscription-staging -/var/lib/sbxr/client-identity-target.json -/var/lib/sbxr/client-identity-target.json.sbxr-next /proc /run/dbus\nTemporaryFileSystem=/run/systemd:ro,mode=000\nStandardInput=null\nStandardOutput=null\nStandardError=journal\nLogFilterPatterns=^SBXR_START_V1 role=serving stage=(build|admission|lock|connect|peer|descriptor|installed|authority|material|unit|sandbox|public-ip|configuration|bind|ready|lender-binding|lender-peer|lender-role|lender-recheck|lender-send|lender-accept) result=(ok|refused|busy|cancelled|deadline) first=(none|build|admission|lock|connect|peer|descriptor|installed|authority|material|unit|sandbox|public-ip|configuration|bind|ready|lender-binding|lender-peer|lender-role|lender-recheck|lender-send|lender-accept) elapsed_ms=[0-9]{1,7} stage_ms=[0-9]{1,7}$\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathAccess {
@@ -879,11 +897,13 @@ fn prepare(
     fixture: bool,
 ) -> Result<Prepared, Error> {
     context.check()?;
+    context.diagnostics.stage(Stage::Lock);
     let lock = host.acquire_start(context)?;
     lock.verify()?;
     if fixture && lock.root() == Path::new("/") {
         return Err(Error::Refused);
     }
+    context.diagnostics.stage(Stage::Installed);
     let installed = host.installed_identity(&lock, context)?;
     let body = host.ownership()?;
     let record = OwnershipRecord::decode(&body).map_err(refused)?;
@@ -894,16 +914,22 @@ fn prepare(
     {
         return Err(Error::Refused);
     }
+    context.diagnostics.stage(Stage::Authority);
     let selected = select_http_authority(&record, lock.is_borrowed())?;
+    context.diagnostics.stage(Stage::Material);
     host.validate_material(&record, &selected)?;
+    context.diagnostics.stage(Stage::Unit);
     if host.unit()? != SERVING_UNIT.as_bytes() {
         return Err(Error::Refused);
     }
+    context.diagnostics.stage(Stage::Sandbox);
     host.sandbox()?.validate()?;
     let recorded: Ipv4Addr = record.public_ipv4().parse().map_err(refused)?;
+    context.diagnostics.stage(Stage::PublicIp);
     if host.public_ipv4(context)? != recorded {
         return Err(Error::Refused);
     }
+    context.diagnostics.stage(Stage::Configuration);
     let configuration = host.configuration()?;
     if configuration.is_empty()
         || configuration.len() > MAX_CONFIGURATION
@@ -1035,19 +1061,33 @@ pub fn serve_subscription_loopback_fixture(
     serve(host, module, context, true)
 }
 fn serve(host: &impl ServingHost, module: &Module, context: &StartContext, fixture: bool) -> Code {
-    let Ok(prepared) = prepare(host, context, fixture) else {
-        return Code::Refused;
+    let prepared = match prepare(host, context, fixture) {
+        Ok(value) => value,
+        Err(error) => {
+            context.diagnostics.emit(false, Err(error));
+            return Code::Refused;
+        }
     };
-    let Ok(listener) = host.bind_listener(prepared.bind, prepared.port) else {
-        return Code::Refused;
+    context.diagnostics.stage(Stage::Bind);
+    let listener = match host.bind_listener(prepared.bind, prepared.port) {
+        Ok(value) => value,
+        Err(error) => {
+            context.diagnostics.emit(false, Err(error));
+            return Code::Refused;
+        }
     };
     if listener.local_addr().ok().is_none_or(|a| {
         a.ip() != IpAddr::V4(prepared.bind) || prepared.port != 0 && a.port() != prepared.port
     }) || prepared.lock.verify().is_err()
         || context.check().is_err()
     {
+        context
+            .diagnostics
+            .emit(false, Err(context.check().err().unwrap_or(Error::Refused)));
         return Code::Refused;
     }
+    context.diagnostics.stage(Stage::Ready);
+    context.diagnostics.emit(false, Ok(()));
     drop(prepared.lock);
     let public_failed = AtomicBool::new(false);
     let code = thread::scope(|scope| {

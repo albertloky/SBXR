@@ -46,11 +46,14 @@ pub fn acquire_serving_start(
             Err(Error::Busy) => (),
             Err(error) => return Err(error),
         }
+        context.diagnostics.stage(Stage::Connect);
         if let Ok((mut stream, peer_uid)) = connect() {
             let borrowed = (|| {
+                context.diagnostics.stage(Stage::Peer);
                 if peer_uid != uid || observe()? != process {
                     return Err(Error::Refused);
                 }
+                context.diagnostics.stage(Stage::Descriptor);
                 stream.set_nonblocking(true).map_err(refused)?;
                 write_role(&mut stream, Role::SubscriptionServing, context)?;
                 let file = receive_descriptor(&stream, context)?;
@@ -71,6 +74,10 @@ pub fn acquire_serving_start(
             if borrowed.is_ok() {
                 return borrowed;
             }
+            // Retain the first rejected phase even while ordinary retries continue.
+            context.diagnostics.rejected_current();
+        } else {
+            context.diagnostics.rejected(Stage::Connect);
         }
         context.pause(Duration::from_millis(25))?;
     }

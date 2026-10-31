@@ -35,3 +35,6 @@ release workflows bind its exact bytes. Stable replay reads the
 [historical Installer-Updater checklist](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/installer-updater-vps.md)
 from the original candidate Git revision. These checklists do not replace the
 current HTTP procedure.
+
+[Bounded startup diagnostics](startup-diagnostics.md) describes the fixed-category
+journal capture route and its limits; it grants no live-test authority.

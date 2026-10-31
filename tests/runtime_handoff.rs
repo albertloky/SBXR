@@ -531,15 +531,18 @@ impl ServingHost for ServingFixture {
 }
 
 #[test]
-fn fixed_service_unit_matches_the_go_reference_bytes() {
+fn fixed_service_unit_changes_only_filtered_diagnostic_stderr_from_retained_go_reference() {
+    let old = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/testdata/runtime_handoff/sbxr-subscription.service"
+    ));
+    assert_eq!(old.matches("StandardError=null\n").count(), 1);
     assert_eq!(
-        SERVING_UNIT.as_bytes(),
-        include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/testdata/runtime_handoff/sbxr-subscription.service"
-        ))
+        SERVING_UNIT,
+        old.replace("StandardError=null\n", concat!("StandardError=journal\n", "LogFilterPatterns=^SBXR_START_V1 role=serving stage=(build|admission|lock|connect|peer|descriptor|installed|authority|material|unit|sandbox|public-ip|configuration|bind|ready|lender-binding|lender-peer|lender-role|lender-recheck|lender-send|lender-accept) result=(ok|refused|busy|cancelled|deadline) first=(none|build|admission|lock|connect|peer|descriptor|installed|authority|material|unit|sandbox|public-ip|configuration|bind|ready|lender-binding|lender-peer|lender-role|lender-recheck|lender-send|lender-accept) elapsed_ms=[0-9]{1,7} stage_ms=[0-9]{1,7}$\n"))
     );
 }
+
 #[test]
 fn sandbox_requires_every_independent_observation() {
     sandbox().validate().unwrap();
@@ -574,9 +577,25 @@ fn every_failed_startup_proof_refuses_before_binding_or_serving() {
         "changed",
     ] {
         let host = ServingFixture::new(fault);
-        let result =
-            serve_subscription_loopback_fixture(&host, &Module::new(), &host.fixture.context());
+        let context = host.fixture.context();
+        let result = serve_subscription_loopback_fixture(&host, &Module::new(), &context);
         assert_eq!(result, Code::Refused, "fault {fault}");
+        let expected = match fault {
+            "retained" | "installed" | "pending" => "installed",
+            "material" => "material",
+            "unit" => "unit",
+            "sandbox" => "sandbox",
+            "public" => "public-ip",
+            "config" | "changed" => "configuration",
+            _ => unreachable!(),
+        };
+        let diagnostic = context.diagnostics.record(false, Err(Error::Refused));
+        assert!(
+            diagnostic.contains(&format!("stage={expected} ")),
+            "{fault}: {diagnostic}"
+        );
+        assert!(!diagnostic.contains("8.8.8.8"));
+
         assert_eq!(host.binds.load(Ordering::SeqCst), 0, "fault {fault}");
         assert!(!host.watcher_started.load(Ordering::SeqCst));
         drop(host.fixture.lock());
@@ -1345,4 +1364,68 @@ fn lock_start_refuses_symlinks_hardlinks_unsafe_parents_and_wrong_owner() {
             "kind {kind}"
         );
     }
+}
+
+#[test]
+fn serving_diagnostics_distinguish_retry_causes_without_changing_deadline_or_lock() {
+    for (case, expected) in [
+        ("socket", "connect"),
+        ("uid", "peer"),
+        ("descriptor", "descriptor"),
+    ] {
+        let f = Fixture::new();
+        let owner = f.lock();
+        let ctx = StartContext::new(
+            Cancellation::new(),
+            Instant::now() + Duration::from_millis(100),
+        );
+        let mut attempts = 0;
+        let result = acquire_serving_start(
+            &f.0,
+            f.uid(),
+            &ctx,
+            || {
+                Ok(SandboxProcess {
+                    pid: 123,
+                    uid: f.uid(),
+                    cgroup: SUBSCRIPTION_CGROUP.into(),
+                    executable_path: "/usr/local/bin/sbxr".into(),
+                })
+            },
+            || {
+                attempts += 1;
+                if case == "socket" {
+                    return Err(Error::Refused);
+                }
+                let (client, server) = UnixStream::pair().unwrap();
+                drop(server);
+                Ok((client, if case == "uid" { f.uid() + 1 } else { f.uid() }))
+            },
+        );
+        assert!(matches!(result, Err(Error::Deadline)));
+        assert!(attempts > 1);
+        let record = ctx.diagnostics.record(false, Err(Error::Deadline));
+        assert!(record.contains(&format!("first={expected} ")), "{record}");
+        assert!(record.contains("result=deadline"));
+        owner.verify().unwrap();
+    }
+    let f = Fixture::new();
+    let owner = f.lock();
+    let stop = Cancellation::new();
+    stop.cancel();
+    let ctx = StartContext::new(stop, Instant::now() + Duration::from_secs(1));
+    let result = acquire_serving_start(
+        &f.0,
+        f.uid(),
+        &ctx,
+        || panic!("cancelled observation"),
+        || panic!("cancelled connection"),
+    );
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(
+        ctx.diagnostics
+            .record(false, Err(Error::Cancelled))
+            .contains("result=cancelled first=none")
+    );
+    owner.verify().unwrap();
 }

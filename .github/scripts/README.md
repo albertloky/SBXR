@@ -34,6 +34,7 @@ relax their source, payload, signature or publication requirements.
 | One-target live89 recording correction | `live89-correction-review.py`, `test_live89_correction_review.py`; exact committed-source review and fresh archive payload verification under [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
 | Native Karing receipt readbacks | `native-receipts.py`, `capture-native.py`, adjacent tests; shared comparisons and prepared capture/verification callers with actual native-store provenance and strict node comparison |
+| Filtered startup diagnosis | `capture-startup-diagnostics.py`, `test_capture_startup_diagnostics.py`; bounded fixed-category journal projection into an exclusive mode0600 local file; [capture limits](../../docs/acceptance/startup-diagnostics.md) |
 | Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
 | Window expectation proxy pin | `prepare-mvp-window.py`, `test_prepare_mvp_window.py`; derive `/usr/bin/sing-box` SHA-256 from the receipt-verified local DEB without changing host facts |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |

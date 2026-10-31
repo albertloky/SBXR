@@ -41,6 +41,9 @@ impl OfflinePrivateAdmission {
         let mut admission =
             Self::capture(ProtectedFs::native()?, loaded, role, context.stop.clone())?;
         if role == Role::SubscriptionServing {
+            context
+                .diagnostics
+                .stage(crate::runtime_handoff::diagnostics::Stage::Sandbox);
             let sandbox = super::runtime::NativeServingEnvironment
                 .sandbox()
                 .map_err(refused)?;
@@ -49,6 +52,9 @@ impl OfflinePrivateAdmission {
         } else {
             admission.current = Some(NativeAdmission::snapshot(context.stop.clone())?);
         }
+        context
+            .diagnostics
+            .stage(crate::runtime_handoff::diagnostics::Stage::Admission);
         admission.verify()?;
         context.check().map_err(refused)?;
         Ok(admission)
