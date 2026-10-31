@@ -454,7 +454,20 @@ fn run_public_selected(
     let mut owner = NativeOwnerSources::authenticated_unreleased(&proof)?
         .with_cancellation(stop.clone())
         .frontend();
-    let transport = crate::release_https::HttpsTransport::new().map_err(|_| HostError::Foreign)?;
+    // Admission has authenticated the selected role. Keep Check on the same
+    // pinned delivery route; public roots cannot authenticate the private CA.
+    // Lifecycle still uses acquire_latest's stable proof and refuses candidates.
+    let candidate_transport = reviewed
+        .map(|input| {
+            crate::release_https::CandidateGatewayTransport::from_retained_gateway(
+                input.ca_sha256(),
+                &budget,
+            )
+        })
+        .transpose()
+        .map_err(|_| HostError::Foreign)?;
+    let transport = crate::release_https::LifecycleTransport::new(candidate_transport)
+        .map_err(|_| HostError::Foreign)?;
     let mut lifecycle = crate::software_lifecycle::Installed::new(
         super::lifecycle::LifecycleHost::native_unreleased()?,
         transport,

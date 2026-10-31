@@ -391,3 +391,38 @@ proxy traffic, client/Karing identity/link rotation, restart and complete cleanu
 The 596-case `f824c1f` result is baseline only. Source push, CI dispatch, signing,
 VPS/security/trust/credential changes and publication remain separately approved
 actions. Stable publication still requires its explicit post-qualification gate.
+
+## Build 206 lifecycle Check transport failure
+
+The signed v3.1.132/build 206 trial at source
+`d842eb0832b512be2c133b4cc4f4887c7f928f0e` failed on 2026-10-31:
+installation, setup and outside proxy traffic succeeded, but lifecycle Check
+returned `SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE` at 04:54:56 UTC instead
+of the required refusal. No later journey or Karing operation ran. Workflow
+[41165244627](https://github.com/albertloky/SBXR/actions/runs/41165244627)
+retains the exact failure. Complete removal and owned transport cleanup were
+verified by 05:02:54 UTC; this safety cleanup is not a passing removal journey.
+The draft and its four assets remain unchanged and unqualified. Failure
+finalization is only a proposal; no burn, deletion or publication was performed.
+
+Native candidate admission used the protected gateway transport, but lifecycle
+composition unconditionally selected public TLS roots. The retained gateway
+uses a private CA, which public roots correctly reject. An offline loopback TLS
+regression reproduces that failure and proves that retaining the scoped transport
+reaches the unchanged stable verifier, which refuses candidate metadata. No
+native TLS error detail was retained, so this establishes the concrete source
+mismatch and offline reproduction, not a captured TLS alert from the failed host.
+
+Lifecycle delivery now follows the already authenticated role: stable sessions
+keep public HTTPS, and candidate sessions keep the existing pinned CA, fixed
+route/URL allowlist, redirect refusal and original selection expiry. Check still
+requires stable Acceptance Record/signature/artifact verification; candidate
+metadata cannot become a stable release. Public/system trust and qualification
+expectations are unchanged. A future separately approved exact-candidate live
+trial remains necessary; local tests cannot replace the five journeys.
+
+Run artifacts: Go workspace `.scratch/acceptance/q206-full-20261031/OUTCOME.json`;
+offline regression artifacts: this workspace `.scratch/acceptance/q206-check/`.
+The retained outcome explicitly limits preservation claims: no exhaustive final
+comparison of unrelated services, markers, account databases, prior evidence or
+original Karing state was performed.

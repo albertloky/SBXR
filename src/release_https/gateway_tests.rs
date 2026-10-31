@@ -343,3 +343,81 @@ fn native_trust_entry_stays_unavailable_off_linux_root_and_never_uses_ambient_ca
         );
     }
 }
+
+#[test]
+fn lifecycle_latest_over_private_tls_requires_scoped_roots_and_still_refuses_candidate_metadata() {
+    // Same wire shape as qualificationGateway.serveLatest: not a public stable
+    // Acceptance Record, even though draft=false and immutable=true.
+    let assets: Vec<_> = ["install.sh", "release-index.json", "sbxr-linux-amd64.tar.gz", "sbxr-linux-arm64.tar.gz"]
+        .iter().enumerate().map(|(index, name)| serde_json::json!({
+            "name":name, "size":609, "digest":format!("sha256:{}", "a".repeat(64)),
+            "state":"uploaded", "url":format!("https://api.github.com/repos/albertloky/SBXR/releases/assets/{}", index + 1)
+        })).collect();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "tag_name": "v3.1.132", "target_commitish": "d842eb0832b512be2c133b4cc4f4887c7f928f0e",
+        "body": "", "draft": false, "prerelease": false, "immutable": true,
+        "assets": assets,
+        "sbxr_qualification": {"manifest":"fixture", "bundle":"fixture"}
+    }))
+    .unwrap();
+    for scoped in [false, true] {
+        let response = [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes(),
+            body.clone(),
+        ]
+        .concat();
+        let (address, server) = super::super::tests::server(response, false);
+        let f = Fixture::new();
+        let budget = SelectionBudget::new();
+        let candidate = if scoped {
+            let mut inner = HttpsTransport::configured(
+                f.roots().unwrap(),
+                Some(vec![("api.github.com", address)]),
+            )
+            .unwrap();
+            inner.scope = Scope::CandidateGateway(budget.deadline());
+            Some(CandidateGatewayTransport { inner })
+        } else {
+            None
+        };
+        let mut transport = LifecycleTransport::new(candidate).unwrap();
+        // Map public delivery to the same local listener without changing its
+        // public roots. A regression that discards candidate delivery hits the
+        // real certificate failure instead of reaching public DNS.
+        if let LifecycleTransport::Public(public) = &mut transport {
+            *public = HttpsTransport::configured(
+                rustls::RootCertStore {
+                    roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+                },
+                Some(vec![("api.github.com", address)]),
+            )
+            .unwrap();
+        }
+        let result = crate::release_acquisition::AuthenticatedArchive::acquire_latest(
+            &mut transport,
+            crate::release_identity::Architecture::Amd64,
+            &budget,
+        );
+        let request = server.join().unwrap();
+        assert_eq!(
+            result.unwrap_err(),
+            if scoped {
+                TrustError::Refused
+            } else {
+                TrustError::Unavailable
+            }
+        );
+        assert_eq!(!request.is_empty(), scoped);
+        if scoped {
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .starts_with("GET /repos/albertloky/SBXR/releases/latest ")
+            );
+        }
+    }
+}

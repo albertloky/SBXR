@@ -15,6 +15,32 @@ pub struct HttpsTransport {
     client: Client,
     scope: Scope,
 }
+/// Native lifecycle delivery selection after current-process authentication.
+/// Candidate delivery does not change acquire_latest's stable proof requirements.
+pub(crate) enum LifecycleTransport {
+    Public(HttpsTransport),
+    Candidate(CandidateGatewayTransport),
+}
+impl LifecycleTransport {
+    pub(crate) fn new(candidate: Option<CandidateGatewayTransport>) -> Result<Self> {
+        match candidate {
+            Some(transport) => Ok(Self::Candidate(transport)),
+            None => HttpsTransport::new().map(Self::Public),
+        }
+    }
+}
+impl AcquisitionTransport for LifecycleTransport {
+    fn get(
+        &mut self,
+        request: &AcquisitionRequest,
+        budget: &SelectionBudget,
+    ) -> Result<AcquisitionResponse> {
+        match self {
+            Self::Public(transport) => transport.get(request, budget),
+            Self::Candidate(transport) => transport.get(request, budget),
+        }
+    }
+}
 #[derive(Clone, Copy)]
 enum Scope {
     Public,

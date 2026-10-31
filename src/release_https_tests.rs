@@ -11,7 +11,7 @@ fn roots() -> rustls::RootCertStore {
     }
     roots
 }
-fn server(response: Vec<u8>, stall: bool) -> (SocketAddr, thread::JoinHandle<Vec<u8>>) {
+pub(super) fn server(response: Vec<u8>, stall: bool) -> (SocketAddr, thread::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let join = thread::spawn(move || {
