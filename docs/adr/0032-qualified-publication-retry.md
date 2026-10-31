@@ -208,3 +208,23 @@ additional permissions. A mismatch or access failure stops without retry.
 The pinned q205 metadata and four downloaded asset hashes are observations for a
 separately approved reservation decision, not qualification or publication proof.
 Neither this mode nor its retained artifact changes any draft, asset or tag.
+
+## Preserve the signed, unqualified third draft
+
+On 2026-10-31 the Owner approved exactly one further reservation: v3.1.131/205,
+release 427637410, source `d4836de007708a77c2bff6e32d5e766eeefaa51e`, run
+40840504747, signed-unqualified manifest
+`075aa2762751c3ac21d20bb1123db18755077dc85b70bec7f5054c2cf85e49f0`.
+The compiled policy pins all four asset IDs, sizes and digests, including index
+`fc56560d8a687cc2130ce9e6688c9881dbbd80a721280eafc823d18103fb536f`.
+Fresh read-only inventory run 41156444635 at source
+`39212a05669a2a57a7facb56ae61d14cb6729d44` matched the draft and downloaded bytes
+and found both tag refs explicitly absent. All non-inventory jobs were skipped.
+
+This extends the exact set to three retained identities. The q203/q204 pins and
+all qualification, non-promotion and failure-action requirements remain unchanged.
+New facts must bind all three records; q205 tag, sequence and release ID cannot be
+reused or promoted. With the previously observed history through 202, the next
+sequence is 206, prospectively v3.1.132, subject to fresh checks. Historical signed
+bytes are not rewritten. Administrative host cleanup did not qualify q205.
+No draft, asset, tag, signature or release metadata was changed by this adoption.

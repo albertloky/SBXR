@@ -23,7 +23,7 @@ type candidateReservation struct {
 	Tag                         string          `json:"tag"`
 }
 
-// Source-controlled Owner decision of 2026-10-29. Return fresh values so callers
+// Source-controlled Owner decisions of 2026-10-29 and 2026-10-31. Return fresh values so callers
 // cannot mutate the policy. Changing this record requires a separate review.
 func approvedCandidateReservations() []candidateReservation {
 	return []candidateReservation{{
@@ -46,6 +46,17 @@ func approvedCandidateReservations() []candidateReservation {
 			{ID: 687290585, Name: "release-index.json", Size: 609, Digest: "96d95146293481005b8977aac80c35e088a681d6c135cf2c00e7ee103b92e47c"},
 			{ID: 687290581, Name: "sbxr-linux-amd64.tar.gz", Size: 6223869, Digest: "ad40ce76868fa253cad6048a5eec3963d5e5e3b7a771001f2905877ba1f98dc9"},
 			{ID: 687290588, Name: "sbxr-linux-arm64.tar.gz", Size: 5273247, Digest: "a44812c96362a949c00353dcb73538fb430d2b1a4b6c7366ee8f719ddffa8b94"},
+		},
+	}, {
+		Tag: "v3.1.131", Sequence: 205, ReleaseID: 427637410,
+		Commit: "d4836de007708a77c2bff6e32d5e766eeefaa51e", RunID: "40840504747", SigningState: "signed-unqualified",
+		ReleaseIndexSHA256:          "fc56560d8a687cc2130ce9e6688c9881dbbd80a721280eafc823d18103fb536f",
+		QualificationManifestSHA256: "075aa2762751c3ac21d20bb1123db18755077dc85b70bec7f5054c2cf85e49f0",
+		Assets: []observedAsset{
+			{ID: 687941902, Name: "install.sh", Size: 76781, Digest: "b9867b20e7f737cf144a09078d2ed7ec8c8e8f4a2ecad4bf9bc64ad1d7af11e1"},
+			{ID: 687941904, Name: "release-index.json", Size: 609, Digest: "fc56560d8a687cc2130ce9e6688c9881dbbd80a721280eafc823d18103fb536f"},
+			{ID: 687941905, Name: "sbxr-linux-amd64.tar.gz", Size: 6223933, Digest: "878c4f450c8962c892a0f4fe5aa62080a25f97988a20d540cc8cc4cb82fe87f7"},
+			{ID: 687941901, Name: "sbxr-linux-arm64.tar.gz", Size: 5273213, Digest: "18068729f1793802e22d56466cfd34235f5652ce1ac45c2fa40af0fca4bcb435"},
 		},
 	}}
 }
@@ -115,8 +126,8 @@ type reservationObservations struct {
 
 func checkCandidateReservations(observed reservationObservations, allowed []string) bool {
 	policy := approvedCandidateReservations()
-	// The Owner-approved exception is exactly these two retained identities.
-	if len(policy) != 2 || observed.Releases == nil || len(observed.Refs) != len(policy) {
+	// The Owner-approved exception is exactly these three retained identities.
+	if len(policy) != 3 || observed.Releases == nil || len(observed.Refs) != len(policy) {
 		return false
 	}
 	for i, r := range policy {

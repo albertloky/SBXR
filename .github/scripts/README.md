@@ -45,7 +45,7 @@ relax their source, payload, signature or publication requirements.
 | Authenticated release asset reads | `download-release-asset.py` |
 | Release metadata observations | `observe-github-resource.py`; only an explicit HTTP404 proves absence; authentication, server and transport failures stop cleanup |
 | Candidate failure retention | `candidate-evidence.py`, `test_release_safety.py`; bounded screened proposals, read-only failure handling and explicit action-time decisions under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
-| Retained candidate reservation | `check-candidate-reservations.sh`; read-only exact observations for the two retained drafts and each tag/burn ref, validated by `sbxr-release candidate-reservations`, collected before draft creation and publication; signing verifies the successful current-run record without expanding its token |
+| Retained candidate reservation | `check-candidate-reservations.sh`; read-only exact observations for the three retained drafts and each tag/burn ref, validated by `sbxr-release candidate-reservations`, collected before draft creation and publication; signing verifies the successful current-run record without expanding its token |
 
 `v3-packaged-live.sh` inventories the complete protected candidate footprint and
 proves its absence after public cleanup, including the owned mutation-lock boot

@@ -43,3 +43,23 @@ Initial/final mount reads still receive at most5seconds, clamped to the remainin
 A delayed real-fixture walk exceeds the old query budget and completes all seven fixture data mounts plus final reread; restoring the original five-second bound makes that regression fail. A shorter shared-deadline test refuses after the first slow mount without scanning later mounts or accepting a partial result. Existing foreign-ownership, topology, cancellation, process and read-failure tests remain. Focused 13 cases passed; formatting and strict all-target Clippy passed. The full offline suite passed 665 tests (including five doctests), with one ignored test. An initial full run used a temporary directory outside the checkout and failed six relative Unix-socket fixture checks; rerunning with the required checkout-local temporary directory passed, without changing those tests. The original-bound negative control failed the new delayed-walk regression as expected. Exact source/CI identities are recorded in the run handoff rather than inferred from the earlier beac322 pass. No new VPS operation or candidate qualification follows from these source changes.
 
 The previously blocked documentation write was retried exactly once through normal approval review and succeeded. The old capacity failure remains recorded in the scratch handoff. Remote main and the prior CI result were refreshed read-only before integration; no failed release-metadata action was retried. A precise non-adopted q205 signed-draft reservation proposal is retained in the sibling workspace at .scratch/acceptance/q205-scan-budget/DISPOSITION.md. Its Owner policy decision remains separate from this authorized code fix.
+
+## Retained draft disposition, 2026-10-31
+
+Owner-approved inventory-only run
+[41156444635](https://github.com/albertloky/SBXR/actions/runs/41156444635), source
+`39212a05669a2a57a7facb56ae61d14cb6729d44`, succeeded. Its fixed GET-only collector
+matched draft 427637410/v3.1.131/205/source d4836de, all four asset IDs/sizes/hashes
+including independently downloaded bytes, and explicit absence of release/burn
+refs. All other jobs and ordinary failure steps were skipped. Local evidence is
+in the Go workspace `.scratch/acceptance/q205-inventory-41156444635/`;
+`result.json` SHA-256 is
+`10e9d1e265da91ac5fbc82b5368b88d036e221b9ea5f44a24d6e6297db656940`.
+Reads are not an atomic snapshot. No draft, tag or asset mutation was requested.
+
+The separately approved third reservation retains the signed-unqualified identity
+and prevents reuse/promotion. It does not qualify q205 or complete the product's
+remaining native acceptance. The first permission-only Verify run 41154716183
+failed on an outdated Python read-permission assertion; the assertion and affected
+workflow guards were corrected in the inventory-mode commit. That failed run is
+not relabeled as successful.

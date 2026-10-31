@@ -26,12 +26,12 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 			"missing draft":  func(o *reservationObservations) { o.Releases = []reservationRelease{} },
 			"duplicate page": func(o *reservationObservations) { o.Releases = append(o.Releases, o.Releases[index]) },
 			"other pending draft": func(o *reservationObservations) {
-				o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.131", Draft: true})
+				o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.132", Draft: true})
 			},
 			"published":        func(o *reservationObservations) { o.Releases[index].Draft = false },
 			"immutable":        func(o *reservationObservations) { o.Releases[index].Immutable = true },
 			"prerelease":       func(o *reservationObservations) { o.Releases[index].Prerelease = true },
-			"retagged":         func(o *reservationObservations) { o.Releases[index].Tag = "v3.1.131" },
+			"retagged":         func(o *reservationObservations) { o.Releases[index].Tag = "v3.1.132" },
 			"replacement id":   func(o *reservationObservations) { o.Releases[index].ID++ },
 			"changed commit":   func(o *reservationObservations) { o.Releases[index].Commit = strings.Repeat("a", 40) },
 			"changed body":     func(o *reservationObservations) { o.Releases[index].Body = "Qualified" },
@@ -57,15 +57,15 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 	if !checkCandidateReservations(o, nil) {
 		t.Fatal("unchanged retained draft refused")
 	}
-	o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.131", Draft: true})
-	if !checkCandidateReservations(o, []string{"v3.1.131"}) {
+	o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.132", Draft: true})
+	if !checkCandidateReservations(o, []string{"v3.1.132"}) {
 		t.Fatal("current candidate draft refused")
 	}
-	if checkCandidateReservations(o, []string{"v3.1.129", "v3.1.131"}) {
+	if checkCandidateReservations(o, []string{"v3.1.129", "v3.1.132"}) {
 		t.Fatal("reserved tag allowlist accepted")
 	}
 	o.Releases[0].Draft = false
-	if checkCandidateReservations(o, []string{"v3.1.131"}) {
+	if checkCandidateReservations(o, []string{"v3.1.132"}) {
 		t.Fatal("current candidate hid old draft promotion")
 	}
 }
@@ -73,7 +73,7 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.131", 205
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.132", 206
 	facts.ReservedIdentities = approvedCandidateReservations()
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 		},
 		"reserved tag":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.129" },
 		"reserved sequence": func(f *qualificationFacts) { f.Candidate.BSequence = 203 },
-		"skipped sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 206 },
+		"skipped sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 207 },
 		"published collision": func(f *qualificationFacts) {
 			r := qualifiedRelease(false)
 			r.Sequence = uint64Pointer(203)
@@ -108,7 +108,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err == nil {
 		t.Fatal("legacy facts reused reserved sequence")
 	}
-	facts.Candidate.BSequence = 205
+	facts.Candidate.BSequence = 206
 	release := qualifiedRelease(false)
 	release.Sequence = uint64Pointer(204)
 	release.Index.Sequence = 204
@@ -124,7 +124,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 	if err != nil || !bytes.Equal(mustJSON(decision), []byte(initialNormalDecision)) {
 		t.Fatal("historical decision changed")
 	}
-	if !reservedCandidate("v3.1.129", 204, 8) || !reservedCandidate("v3.1.131", 203, 8) || !reservedCandidate("v3.1.131", 205, 426359967) {
+	if !reservedCandidate("v3.1.129", 204, 8) || !reservedCandidate("v3.1.132", 203, 8) || !reservedCandidate("v3.1.132", 206, 426359967) {
 		t.Fatal("reservation collision incomplete")
 	}
 }
@@ -182,7 +182,7 @@ sys.exit(99)
 			pages := any([]any{releases})
 			switch name {
 			case "published-without-digest", "current-candidate", "unexpected-candidate":
-				other := map[string]any{"id": 8, "tag_name": "v3.1.131", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
+				other := map[string]any{"id": 8, "tag_name": "v3.1.132", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
 				pages = []any{append(append([]any{}, releases...), other)}
 
 			case "second-missing":
@@ -197,7 +197,7 @@ sys.exit(99)
 			raw, _ := json.Marshal(pages)
 			args := []string{filepath.Join(scripts, "check-candidate-reservations.sh")}
 			if name == "current-candidate" {
-				args = append(args, `["v3.1.131"]`)
+				args = append(args, `["v3.1.132"]`)
 			}
 			command := exec.Command("bash", args...)
 			command.Dir = root
@@ -235,7 +235,7 @@ func TestReservedDraftAllowsFreshCompleteQualificationAndPublication(t *testing.
 	if !decodeCanonical([]byte(boundary), &bf) || !decodeCanonical(bf.DraftVerificationFacts, &vf) || !decodeCanonical(vf.ConstructionFacts, &cf) || !decodeCanonical(cf.PreflightFacts, &pre) || !decodeCanonical(manifest, &m) {
 		t.Fatal("reservation chain decode")
 	}
-	if pre.Candidate.BSequence != 205 || len(pre.ReservedIdentities) != 2 || pre.ReservedIdentities[0].SigningState != "unknown" || pre.ReservedIdentities[1].SigningState != "signed-unqualified" {
+	if pre.Candidate.BSequence != 206 || len(pre.ReservedIdentities) != 3 || pre.ReservedIdentities[0].SigningState != "unknown" || pre.ReservedIdentities[1].SigningState != "signed-unqualified" {
 		t.Fatal("reservation not bound to fresh sequence")
 	}
 	for _, reserved := range approvedCandidateReservations() {
@@ -253,7 +253,7 @@ func TestReservedDraftAllowsFreshCompleteQualificationAndPublication(t *testing.
 func TestSecondReservationCannotBeOmittedRelabeledOrReused(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.131", 205
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.132", 206
 	for name, mutate := range map[string]func(*qualificationFacts){
 		"old policy only": func(f *qualificationFacts) { f.ReservedIdentities = f.ReservedIdentities[:1] },
 		"signing unknown": func(f *qualificationFacts) { f.ReservedIdentities[1].SigningState = "unknown" },
@@ -273,7 +273,7 @@ func TestSecondReservationCannotBeOmittedRelabeledOrReused(t *testing.T) {
 		})
 	}
 	for _, r := range approvedCandidateReservations() {
-		if !reservedCandidate(r.Tag, 0, 0) || !reservedCandidate("v3.1.131", r.Sequence, 0) || !reservedCandidate("v3.1.131", 205, r.ReleaseID) {
+		if !reservedCandidate(r.Tag, 0, 0) || !reservedCandidate("v3.1.132", r.Sequence, 0) || !reservedCandidate("v3.1.132", 206, r.ReleaseID) {
 			t.Fatal("reserved identity collision missed")
 		}
 	}
