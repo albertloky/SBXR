@@ -45,7 +45,7 @@ relax their source, payload, signature or publication requirements.
 | Authenticated release asset reads | `download-release-asset.py` |
 | Release metadata observations | `observe-github-resource.py`; only an explicit HTTP404 proves absence; authentication, server and transport failures stop cleanup |
 | Candidate failure retention | `candidate-evidence.py`, `test_release_safety.py`; bounded screened proposals, read-only failure handling and explicit action-time decisions under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
-| Retained candidate reservation | `check-candidate-reservations.sh`; read-only exact observations for the four retained drafts and each tag/burn ref, validated by `sbxr-release candidate-reservations`, collected before draft creation and publication; signing verifies the successful current-run record without expanding its token |
+| Retained candidate reservation | `check-candidate-reservations.sh`; read-only exact observations for the five retained drafts and each tag/burn ref, validated by `sbxr-release candidate-reservations`, collected before draft creation and publication; signing verifies the successful current-run record without expanding its token |
 
 `v3-packaged-live.sh` inventories the complete protected candidate footprint and
 proves its absence after public cleanup, including the owned mutation-lock boot
@@ -381,12 +381,12 @@ The [DNS fixture review runbook](dns-child-fixture-review.md) documents the
 repository-local fixture/supervisor source, inert tests and remaining runtime
 prerequisites. It grants no tracing or signal-fixture execution authority.
 
-## Fixed retained q206 inventory
+## Fixed retained q207 inventory
 
 The Owner-approved `candidate.yml` boolean `inventory_only` mode runs only
 `cleanup-unqualified` on main. All candidate, signing and VPS jobs and ordinary
 failure steps are disabled. The job retains its approved contents-write token,
-but `inspect-retained-q206.py` requests only fixed GETs for release 429718783,
+but `inspect-retained-q207.py` requests only fixed GETs for release 429811498,
 its four pinned assets and two refs. Assets are hashed, never executed. A denial
 or mismatch stops without retry. The ten-minute job uploads local observations;
 it does not alter the draft, tags, assets or qualification result. Reads are not

@@ -228,3 +228,24 @@ reused or promoted. With the previously observed history through 202, the next
 sequence is 206, prospectively v3.1.132, subject to fresh checks. Historical signed
 bytes are not rewritten. Administrative host cleanup did not qualify q205.
 No draft, asset, tag, signature or release metadata was changed by this adoption.
+
+## Preserve the signed, unqualified fifth draft
+
+On 2026-10-31 the Owner explicitly approved retaining failed v3.1.133/207 as
+unusable for release, with its draft and files unchanged. The fifth exact
+reservation pins release 429811498, source
+`10c6891d8a906031a13786dbe7a3dc8f77bc7dc0`, run 41181652726, and signed-unqualified
+manifest `43523b10bf5d8b245a10eb9c789798125383deb2d5aa02e8f62079d577afc607`.
+The compiled policy binds all four asset IDs, sizes and digests, including index
+`24c525e0667a420018b360397608c0b953213c33b795c8a49e1eecc261aa10d9`.
+
+The preceding q203–206 records remain unchanged. New facts must bind all five
+exact reservations; missing or changed drafts/assets and unavailable or present
+release/burn refs refuse. This identity cannot be reused or promoted. The fixed
+inventory-only mode now observes q207 through GET requests and hashes downloaded
+assets without executing them. Its permissions and branch isolation are unchanged.
+The failed live result remains failed; the subsequent operator-wrapper repair
+does not qualify it. This adoption does not modify any remote draft, asset, tag
+or signature and authorizes no new candidate, live attempt or publication.
+Sequence 208, prospectively v3.1.134, remains subject to fresh global history and
+collision checks and a separately authorized complete qualification.

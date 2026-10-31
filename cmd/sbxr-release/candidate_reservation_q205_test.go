@@ -7,7 +7,7 @@ import (
 
 func TestQ205ExactReservation(t *testing.T) {
 	p := approvedCandidateReservations()
-	if len(p) != 4 || p[2].Tag != "v3.1.131" || p[2].Sequence != 205 || p[2].ReleaseID != 427637410 || p[2].SigningState != "signed-unqualified" || p[2].RunID != "40840504747" {
+	if len(p) != 5 || p[2].Tag != "v3.1.131" || p[2].Sequence != 205 || p[2].ReleaseID != 427637410 || p[2].SigningState != "signed-unqualified" || p[2].RunID != "40840504747" {
 		t.Fatal("wrong third identity")
 	}
 	if !checkCandidateReservations(reservationFixture(), nil) {
@@ -56,7 +56,7 @@ func TestQ205ExactReservation(t *testing.T) {
 func TestQ205ReservationCannotBeOmittedOrRelabeled(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.133", 207
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.134", 208
 	for name, mutate := range map[string]func(*qualificationFacts){
 		"old two only": func(f *qualificationFacts) { f.ReservedIdentities = f.ReservedIdentities[:2] },
 		"unsigned":     func(f *qualificationFacts) { f.ReservedIdentities[2].SigningState = "unsigned" },
