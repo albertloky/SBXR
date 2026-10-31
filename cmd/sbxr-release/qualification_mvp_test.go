@@ -63,7 +63,7 @@ func mvpQualificationFixtureWithReservations(t *testing.T, binary string, late, 
 	}
 	if reservations != nil {
 		facts.ReservedIdentities = reservations
-		facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.132", highestSequence(facts)+1
+		facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.133", highestSequence(facts)+1
 	}
 	attempt := recurringAttemptFixture(t, source)
 	attempt["schema"] = "sbxr-v3-qualification-attempt-v3"

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       inventory_only:
-        description: Read only the fixed retained q205 draft; skip all candidate and VPS actions
+        description: Read only the fixed retained q206 draft; skip all candidate and VPS actions
         type: boolean
         required: false
         default: false
@@ -879,16 +879,16 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 0
-      - name: Inspect only the fixed retained q205 draft
+      - name: Inspect only the fixed retained q206 draft
         if: inputs.inventory_only
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/inspect-retained-q205.py
+        run: python3 .github/scripts/inspect-retained-q206.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always() && inputs.inventory_only
         with:
-          name: retained-q205-inventory-${{ github.run_id }}-${{ github.run_attempt }}
-          path: q205-inventory/
+          name: retained-q206-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: q206-inventory/
           if-no-files-found: error
           retention-days: 90
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16

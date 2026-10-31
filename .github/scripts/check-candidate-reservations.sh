@@ -5,7 +5,7 @@ test "$#" -le 1
 test "$GITHUB_REPOSITORY" = albertloky/SBXR
 allowed=${1:-'[]'}
 go run ./cmd/sbxr-release candidate-reservations -policy > reservation-policy.json
-jq -e 'length == 3' reservation-policy.json >/dev/null
+jq -e 'length == 4' reservation-policy.json >/dev/null
 gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > reservation-release-pages.json
 : > reservation-refs.jsonl
 while IFS= read -r tag; do

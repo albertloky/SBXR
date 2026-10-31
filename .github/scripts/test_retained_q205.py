@@ -85,7 +85,7 @@ else:
         self.assertEqual(len(steps),9)
         self.assertTrue(steps[0].startswith('uses: actions/checkout@'))
         self.assertIn('if: inputs.inventory_only',steps[1])
-        self.assertIn('run: python3 .github/scripts/inspect-retained-q205.py',steps[1])
+        self.assertIn('run: python3 .github/scripts/inspect-retained-q206.py',steps[1])
         self.assertIn('if: always() && inputs.inventory_only',steps[2])
         for step in steps[3:]: self.assertIn('if: ${{ !inputs.inventory_only',step)
         self.assertIn('      inventory_only:\n        description:',text)
