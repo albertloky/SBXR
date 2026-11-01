@@ -11,19 +11,26 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         token: &SubscriptionCredential,
         c: &StartContext,
     ) -> Result<(), HostError> {
-        loop {
-            c.check().map_err(refused)?;
-            match self.loaded(r, a, token, c) {
-                Ok(()) => return c.check().map_err(refused),
-                Err(HostError::Busy) => {}
-                Err(error) => return Err(error),
+        let result = (|| {
+            loop {
+                c.check().map_err(refused)?;
+                match self.loaded(r, a, token, c) {
+                    Ok(()) => return c.check().map_err(refused),
+                    Err(HostError::Busy) => {}
+                    Err(error) => return Err(error),
+                }
+                c.check().map_err(refused)?;
+                std::thread::sleep(
+                    Duration::from_millis(50)
+                        .min(c.deadline().saturating_duration_since(Instant::now())),
+                );
             }
-            c.check().map_err(refused)?;
-            std::thread::sleep(
-                Duration::from_millis(50)
-                    .min(c.deadline().saturating_duration_since(Instant::now())),
-            );
-        }
+        })();
+        crate::host::timing::subscription_result(
+            crate::host::timing::SubscriptionStage::Readiness,
+            &result,
+        );
+        result
     }
     pub(super) fn loaded(
         &self,

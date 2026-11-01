@@ -78,3 +78,46 @@ journeys, this journal stderr routing and bounded diagnostic read/capture, owned
 cleanup, and fresh attendance/deadlines. It must not reuse failed208 or infer
 permission for a new trial from these offline changes. Failed208 disposition,
 new signing and publication remain separate from this implementation.
+
+## Owner enablement checkpoints
+
+The public native Owner now emits `SBXR_NATIVE_SUBSCRIPTION` through its existing
+private nonblocking timing pipe. This is distinct from the subscription-service
+journal record above. The existing `v3-menu-session.py` strict stderr relay accepts
+only `stage`, `outcome`, positive numeric `id` and bounded numeric `elapsed_us`,
+then adds receipt time and the menu's remaining budget. Retain that filtered
+relay output in the usual private capture; never substitute raw child stderr.
+No new journal route, environment switch, file descriptor flags or host settings
+are introduced. The producer writes once per terminal observation (under512bytes),
+without retry or flush. A missing/truncated/dropped record is missing evidence.
+
+Enablement emits one terminal record with the last entered fixed stage: prepare,
+checkpoint (ownership publication), effect, verify, commit (final durable
+publication), or disclosure. The loaded-authority readiness wait separately emits
+one readiness record with its actual result, not one per poll. Both use only `ok`
+or the closed HostError categories; no record/error debug formatting, payload,
+credential, URL, address or path is accepted. Generic effect/checkpoint failures
+do not identify an individual installation substep. Readiness observations also
+occur when this shared wait is used by rotation/repair; bind the capture to the
+actual public operation, not a guessed operation from the label.
+
+Readiness/foreign followed by effect/foreign distinguishes loaded proof refusal
+from a final commit/foreign. Verify refusal is separately labeled. Disclosure/ok
+means the orchestration reached disclosure after durable commit, not necessarily
+that link display succeeded: the public result remains authoritative. A lost
+record, panic, failure before enablement, or failure before the readiness wait
+cannot be inferred from absence. Diagnostics cannot confer authority or change
+outcomes, cancellation, deadline construction, retries or ownership checks.
+Elapsed time is relative to this Owner process's trace, not the private child's
+clock. It does not retrospectively establish build210's cause or the exact
+predicate within a broad HostError category. Existing adapters can map several
+causes (including StartContext refusal) to `foreign`; this diagnostic preserves
+that mapping rather than inventing a more precise cause.
+
+Focused fixtures cover successful enablement, verify refusal, a real conflicting
+staged ownership publication at final commit, and a ready HTTP server with a
+conflicting listener PID. The relay rejects unknown fields/categories, malformed
+scalars and duplicate keys. Native Linux delivery uses the already-tested timing
+sink; actual future packaged capture remains live-unvalidated. Future approved
+qualification must bind the updated relay and source and preserve the original
+public results alongside these secret-free records.

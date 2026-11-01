@@ -2895,7 +2895,26 @@ fn ready_server_does_not_commit_when_owner_listener_proof_disagrees() {
             io: io.clone(),
         });
         let selected = owner.review(Action::EnableSubscription).prepared.unwrap();
-        let outcome = owner.execute(selected, Confirmation::Approved).outcome;
+        let (result, diagnostics) =
+            crate::host::timing::capture(|| owner.execute(selected, Confirmation::Approved));
+        let outcome = result.outcome;
+        let text = String::from_utf8(diagnostics).unwrap();
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("SBXR_NATIVE_SUBSCRIPTION "))
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["stage"], "readiness");
+        assert_eq!(
+            rows[0]["outcome"],
+            if conflicting { "foreign" } else { "ok" }
+        );
+        assert_eq!(
+            rows[1]["stage"],
+            if conflicting { "effect" } else { "disclosure" }
+        );
+
         assert_eq!(
             outcome,
             if conflicting {
@@ -3030,5 +3049,93 @@ fn readiness_wait_keeps_original_deadline_and_cancellation() {
             fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
             bytes
         );
+    }
+}
+
+#[test]
+fn owner_enable_diagnostic_distinguishes_verify_commit_and_success() {
+    struct CommitConflict<H>(H, bool);
+    impl<H: SubscriptionHost> SubscriptionHost for CommitConflict<H> {
+        fn root(&self) -> &std::path::Path {
+            self.0.root()
+        }
+        fn uid(&self) -> u32 {
+            self.0.uid()
+        }
+        fn inspect(&self, r: &OwnershipRecord) -> Result<HttpObservation, HostError> {
+            self.0.inspect(r)
+        }
+        fn begin_change(&mut self) -> Result<(), HostError> {
+            self.0.begin_change()
+        }
+        fn end_change(&mut self) {
+            self.0.end_change()
+        }
+        fn effect(
+            &mut self,
+            e: HttpEffect,
+            r: &OwnershipRecord,
+            c: Option<&SubscriptionCredential>,
+            ctx: &StartContext,
+        ) -> Result<(), HostError> {
+            self.0.effect(e, r, c, ctx)?;
+            if self.1 && e == HttpEffect::Verify {
+                // Real conflicting publication at the actual final commit boundary.
+                let p = self
+                    .root()
+                    .join("var/lib/sbxr")
+                    .join(crate::durable::STAGED_FILE);
+                fs::write(&p, b"SECRET-SENTINEL").unwrap();
+                fs::set_permissions(p, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            Ok(())
+        }
+        fn link(&self, r: &OwnershipRecord) -> Result<HttpSubscriptionLink, HostError> {
+            self.0.link(r)
+        }
+    }
+    for mode in 0..3 {
+        let root = Root::new();
+        let archive = Arc::new(crate::release_acquisition::fixture_archive());
+        root.setup(&archive);
+        let proof = archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap();
+        let mut host = module(&root, &proof, archive).into_host();
+        if mode == 1 {
+            host.inject_fault(Some(HttpFault::Before(HttpEffect::Verify)));
+        }
+        let mut m = HttpInstallation::with_entropy(
+            CommitConflict(host, mode == 2),
+            proof.record().release_identity(),
+            Box::new(EntropyCounter(0)),
+        )
+        .unwrap();
+        let (result, bytes) =
+            crate::host::timing::capture(|| execute(&mut m, Action::EnableSubscription));
+        assert_eq!(
+            result.outcome,
+            match mode {
+                0 => Outcome::SubscriptionEnabled,
+                1 => Outcome::SubscriptionChangeIncomplete,
+                _ => Outcome::SubscriptionProblemDetected,
+            }
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(!text.contains("SECRET-SENTINEL"));
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("SBXR_NATIVE_SUBSCRIPTION "))
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["stage"], ["disclosure", "verify", "commit"][mode]);
+        assert_eq!(rows[0]["outcome"], ["ok", "injected", "foreign"][mode]);
+        assert_eq!(rows[0].as_object().unwrap().len(), 4);
+        assert_eq!(m.take_subscription_link().is_some(), mode == 0);
     }
 }

@@ -902,6 +902,21 @@ class MenuSessionDriverTest(unittest.TestCase):
                             process.communicate(timeout=3)
                     process.stderr.close()
 
+    def test_enable_subscription_relays_owner_records_from_real_child_pipe(self):
+        row = dict(stage="commit", outcome="foreign", id=1, elapsed_us=15)
+        spec = dict(label="Enable subscription", kind="observe",
+                    expected="PROXY-INSTALLATION-SUBSCRIPTION-CHANGE-INCOMPLETE",
+                    diagnostics=["SBXR_NATIVE_SUBSCRIPTION " + json.dumps(row), "SECRET-SENTINEL", "SBXR_NATIVE_SUBSCRIPTION " + json.dumps({**row, "token": "SECRET-SENTINEL"})],
+                    late_diagnostics=[])
+        result, events = self.invoke(spec, "action", spec["label"], spec["expected"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events, [{"selected": "7"}, {"exit": "0"}])
+        self.assertNotIn("SECRET-SENTINEL", result.stderr)
+        rows = [json.loads(line.split(" ", 1)[1]) for line in result.stderr.splitlines()
+                if line.startswith("SBXR_NATIVE_SUBSCRIPTION ")]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual({k: rows[0][k] for k in row}, row)
+
     def test_details_distinguishes_startup_receipt_and_menu_and_relays_only_fixed_native_events(self):
         begin = {"phase": "query-active", "event": "begin", "id": 1, "elapsed_us": 3}
         end = {**begin, "event": "end", "elapsed_us": 9}
@@ -1371,5 +1386,39 @@ class QueryDiagnosticTests(unittest.TestCase):
         started = time.monotonic()
         self.relay([self.row()], Failed())
         self.assertLess(time.monotonic() - started, .5)
+
+class SubscriptionDiagnosticTests(unittest.TestCase):
+    def relay(self, rows):
+        sink = io.StringIO()
+        timing = menu.PhaseTiming(sink, time.monotonic() + 1)
+        try:
+            for row in rows:
+                timing.native(row if isinstance(row, bytes) else
+                              ("SBXR_NATIVE_SUBSCRIPTION " + json.dumps(row)).encode())
+        finally:
+            timing.close()
+        return sink.getvalue().splitlines()
+
+    def test_closed_subscription_records_and_all_errors(self):
+        for stage in sorted(menu.SUBSCRIPTION_STAGES):
+            rows = [dict(stage=stage, outcome=o, id=1, elapsed_us=0)
+                    for o in sorted(menu.SUBSCRIPTION_OUTCOMES)]
+            out = self.relay(rows)
+            self.assertEqual(len(out), len(rows))
+            for line, original in zip(out, rows):
+                row = json.loads(line.split(" ", 1)[1])
+                self.assertEqual({k: row[k] for k in original}, original)
+                self.assertEqual(set(row)-set(original), {"received_monotonic", "remaining_ms"})
+                self.assertLess(len(line), 512)
+
+    def test_subscription_rejects_secrets_duplicates_and_invalid_fields(self):
+        row = dict(stage="commit", outcome="foreign", id=1, elapsed_us=0)
+        bad = [{**row, k: v} for k, v in [("stage", "SECRET-SENTINEL"),
+               ("outcome", "https://secret"), ("stage", []), ("outcome", []),
+               ("token", "SECRET-SENTINEL"), ("id", True), ("id", 0),
+               ("elapsed_us", -1), ("elapsed_us", True), ("elapsed_us", 2**64)]]
+        raw = ("SBXR_NATIVE_SUBSCRIPTION " + json.dumps(row)).encode()
+        bad += [None, [], raw.replace(b'"id": 1', b'"id": 1, "id": 2'), raw[:25]]
+        self.assertEqual(self.relay(bad), [])
 
 if __name__ == "__main__": unittest.main()

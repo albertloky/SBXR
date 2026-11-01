@@ -179,46 +179,58 @@ impl<H: SubscriptionHost> HttpInstallation<H> {
             .effect(effect, record, credential, &self.context())
     }
     fn enable(&mut self, record: &mut OwnershipRecord) -> HostResult<Outcome, HostError> {
-        let generation = SubscriptionGeneration::generate_with_entropy(self.entropy.as_mut())
-            .map_err(|_| HostError::Io)?;
-        let id = GenerationId::generate_with_entropy(self.entropy.as_mut())
-            .map_err(|_| HostError::Io)?;
-        let hash = sha256_hex(&http_firewall_unit(record.public_ipv4())?);
-        self.publish(
-            record,
-            record
-                .begin_http_enablement(
-                    generation.link_id().as_str(),
-                    generation.credential(),
-                    id.as_str(),
-                    &hash,
-                )
-                .map_err(|_| HostError::Foreign)?,
-        )?;
-        for checkpoint in HTTP_ENABLEMENT_CHECKPOINTS.iter().copied().skip(1) {
+        use crate::host::timing::{self, SubscriptionStage as S};
+        let mut stage = S::Prepare;
+        let result = (|| {
+            let generation = SubscriptionGeneration::generate_with_entropy(self.entropy.as_mut())
+                .map_err(|_| HostError::Io)?;
+            let id = GenerationId::generate_with_entropy(self.entropy.as_mut())
+                .map_err(|_| HostError::Io)?;
+            let hash = sha256_hex(&http_firewall_unit(record.public_ipv4())?);
+            stage = S::Checkpoint;
             self.publish(
                 record,
                 record
-                    .advance_http_enablement()
+                    .begin_http_enablement(
+                        generation.link_id().as_str(),
+                        generation.credential(),
+                        id.as_str(),
+                        &hash,
+                    )
                     .map_err(|_| HostError::Foreign)?,
             )?;
-            self.apply(
-                HttpEffect::Enable(checkpoint),
+            for checkpoint in HTTP_ENABLEMENT_CHECKPOINTS.iter().copied().skip(1) {
+                stage = S::Checkpoint;
+                self.publish(
+                    record,
+                    record
+                        .advance_http_enablement()
+                        .map_err(|_| HostError::Foreign)?,
+                )?;
+                stage = S::Effect;
+                self.apply(
+                    HttpEffect::Enable(checkpoint),
+                    record,
+                    Some(generation.credential()),
+                )?;
+            }
+            stage = S::Verify;
+            self.apply(HttpEffect::Verify, record, None)?;
+            if self.stop.is_cancelled() {
+                return Err(HostError::Cancelled);
+            }
+            stage = S::Commit;
+            self.publish(
                 record,
-                Some(generation.credential()),
+                record
+                    .commit_http_enablement()
+                    .map_err(|_| HostError::Foreign)?,
             )?;
-        }
-        self.apply(HttpEffect::Verify, record, None)?;
-        if self.stop.is_cancelled() {
-            return Err(HostError::Cancelled);
-        }
-        self.publish(
-            record,
-            record
-                .commit_http_enablement()
-                .map_err(|_| HostError::Foreign)?,
-        )?;
-        self.disclose(record, Outcome::SubscriptionEnabled)
+            stage = S::Disclosure;
+            self.disclose(record, Outcome::SubscriptionEnabled)
+        })();
+        timing::subscription_result(stage, &result);
+        result
     }
     fn rotate(&mut self, record: &mut OwnershipRecord) -> HostResult<Outcome, HostError> {
         let generation = SubscriptionGeneration::generate_with_entropy(self.entropy.as_mut())

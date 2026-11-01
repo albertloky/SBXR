@@ -266,6 +266,68 @@ pub(crate) fn readiness_failure(failure: super::SetupFailure) {
     // flush, retry, format HostError, or let diagnostic failure change refusal.
     let _ = sink.write(line.as_bytes());
 }
+/// Closed Owner enablement checkpoints; no record contents enter diagnostics.
+#[derive(Clone, Copy)]
+pub(crate) enum SubscriptionStage {
+    Prepare,
+    Checkpoint,
+    Effect,
+    Verify,
+    Commit,
+    Disclosure,
+    Readiness,
+}
+impl SubscriptionStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::Checkpoint => "checkpoint",
+            Self::Effect => "effect",
+            Self::Verify => "verify",
+            Self::Commit => "commit",
+            Self::Disclosure => "disclosure",
+            Self::Readiness => "readiness",
+        }
+    }
+}
+pub(crate) fn subscription_result<T>(
+    stage: SubscriptionStage,
+    result: &Result<T, super::HostError>,
+) {
+    use super::HostError;
+    let outcome = match result {
+        Ok(_) => "ok",
+        Err(HostError::Unsafe) => "unsafe",
+        Err(HostError::Foreign) => "foreign",
+        Err(HostError::Io) => "io",
+        Err(HostError::Injected) => "injected",
+        Err(HostError::LiveUnavailable) => "live-unavailable",
+        Err(HostError::UnsupportedHost) => "unsupported-host",
+        Err(HostError::Cancelled) => "cancelled",
+        Err(HostError::Timeout) => "timeout",
+        Err(HostError::OutputLimit) => "output-limit",
+        Err(HostError::Busy) => "busy",
+    };
+    let value = TRACE.with(|t| {
+        let mut state = t.borrow_mut();
+        let trace = state.as_mut()?;
+        trace.next = trace.next.saturating_add(1);
+        Some((
+            trace.sink.clone(),
+            trace.next,
+            trace.start.elapsed().as_micros().min(u64::MAX as u128) as u64,
+        ))
+    });
+    let Some((sink, id, elapsed)) = value else {
+        return;
+    };
+    let Ok(mut sink) = sink.try_borrow_mut() else {
+        return;
+    };
+    let row = serde_json::json!({"stage":stage.label(), "outcome":outcome, "id":id, "elapsed_us":elapsed});
+    // Same nonblocking bounded sink; never retry/flush or format the payload/error.
+    let _ = sink.write(format!("SBXR_NATIVE_SUBSCRIPTION {row}\n").as_bytes());
+}
 impl Drop for Span {
     fn drop(&mut self) {
         if let Some((phase, id)) = self.0 {
@@ -295,6 +357,37 @@ pub(crate) fn capture<T>(f: impl FnOnce() -> T) -> (T, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn subscription_record_does_not_format_payload_and_preserves_terminal_categories() {
+        let (_, bytes) = capture(|| {
+            subscription_result(
+                SubscriptionStage::Disclosure,
+                &Ok::<_, super::super::HostError>("SECRET-SENTINEL"),
+            );
+            subscription_result(
+                SubscriptionStage::Readiness,
+                &Err::<(), _>(super::super::HostError::Timeout),
+            );
+            subscription_result(
+                SubscriptionStage::Readiness,
+                &Err::<(), _>(super::super::HostError::Cancelled),
+            );
+        });
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(!text.contains("SECRET-SENTINEL"));
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| {
+                assert!(l.len() < 512);
+                serde_json::from_str(l.strip_prefix("SBXR_NATIVE_SUBSCRIPTION ").unwrap()).unwrap()
+            })
+            .collect();
+        assert_eq!(rows.len(), 3);
+        for (row, expected) in rows.iter().zip(["ok", "timeout", "cancelled"]) {
+            assert_eq!(row["outcome"], expected);
+            assert_eq!(row.as_object().unwrap().len(), 4);
+        }
+    }
     #[test]
     fn readiness_record_is_bounded_and_sink_failure_never_retries_or_flushes() {
         use super::super::{HostError, SetupFailure, SetupGuard};
@@ -337,8 +430,16 @@ mod tests {
         let calls = Rc::new(std::cell::Cell::new(0));
         let enabled = enable_with(Box::new(Failed(calls.clone())));
         readiness_failure(SetupFailure::new(SetupGuard::Network, HostError::Timeout));
+        subscription_result(
+            SubscriptionStage::Readiness,
+            &Err::<(), _>(HostError::Timeout),
+        );
+        subscription_result(
+            SubscriptionStage::Commit,
+            &Err::<(), _>(HostError::Cancelled),
+        );
         drop(enabled);
-        assert_eq!(calls.get(), 1);
+        assert_eq!(calls.get(), 3);
     }
 
     #[test]

@@ -243,7 +243,7 @@ class PhaseTiming:
         }, sort_keys=True))
 
     def native(self, raw):
-        prefix = next((p for p in (b"SBXR_NATIVE_QUERY ", b"SBXR_NATIVE_READINESS ", b"SBXR_NATIVE_PHASE ")
+        prefix = next((p for p in (b"SBXR_NATIVE_SUBSCRIPTION ", b"SBXR_NATIVE_QUERY ", b"SBXR_NATIVE_READINESS ", b"SBXR_NATIVE_PHASE ")
                        if raw.startswith(p)), b"SBXR_NATIVE_PHASE ")
         if not raw.startswith(prefix):
             return
@@ -256,7 +256,10 @@ class PhaseTiming:
             return result
         try:
             row = json.loads(raw[len(prefix):], object_pairs_hook=unique)
-            if prefix == b"SBXR_NATIVE_QUERY ":
+            if prefix == b"SBXR_NATIVE_SUBSCRIPTION ":
+                if not valid_subscription_diagnostic(row):
+                    return
+            elif prefix == b"SBXR_NATIVE_QUERY ":
                 if not valid_query_diagnostic(row):
                     return
             elif prefix == b"SBXR_NATIVE_READINESS ":
@@ -310,6 +313,18 @@ def valid_readiness_diagnostic(row):
     return (type(row) is dict and set(row) == {"guard", "cause", "id", "elapsed_us"} and
             type(row["guard"]) is str and row["guard"] in READINESS_GUARDS and
             type(row["cause"]) is str and row["cause"] in READINESS_CAUSES and
+            type(row["id"]) is int and 0 < row["id"] <= 2**64 - 1 and
+            type(row["elapsed_us"]) is int and 0 <= row["elapsed_us"] <= 2**64 - 1)
+
+
+SUBSCRIPTION_STAGES = frozenset("prepare checkpoint effect verify commit disclosure readiness".split())
+SUBSCRIPTION_OUTCOMES = READINESS_CAUSES | {"ok"}
+
+
+def valid_subscription_diagnostic(row):
+    return (type(row) is dict and set(row) == {"stage", "outcome", "id", "elapsed_us"} and
+            type(row["stage"]) is str and row["stage"] in SUBSCRIPTION_STAGES and
+            type(row["outcome"]) is str and row["outcome"] in SUBSCRIPTION_OUTCOMES and
             type(row["id"]) is int and 0 < row["id"] <= 2**64 - 1 and
             type(row["elapsed_us"]) is int and 0 <= row["elapsed_us"] <= 2**64 - 1)
 
@@ -910,7 +925,7 @@ def main():
                 raise ProtocolError("subreaper-unavailable")
         for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(signum, receive)
-        if args.mode == "details" or (args.mode == "action" and args.label == "Start setup"):
+        if args.mode == "details" or (args.mode == "action" and args.label in ("Start setup", "Enable subscription")):
             timing = PhaseTiming(sys.stderr, time.monotonic() + float(args.timeout))
         drive(args, cancelled, timing)
     except Exception as error:
