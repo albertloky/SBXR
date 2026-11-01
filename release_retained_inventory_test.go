@@ -42,3 +42,12 @@ func TestRetainedQ208Inventory(t *testing.T) {
 		t.Fatalf("retained inventory: %v\n%s", err, output)
 	}
 }
+
+func TestRetainedQ209Inventory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "python3", ".github/scripts/test_retained_q209.py", "-v")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("retained inventory: %v\n%s", err, output)
+	}
+}

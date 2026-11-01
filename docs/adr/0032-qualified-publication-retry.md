@@ -264,3 +264,23 @@ q208 tag, sequence and draft ID cannot be reused or promoted. The fixed read-onl
 inventory mode moves to q208 without extra permissions or admitting candidate,
 signing, failure mutation or VPS jobs. No draft/tag/asset mutation or burn is
 proposed. Ordinary qualification and publication checks remain mandatory.
+
+
+## Retained q209 identity — 2026-11-01
+
+The Owner approved retaining failed v3.1.135/209, draft 430383576,
+source fef684ddb6b6eb24dbe082beb631fc251ad2e86d, run 41274423664,
+as signed-unqualified. Its signed manifest SHA256 is
+b8aeba33c8567a1c5c86b40b0c7f634756a709253fedbb536ddf0083f5087f74.
+Fresh GET-only inventory verified the unchanged draft and all four downloaded
+asset bytes. Exact asset bindings are in retained-q209.json and the compiled
+reservation; the preceding q203–208 records remain unchanged.
+
+New facts bind all seven records. Missing or changed identities and unavailable
+or present release/burn refs refuse. The reserved version, sequence and release
+ID cannot be reused or promoted. The fixed inventory mode moves to q209 without
+changing permissions or admitting candidate, signing, failure mutation or VPS
+jobs. No remote draft, asset, tag or signature is changed by this policy.
+The failed live journey remains failed; the subsequent admission fix and
+successful supported removal do not qualify it. Sequence 210, prospectively
+v3.1.136, requires fresh global admission and its own complete qualification.
