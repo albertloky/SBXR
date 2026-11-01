@@ -284,3 +284,22 @@ jobs. No remote draft, asset, tag or signature is changed by this policy.
 The failed live journey remains failed; the subsequent admission fix and
 successful supported removal do not qualify it. Sequence 210, prospectively
 v3.1.136, requires fresh global admission and its own complete qualification.
+
+
+## Retained q210 identity — 2026-11-01
+
+The Owner approved retaining failed v3.1.136/210, draft 430449719,
+source 00243e0104783ce0b79149b58c29b8e10b5d0e85, run 41285797719,
+as signed-unqualified. Its signed manifest SHA256 is
+31a30c120c24c7ea572a826b3842279345404de3ac8a5ed564b410f514a262f8.
+Fresh GET-only inventory verified draft metadata, all four downloaded asset
+bytes and absent release/burn refs. Exact bindings are in retained-q210.json
+and the compiled reservation; q203–209 records remain unchanged.
+
+New facts bind all eight records. Missing or changed records and unavailable
+or present release/burn refs refuse. The version, sequence and release ID
+cannot be reused or promoted. Fixed inventory moves to q210 without permission
+changes or admission of candidate, signing, failure mutation or VPS jobs.
+No remote draft, asset, tag or signature is changed. Build210 remains failed;
+startup fixes and diagnostics do not retroactively qualify it. Sequence211,
+prospectively v3.1.137, requires fresh global admission and complete qualification.
