@@ -14,6 +14,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Direct Rust diagnostics
 
+- [q210 serving readiness and incomplete enablement — 2026-11-01](q210-serving-readiness-2026-11-01.md)
+  — reproduced Type=simple readiness race; bounded offline correction, live cause still unproved.
+
 - [q204 readiness refusal and offline diagnosis — 2026-10-29](q204-readiness-refusal-2026-10-29.md)
   — signed candidate stopped before setup; restoration verified; DNS stall cause and failure-evidence HTTP 403 endpoint remain unresolved.
 

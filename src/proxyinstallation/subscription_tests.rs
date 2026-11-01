@@ -30,7 +30,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -1470,6 +1470,8 @@ struct OwnerIoFixture {
     role: AtomicUsize,
     address: SocketAddr,
     bad: AtomicUsize,
+    serving_starts: AtomicUsize,
+    delayed_bind: Arc<AtomicBool>,
 }
 impl OwnerIoFixture {
     fn new(
@@ -1502,6 +1504,8 @@ impl OwnerIoFixture {
             role: AtomicUsize::new(0),
             address,
             bad: AtomicUsize::new(0),
+            serving_starts: AtomicUsize::new(0),
+            delayed_bind: Arc::new(AtomicBool::new(false)),
         });
         io.cgroup(crate::host::owner_runtime::Unit::Proxy, true);
         io.cgroup(crate::host::owner_runtime::Unit::Subscription, false);
@@ -1600,10 +1604,33 @@ impl OwnerIoFixture {
                 .unwrap(),
         )
         .unwrap();
-        let listener = TcpListener::bind(self.address).map_err(|_| HostError::Io)?;
+        let delayed = self.bad.load(Ordering::SeqCst) == 11;
+        let listener = if delayed {
+            None
+        } else {
+            Some(TcpListener::bind(self.address).map_err(|_| HostError::Io)?)
+        };
+        let address = self.address;
+        let delayed_bind = self.delayed_bind.clone();
         let stop = Cancellation::new();
         let shutdown = stop.clone();
-        let join = thread::spawn(move || Module::new().serve(Arc::new(state), listener, &shutdown));
+        let join = thread::spawn(move || {
+            let listener = match listener {
+                Some(listener) => listener,
+                None => {
+                    // Type=simple may return before bind. Force the first
+                    // independent listener observation to see that state.
+                    while !delayed_bind.load(Ordering::SeqCst) && !shutdown.is_cancelled() {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    if shutdown.is_cancelled() {
+                        return Code::Stopped;
+                    }
+                    TcpListener::bind(address).unwrap()
+                }
+            };
+            Module::new().serve(Arc::new(state), listener, &shutdown)
+        });
         self.backend.lock().unwrap().active = Some(Active {
             stop,
             join,
@@ -1709,7 +1736,17 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
                 }
             }
             O::Listener8443 => {
-                if b.active.is_some() {
+                let fault = self.bad.load(Ordering::SeqCst);
+                if b.active.is_some()
+                    && (fault == 12
+                        || fault == 11
+                            && (!self.delayed_bind.swap(true, Ordering::SeqCst)
+                                || TcpListener::bind(self.address).is_ok()))
+                {
+                    String::new()
+                } else if b.active.is_some() && self.bad.load(Ordering::SeqCst) == 10 {
+                    "LISTEN 0 4096 8.8.8.8:8443 *:* users:((\"sbxr\",pid=999,fd=3))".into()
+                } else if b.active.is_some() {
                     "LISTEN 0 4096 8.8.8.8:8443 *:* users:((\"sbxr\",pid=123,fd=3))".into()
                 } else {
                     String::new()
@@ -1806,6 +1843,7 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
             | ServiceAction::RestartSubscription => {
                 self.backend.lock().unwrap().stop();
                 self.role.store(0, Ordering::SeqCst);
+                self.serving_starts.fetch_add(1, Ordering::SeqCst);
                 self.start_http(channel.ok_or(HostError::Unsafe)?, c)?;
             }
             ServiceAction::StartProxy | ServiceAction::RestartProxy => {
@@ -2830,4 +2868,167 @@ fn composed_owner_allows_enable_after_failed_unit_is_absent_and_quiet() {
         owner.execute(selected, Confirmation::Approved).outcome,
         Outcome::SubscriptionEnabled
     );
+}
+
+#[test]
+fn ready_server_does_not_commit_when_owner_listener_proof_disagrees() {
+    for conflicting in [false, true] {
+        let root = Root::new();
+        let archive = Arc::new(crate::release_acquisition::fixture_archive());
+        root.setup(&archive);
+        let proof = Arc::new(
+            archive
+                .bind_current(
+                    archive.executable(),
+                    archive.executable(),
+                    &crate::artifact_trust::SelectionBudget::new(),
+                )
+                .unwrap(),
+        );
+        let io = OwnerIoFixture::new(&root, archive, proof.clone());
+        if conflicting {
+            io.bad.store(10, Ordering::SeqCst);
+        }
+        let mut owner = OwnerInstallation::new(ComposedSources {
+            root: &root,
+            proof: &proof,
+            io: io.clone(),
+        });
+        let selected = owner.review(Action::EnableSubscription).prepared.unwrap();
+        let outcome = owner.execute(selected, Confirmation::Approved).outcome;
+        assert_eq!(
+            outcome,
+            if conflicting {
+                Outcome::SubscriptionChangeIncomplete
+            } else {
+                Outcome::SubscriptionEnabled
+            }
+        );
+        let credential = fs::read_to_string(root.0.join(TOKEN)).unwrap();
+        assert!(
+            io.backend
+                .lock()
+                .unwrap()
+                .request(credential.trim_end())
+                .starts_with(b"HTTP/1.1 200")
+        );
+        let record = OwnershipRecord::decode(
+            &fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record.http_operation().unwrap().is_some(), conflicting);
+        assert_eq!(owner.take_subscription_link().is_none(), conflicting);
+    }
+}
+
+#[test]
+fn type_simple_handoff_before_listener_ready_waits_without_restart() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    io.bad.store(11, Ordering::SeqCst);
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let selected = owner.review(Action::EnableSubscription).prepared.unwrap();
+    assert_eq!(
+        owner.execute(selected, Confirmation::Approved).outcome,
+        Outcome::SubscriptionEnabled
+    );
+    assert_eq!(io.serving_starts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn readiness_wait_keeps_original_deadline_and_cancellation() {
+    for cancel in [false, true] {
+        let root = Root::new();
+        let archive = Arc::new(crate::release_acquisition::fixture_archive());
+        root.setup(&archive);
+        let proof = Arc::new(
+            archive
+                .bind_current(
+                    archive.executable(),
+                    archive.executable(),
+                    &crate::artifact_trust::SelectionBudget::new(),
+                )
+                .unwrap(),
+        );
+        let io = OwnerIoFixture::new(&root, archive, proof.clone());
+        let mut frontend = OwnerInstallation::new(ComposedSources {
+            root: &root,
+            proof: &proof,
+            io: io.clone(),
+        });
+        let selected = frontend
+            .review(Action::EnableSubscription)
+            .prepared
+            .unwrap();
+        assert_eq!(
+            frontend.execute(selected, Confirmation::Approved).outcome,
+            Outcome::SubscriptionEnabled
+        );
+        drop(frontend);
+        let bytes = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+        let record = OwnershipRecord::decode(&bytes).unwrap();
+        let mut runtime = crate::host::owner_runtime::OwnerRuntime::injected(
+            &root.0,
+            &proof,
+            io.clone(),
+            io.address,
+        )
+        .unwrap();
+        let owner = Arc::new(HostLock::existing(&root.0, root.uid()).unwrap());
+        io.bad.store(12, Ordering::SeqCst);
+        let stop = Cancellation::new();
+        let context = StartContext::new(
+            stop.clone(),
+            Instant::now()
+                + if cancel {
+                    Duration::from_secs(2)
+                } else {
+                    Duration::from_millis(180)
+                },
+        );
+        let deadline = context.deadline();
+        let started = Instant::now();
+        let worker = if cancel {
+            Some(thread::spawn(move || {
+                thread::sleep(Duration::from_millis(100));
+                stop.cancel();
+            }))
+        } else {
+            None
+        };
+        assert!(
+            runtime
+                .effect(SystemEffect::ActivateServing, &record, &owner, &context)
+                .is_err()
+        );
+        if let Some(worker) = worker {
+            worker.join().unwrap();
+        }
+        assert_eq!(context.deadline(), deadline);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(
+            io.serving_starts.load(Ordering::SeqCst) <= 2,
+            "at most the initial start and requested activation; cancellation may precede activation"
+        );
+        assert!(context.check().is_err());
+        assert_eq!(
+            fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+            bytes
+        );
+    }
 }

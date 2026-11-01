@@ -1,6 +1,30 @@
 use super::*;
 use std::io::{Read, Write};
 impl<I: OwnerIo> OwnerRuntime<'_, I> {
+    // Type=simple and descriptor lending complete before the child necessarily
+    // binds/serves HTTP. Observe readiness under the original action budget;
+    // never repeat a service effect or accept a partial/foreign proof.
+    pub(super) fn wait_loaded(
+        &self,
+        r: &OwnershipRecord,
+        a: &ServingAuthority,
+        token: &SubscriptionCredential,
+        c: &StartContext,
+    ) -> Result<(), HostError> {
+        loop {
+            c.check().map_err(refused)?;
+            match self.loaded(r, a, token, c) {
+                Ok(()) => return c.check().map_err(refused),
+                Err(HostError::Busy) => {}
+                Err(error) => return Err(error),
+            }
+            c.check().map_err(refused)?;
+            std::thread::sleep(
+                Duration::from_millis(50)
+                    .min(c.deadline().saturating_duration_since(Instant::now())),
+            );
+        }
+    }
     pub(super) fn loaded(
         &self,
         r: &OwnershipRecord,
@@ -30,12 +54,6 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         if std::str::from_utf8(&procs).map_err(refused)?.trim() != pid.to_string() {
             return Err(HostError::Foreign);
         }
-        let listeners = self.text(Observation::Listener8443, c)?;
-        if listeners.lines().count() != 1
-            || !super::observation::listener_pid(&listeners, 8443, Some(r.public_ipv4()), pid)
-        {
-            return Err(HostError::Foreign);
-        }
         let process = self.io.process(pid)?;
         if process.uid != self.fs.uid
             || process.cgroup != Unit::Subscription.cgroup()
@@ -61,6 +79,19 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
             .map_err(refused)?
             .subscription_artifact()
             .map_err(refused)?;
+        let listeners = self.text(Observation::Listener8443, c)?;
+        if listeners.is_empty() {
+            // Only an absent listener with the exact active process, cgroup,
+            // routes and material above is a pending startup observation.
+            // A conflicting listener or HTTP response must refuse immediately.
+            c.check().map_err(refused)?;
+            return Err(HostError::Busy);
+        }
+        if listeners.lines().count() != 1
+            || !super::observation::listener_pid(&listeners, 8443, Some(r.public_ipv4()), pid)
+        {
+            return Err(HostError::Foreign);
+        }
         let address = self.probe.unwrap_or(std::net::SocketAddr::new(
             r.public_ipv4().parse().map_err(refused)?,
             8443,

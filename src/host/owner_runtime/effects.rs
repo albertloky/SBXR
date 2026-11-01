@@ -146,7 +146,7 @@ impl<I: OwnerIo> HttpRuntime for OwnerRuntime<'_, I> {
                     }
                     self.service(ServiceAction::EnableSubscription, owner, None, c)?;
                 }
-                self.loaded(r, &authority, &token, c)?;
+                self.wait_loaded(r, &authority, &token, c)?;
             }
             SystemEffect::StopServing | SystemEffect::DisableServing => {
                 if self.fs.metadata(crate::host::subscription::UNIT)?.is_none() {
