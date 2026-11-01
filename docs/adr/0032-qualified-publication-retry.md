@@ -249,3 +249,18 @@ does not qualify it. This adoption does not modify any remote draft, asset, tag
 or signature and authorizes no new candidate, live attempt or publication.
 Sequence 208, prospectively v3.1.134, remains subject to fresh global history and
 collision checks and a separately authorized complete qualification.
+
+## Retained q208 identity — 2026-11-01
+
+The Owner approved retaining failed v3.1.134/208, draft 429914221,
+source 3da13ff83de223209be9da7a5c64ca49c67c1c8e, run 41196706730,
+as signed-unqualified. Exact signed manifest SHA256 is
+45c7648310974d928475e4efcc21dcc5bef208fbffbbfbf733b4747374029a98.
+The four asset identities and digests are bound in retained-q208.json and the
+reservation record. The preceding q203–207 records remain unchanged.
+
+After fresh byte verification, new facts must bind all six records;
+q208 tag, sequence and draft ID cannot be reused or promoted. The fixed read-only
+inventory mode moves to q208 without extra permissions or admitting candidate,
+signing, failure mutation or VPS jobs. No draft/tag/asset mutation or burn is
+proposed. Ordinary qualification and publication checks remain mandatory.
