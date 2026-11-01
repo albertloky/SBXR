@@ -5,6 +5,9 @@ struct QuietIo {
     control: &'static str,
     group: String,
     listener: &'static str,
+    load: &'static str,
+    fragment: &'static str,
+    dropins: &'static str,
 }
 impl PeerObservations for QuietIo {
     fn current(&self) -> Result<runtime_handoff::ProcessIdentity, runtime_handoff::Error> {
@@ -25,6 +28,9 @@ impl OwnerIo for QuietIo {
             Observation::Property(Unit::Subscription, Property::ControlPid) => self.control,
             Observation::Property(Unit::Subscription, Property::ControlGroup) => &self.group,
             Observation::Listener8443 => self.listener,
+            Observation::Property(Unit::Subscription, Property::LoadState) => self.load,
+            Observation::Property(Unit::Subscription, Property::FragmentPath) => self.fragment,
+            Observation::Property(Unit::Subscription, Property::DropInPaths) => self.dropins,
             _ => panic!("unexpected query: {q:?}"),
         };
         CommandOutput::completed(0, text.as_bytes().to_vec())
@@ -83,6 +89,9 @@ fn failed_subscription_removal_requires_actual_quiescence() {
             control: "0",
             group: Unit::Subscription.cgroup().into(),
             listener: "",
+            load: "not-found",
+            fragment: "",
+            dropins: "",
         },
         probe: None,
         stop: Cancellation::new(),
@@ -97,6 +106,39 @@ fn failed_subscription_removal_requires_actual_quiescence() {
             .quiescence_for_removal(Unit::Subscription, &runtime.context())
             .unwrap()
     );
+    assert!(
+        runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    runtime.io.load = "loaded";
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    runtime.io.load = "not-found";
+    runtime.io.fragment = "/foreign";
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    runtime.io.fragment = "";
+    runtime.io.dropins = "/foreign.conf";
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    runtime.io.dropins = "";
+    root.write(crate::host::subscription::UNIT, b"foreign", 0o644);
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    fs::remove_file(root.0.join(crate::host::subscription::UNIT)).unwrap();
     for state in [
         "active",
         "activating",
@@ -107,12 +149,22 @@ fn failed_subscription_removal_requires_actual_quiescence() {
         runtime.io.state = state;
         assert!(
             !runtime
+                .absent_subscription_quiescence(&runtime.context())
+                .unwrap()
+        );
+        assert!(
+            !runtime
                 .quiescence_for_removal(Unit::Subscription, &runtime.context())
                 .unwrap()
         );
     }
     runtime.io.state = "failed";
     runtime.io.main = "123";
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
     assert!(
         !runtime
             .quiescence_for_removal(Unit::Subscription, &runtime.context())
@@ -122,6 +174,11 @@ fn failed_subscription_removal_requires_actual_quiescence() {
     runtime.io.control = "124";
     assert!(
         !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    assert!(
+        !runtime
             .quiescence_for_removal(Unit::Subscription, &runtime.context())
             .unwrap()
     );
@@ -129,11 +186,21 @@ fn failed_subscription_removal_requires_actual_quiescence() {
     runtime.io.listener = "LISTEN 0 128 0.0.0.0:8443";
     assert!(
         !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    assert!(
+        !runtime
             .quiescence_for_removal(Unit::Subscription, &runtime.context())
             .unwrap()
     );
     runtime.io.listener = "";
     runtime.io.group = "/foreign".into();
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
     assert!(
         !runtime
             .quiescence_for_removal(Unit::Subscription, &runtime.context())
@@ -144,10 +211,20 @@ fn failed_subscription_removal_requires_actual_quiescence() {
     root.write(events, b"populated 1\nfrozen 0\n", 0o444);
     assert!(
         !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
+    assert!(
+        !runtime
             .quiescence_for_removal(Unit::Subscription, &runtime.context())
             .unwrap()
     );
     fs::remove_file(root.0.join(events)).unwrap();
+    assert!(
+        !runtime
+            .absent_subscription_quiescence(&runtime.context())
+            .unwrap()
+    );
     assert!(
         !runtime
             .quiescence_for_removal(Unit::Subscription, &runtime.context())

@@ -93,7 +93,14 @@ impl<I: OwnerIo> HttpRuntime for OwnerRuntime<'_, I> {
         let quiet = if serving {
             false
         } else {
-            self.quiescence(U::Subscription, &c)? && self.io.port_available(8443, &c)?
+            let quiet = if r.serving_authority().is_none()
+                && r.http_operation().map_err(refused)?.is_none()
+            {
+                self.absent_subscription_quiescence(&c)?
+            } else {
+                self.quiescence(U::Subscription, &c)?
+            };
+            quiet && self.io.port_available(8443, &c)?
         };
         Ok(RuntimeFacts {
             public_ipv4: ip,

@@ -171,6 +171,29 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
     pub(super) fn quiescence_for_removal(&self, u: U, c: &StartContext) -> Result<bool, HostError> {
         self.quiescence_state(u, c, u == U::Subscription)
     }
+    /// Fresh enablement may observe systemd's retained failure result after the
+    /// unit has been removed. This is absence admission, never startup/recovery
+    /// authority. File/material absence and port binding remain caller checks.
+    pub(super) fn absent_subscription_quiescence(
+        &self,
+        c: &StartContext,
+    ) -> Result<bool, HostError> {
+        if self.quiescence(U::Subscription, c)? {
+            return Ok(true);
+        }
+        if self.fs.metadata(crate::host::subscription::UNIT)?.is_some()
+            || self.property(U::Subscription, P::LoadState, c)? != "not-found"
+            || !self
+                .property(U::Subscription, P::FragmentPath, c)?
+                .is_empty()
+            || !self
+                .property(U::Subscription, P::DropInPaths, c)?
+                .is_empty()
+        {
+            return Ok(false);
+        }
+        self.quiescence_state(U::Subscription, c, true)
+    }
     pub(super) fn quiescence(&self, u: U, c: &StartContext) -> Result<bool, HostError> {
         self.quiescence_state(u, c, false)
     }

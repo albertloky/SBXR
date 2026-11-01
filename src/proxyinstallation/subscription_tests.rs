@@ -1652,6 +1652,26 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
         c.check().map_err(|_| HostError::Cancelled)?;
         let b = self.backend.lock().unwrap();
         let mut code = 0;
+        // Reproduce the retained failed, unloaded unit observed around q209.
+        let failed_absent = self.bad.load(Ordering::SeqCst) == 9
+            && !b.root.join(crate::host::subscription::UNIT).exists();
+        if failed_absent {
+            let value = match o {
+                O::Property(U::Subscription, P::ActiveState) => Some("failed"),
+                O::Property(U::Subscription, P::LoadState) => Some("not-found"),
+                O::Property(
+                    U::Subscription,
+                    P::FragmentPath | P::DropInPaths | P::ControlGroup,
+                ) => Some(""),
+                _ => None,
+            };
+            if let Some(value) = value {
+                return crate::host::process::CommandOutput::completed(
+                    0,
+                    value.as_bytes().to_vec(),
+                );
+            }
+        }
         let value = match o {
             O::Listener10000 => String::new(),
             O::Architecture => "amd64".into(),
@@ -2777,3 +2797,37 @@ mod http_admission_tests;
 
 #[path = "merged_usr_tests.rs"]
 mod merged_usr_tests;
+
+#[test]
+fn composed_owner_allows_enable_after_failed_unit_is_absent_and_quiet() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    io.bad.store(9, Ordering::SeqCst);
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io,
+    });
+    assert!(
+        owner
+            .review(Action::Status)
+            .legal_actions
+            .contains(&Action::EnableSubscription)
+    );
+    let selected = owner.review(Action::EnableSubscription).prepared.unwrap();
+    assert_eq!(
+        owner.execute(selected, Confirmation::Approved).outcome,
+        Outcome::SubscriptionEnabled
+    );
+}
