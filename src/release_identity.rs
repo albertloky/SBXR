@@ -652,6 +652,24 @@ pub fn inspect_linux_artifact(
     architecture: Architecture,
 ) -> Result<ArtifactInspection> {
     let identity = read_executable_identity(executable)?;
+    inspect_linux_identity(&identity, architecture)
+}
+
+/// Verify the installed pair and ELF from the same immutable bytes. This reuses
+/// only the parsed identity within this call, never host or delivery authority.
+pub fn verify_installed_linux_pair(
+    record: &InstalledRecord,
+    executable: &[u8],
+    architecture: Architecture,
+) -> Result<ArtifactInspection> {
+    let identity = verify_installed_pair(record, executable)?;
+    inspect_linux_identity(&identity, architecture)
+}
+
+fn inspect_linux_identity(
+    identity: &ExecutableIdentity<'_>,
+    architecture: Architecture,
+) -> Result<ArtifactInspection> {
     if identity.architecture() != architecture {
         return Err(ReleaseError);
     }

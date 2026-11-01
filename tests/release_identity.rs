@@ -2,6 +2,140 @@
 use sbxr::records::{self, InstalledRecord, sha256_hex};
 use sbxr::release_identity::*;
 
+fn image_record(bytes: &[u8], architecture: Architecture) -> InstalledRecord {
+    InstalledRecord::new(
+        records::ReleaseIdentity::new(TAG, COMMIT, &"a".repeat(64)).unwrap(),
+        193,
+        architecture.as_str(),
+        &sha256_hex(bytes),
+    )
+    .unwrap()
+}
+
+fn separate_image_checks(
+    record: &InstalledRecord,
+    bytes: &[u8],
+    arch: Architecture,
+) -> std::result::Result<ArtifactInspection, ReleaseError> {
+    verify_installed_pair(record, bytes)?;
+    inspect_linux_artifact(bytes, arch)
+}
+
+#[test]
+fn combined_installed_image_checks_match_separate_checks() {
+    for arch in [Architecture::Amd64, Architecture::Arm64] {
+        for sections in [rust_sections(arch), go_sections(arch, "")] {
+            let payload = elf(arch, &sections);
+            let bytes = stamp_executable(&payload, TAG, COMMIT, 193, arch).unwrap();
+            let record = image_record(&bytes, arch);
+            assert_eq!(
+                verify_installed_linux_pair(&record, &bytes, arch).unwrap(),
+                separate_image_checks(&record, &bytes, arch).unwrap()
+            );
+            for selected in [Architecture::Amd64, Architecture::Arm64] {
+                assert_eq!(
+                    verify_installed_linux_pair(&record, &bytes, selected),
+                    separate_image_checks(&record, &bytes, selected)
+                );
+            }
+            // Every changed byte must be rejected by both paths with the old
+            // exact record, including payload, trailer and trailer digest.
+            for offset in 0..bytes.len() {
+                let mut changed = bytes.clone();
+                changed[offset] ^= 1;
+                assert!(verify_installed_linux_pair(&record, &changed, arch).is_err());
+                assert!(separate_image_checks(&record, &changed, arch).is_err());
+            }
+            // Re-stamping and rebinding does not admit malformed ELF headers.
+            for offset in [0, 4, 5, 16, 18] {
+                let mut changed = payload.clone();
+                changed[offset] = 0;
+                let changed = stamp_executable(&changed, TAG, COMMIT, 193, arch).unwrap();
+                let rebound = image_record(&changed, arch);
+                assert!(verify_installed_linux_pair(&rebound, &changed, arch).is_err());
+                assert!(separate_image_checks(&rebound, &changed, arch).is_err());
+            }
+            for (tag, commit, sequence, architecture, digest) in [
+                ("v3.2.2", COMMIT, 193, arch.as_str(), sha256_hex(&bytes)),
+                (
+                    TAG,
+                    "cccccccccccccccccccccccccccccccccccccccc",
+                    193,
+                    arch.as_str(),
+                    sha256_hex(&bytes),
+                ),
+                (TAG, COMMIT, 194, arch.as_str(), sha256_hex(&bytes)),
+                (
+                    TAG,
+                    COMMIT,
+                    193,
+                    if arch == Architecture::Amd64 {
+                        "arm64"
+                    } else {
+                        "amd64"
+                    },
+                    sha256_hex(&bytes),
+                ),
+                (TAG, COMMIT, 193, arch.as_str(), "0".repeat(64)),
+            ] {
+                let changed = InstalledRecord::new(
+                    records::ReleaseIdentity::new(tag, commit, &"a".repeat(64)).unwrap(),
+                    sequence,
+                    architecture,
+                    &digest,
+                )
+                .unwrap();
+                assert!(verify_installed_linux_pair(&changed, &bytes, arch).is_err());
+                assert!(separate_image_checks(&changed, &bytes, arch).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual local timing measurement; not a performance assertion"]
+fn measure_same_image_verification() {
+    use std::{
+        hint::black_box,
+        time::{Duration, Instant},
+    };
+    let arch = Architecture::Amd64;
+    let mut payload = elf(arch, &rust_sections(arch));
+    payload.resize(8 << 20, 0);
+    let bytes = stamp_executable(&payload, TAG, COMMIT, 193, arch).unwrap();
+    let record = image_record(&bytes, arch);
+    let mut separate = Duration::ZERO;
+    let mut combined = Duration::ZERO;
+    for round in 0..24 {
+        // Alternate order to limit warm-cache/order bias. Both read precisely
+        // the same immutable synthetic ELF; no host observations are cached.
+        for old in if round % 2 == 0 {
+            [true, false]
+        } else {
+            [false, true]
+        } {
+            let start = Instant::now();
+            let result = if old {
+                separate_image_checks(&record, black_box(&bytes), arch)
+            } else {
+                verify_installed_linux_pair(&record, black_box(&bytes), arch)
+            };
+            black_box(result.unwrap());
+            if old {
+                separate += start.elapsed();
+            } else {
+                combined += start.elapsed();
+            }
+        }
+    }
+    eprintln!(
+        "same-image bytes={} iterations=24 separate_us={} combined_us={}",
+        bytes.len(),
+        separate.as_micros(),
+        combined.as_micros()
+    );
+}
+
 const COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const TAG: &str = "v3.2.1";
 

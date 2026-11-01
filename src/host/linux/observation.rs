@@ -126,9 +126,8 @@ pub(in crate::host) fn read_installed(
         (None, None) => Ok(None),
         (Some((record, _)), Some((executable, _))) => {
             let record = InstalledRecord::decode(&record).map_err(|_| HostError::Foreign)?;
-            crate::release_identity::verify_installed_pair(&record, &executable)
-                .map_err(|_| HostError::Foreign)?;
-            crate::release_identity::inspect_linux_artifact(
+            crate::release_identity::verify_installed_linux_pair(
+                &record,
                 &executable,
                 crate::release_identity::Architecture::Amd64,
             )
