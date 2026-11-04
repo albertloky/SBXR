@@ -121,18 +121,14 @@ impl LifecycleHost {
             .as_ref()
             .map(|(b, _)| InstalledRecord::decode(b).map_err(|_| HostError::Foreign))
             .transpose()?;
-        let mut image = format!(
-            "{:?}:{:?}",
-            record.as_ref().map(|(b, p)| (sha256_hex(b), p)),
-            executable.as_ref().map(|(b, p)| (sha256_hex(b), p))
-        );
+        let mut executable_digest = None;
         match (&installed, &executable) {
             (Some(record), Some((bytes, _))) => {
-                release_identity::verify_installed_pair(record, bytes)
-                    .map_err(|_| HostError::Foreign)?;
                 let arch = architecture(record.architecture())?;
-                release_identity::inspect_linux_artifact(bytes, arch)
+                release_identity::verify_installed_linux_pair(record, bytes, arch)
                     .map_err(|_| HostError::Foreign)?;
+                // This exact slice has just matched the record's full digest.
+                executable_digest = Some(record.executable_sha256());
                 s.installed = Some(record.clone());
             }
             (None, Some(_)) => return Err(HostError::Foreign),
@@ -155,8 +151,18 @@ impl LifecycleHost {
                     }
                     s.restoration = Some(release);
                 }
-                image.push_str(&format!("{:?}", s.authority));
             }
+        }
+        let mut image = format!(
+            "{:?}:{:?}",
+            record.as_ref().map(|(b, p)| (sha256_hex(b), p)),
+            executable
+                .as_ref()
+                .zip(executable_digest)
+                .map(|((_, p), digest)| (digest, p))
+        );
+        if s.installed.is_none() {
+            image.push_str(&format!("{:?}", s.authority));
         }
         s.busy = self.fs.lifecycle_lock_held()?;
         s.fingerprint = sha256_hex(image.as_bytes());
@@ -199,3 +205,7 @@ pub(crate) fn architecture(value: &str) -> Result<Architecture, HostError> {
         _ => Err(HostError::Foreign),
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;

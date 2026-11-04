@@ -355,8 +355,8 @@ impl AuthenticatedInstalled {
             "arm64" => Architecture::Arm64,
             _ => return Err(TrustError::Refused),
         };
-        identity::verify_installed_pair(&record, installed).map_err(|_| TrustError::Refused)?;
-        identity::inspect_linux_artifact(current, architecture).map_err(|_| TrustError::Refused)?;
+        identity::verify_installed_linux_pair(&record, installed, architecture)
+            .map_err(|_| TrustError::Refused)?;
         let request = AcquisitionRequest::release_metadata(record.release_identity().tag())?;
         let response = transport.get(&request, budget)?;
         let bytes = trust::read_complete_json_response(response, request.max_bytes(), budget)?;

@@ -22,6 +22,78 @@ fn separate_image_checks(
 }
 
 #[test]
+fn installed_digest_continuation_checks_payload_and_complete_trailer_at_block_boundaries() {
+    for length in [
+        1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 8191, 8192, 8193,
+    ] {
+        let payload: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
+        let bytes = stamp_executable(&payload, TAG, COMMIT, 193, Architecture::Amd64).unwrap();
+        let record = image_record(&bytes, Architecture::Amd64);
+        assert!(
+            verify_installed_pair(&record, &bytes).is_ok(),
+            "payload length {length}"
+        );
+
+        // Rebind the whole-file digest while leaving the embedded payload
+        // digest stale: the independent payload comparison must still refuse.
+        let mut changed_payload = payload.clone();
+        changed_payload[0] ^= 1;
+        let changed = trailer(&changed_payload, &document(&payload));
+        let rebound = image_record(&changed, Architecture::Amd64);
+        assert!(verify_installed_pair(&rebound, &changed).is_err());
+
+        // Equivalent JSON changes only the trailer bytes. The old full digest
+        // must refuse, while an independently hashed replacement must pass.
+        let spaced = format!(" {} ", String::from_utf8(document(&payload)).unwrap());
+        let changed = trailer(&payload, spaced.as_bytes());
+        assert!(read_executable_identity(&changed).is_ok());
+        assert!(verify_installed_pair(&record, &changed).is_err());
+        assert!(
+            verify_installed_pair(&image_record(&changed, Architecture::Amd64), &changed).is_ok()
+        );
+    }
+}
+
+#[test]
+fn release_inspection_reuses_identity_without_losing_index_or_elf_checks() {
+    for arch in [Architecture::Amd64, Architecture::Arm64] {
+        for sections in [rust_sections(arch), go_sections(arch, "")] {
+            let payload = elf(arch, &sections);
+            let bytes = stamp_executable(&payload, TAG, COMMIT, 193, arch).unwrap();
+            assert_eq!(
+                inspect_release_executable(&index(None), &bytes, arch),
+                inspect_linux_artifact(&bytes, arch)
+            );
+            for selected in [Architecture::Amd64, Architecture::Arm64] {
+                assert_eq!(
+                    inspect_release_executable(&index(None), &bytes, selected),
+                    inspect_linux_artifact(&bytes, selected)
+                );
+            }
+            for (tag, commit, sequence) in [
+                ("v3.2.2", COMMIT, 193),
+                (TAG, "cccccccccccccccccccccccccccccccccccccccc", 193),
+                (TAG, COMMIT, 194),
+            ] {
+                let conflicting =
+                    ReleaseIndex::build(tag, commit, sequence, assets(), None).unwrap();
+                assert!(inspect_release_executable(&conflicting, &bytes, arch).is_err());
+            }
+            for offset in 0..bytes.len() {
+                let mut changed = bytes.clone();
+                changed[offset] ^= 1;
+                assert!(inspect_release_executable(&index(None), &changed, arch).is_err());
+            }
+            let mut malformed = payload;
+            malformed[0] = 0;
+            let malformed = stamp_executable(&malformed, TAG, COMMIT, 193, arch).unwrap();
+            assert!(read_executable_identity(&malformed).is_ok());
+            assert!(inspect_release_executable(&index(None), &malformed, arch).is_err());
+        }
+    }
+}
+
+#[test]
 fn combined_installed_image_checks_match_separate_checks() {
     for arch in [Architecture::Amd64, Architecture::Arm64] {
         for sections in [rust_sections(arch), go_sections(arch, "")] {

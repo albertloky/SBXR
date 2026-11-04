@@ -672,6 +672,49 @@ fn coherent_plain_text_pair_is_not_accepted_as_linux_release_structure() {
     assert!(read_installed(&root.host().fs).is_err());
 }
 
+#[test]
+fn setup_observation_refuses_wrong_full_digest_and_coherent_malformed_elf_without_effects() {
+    for malformed in [false, true] {
+        let root = Root::new();
+        let bytes = fs::read(root.0.join("usr/local/bin/sbxr")).unwrap();
+        let identity = crate::release_identity::read_executable_identity(&bytes).unwrap();
+        let mut payload = identity.payload().to_vec();
+        if malformed {
+            payload[0] = 0;
+        }
+        let bytes = crate::release_identity::stamp_executable(
+            &payload,
+            identity.tag(),
+            identity.commit(),
+            identity.sequence(),
+            identity.architecture(),
+        )
+        .unwrap();
+        let digest = if malformed {
+            sha256_hex(&bytes)
+        } else {
+            "0".repeat(64)
+        };
+        let record = InstalledRecord::new(release(), 192, "amd64", &digest).unwrap();
+        root.write("usr/local/bin/sbxr", &bytes, 0o755);
+        root.write(
+            "var/lib/sbxr/installed.json",
+            &record.encode().unwrap(),
+            0o600,
+        );
+        assert_eq!(
+            crate::release_identity::verify_installed_pair(&record, &bytes).is_ok(),
+            malformed
+        );
+        let host = root.host();
+        assert!(matches!(
+            host.inspect_setup(&release()),
+            Err(HostError::Foreign)
+        ));
+        assert!(host.runner.effects.is_empty());
+    }
+}
+
 struct SystemFixtureTransport {
     backend: std::rc::Rc<std::cell::RefCell<Fake>>,
     commands: std::rc::Rc<std::cell::RefCell<Vec<super::super::system::CommandSpec>>>,

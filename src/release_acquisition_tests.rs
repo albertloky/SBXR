@@ -212,6 +212,35 @@ fn metadata_acceptance_and_identity_failures_stop_before_network_authority() {
     );
     assert!(f.requests.is_empty());
 }
+
+#[test]
+fn a_coherent_installed_pair_with_malformed_elf_refuses_before_network() {
+    let mut f = Fixture::new();
+    let identity = identity::read_executable_identity(&f.executable).unwrap();
+    let mut payload = identity.payload().to_vec();
+    payload[0] = 0;
+    let bytes = identity::stamp_executable(
+        &payload,
+        identity.tag(),
+        identity.commit(),
+        identity.sequence(),
+        identity.architecture(),
+    )
+    .unwrap();
+    let record = InstalledRecord::new(
+        f.record.release_identity(),
+        f.record.sequence(),
+        f.record.architecture(),
+        &sha256_hex(&bytes),
+    )
+    .unwrap();
+    assert!(identity::verify_installed_pair(&record, &bytes).is_ok());
+    assert!(
+        AuthenticatedInstalled::acquire(&mut f, record, &bytes, &bytes, &SelectionBudget::new())
+            .is_err()
+    );
+    assert!(f.requests.is_empty());
+}
 #[test]
 fn acceptance_record_refuses_missing_duplicate_or_incompatible_required_lines() {
     let f = Fixture::new();

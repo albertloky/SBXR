@@ -568,6 +568,15 @@ impl<'a> ExecutableIdentity<'a> {
     }
 }
 pub fn read_executable_identity(executable: &[u8]) -> Result<ExecutableIdentity<'_>> {
+    Ok(read_executable_identity_with_hasher(executable)?.0)
+}
+
+// Retain only the SHA-256 state for this immutable slice's payload. Installed
+// verification can continue it through the trailer to check the full digest
+// without hashing the shared prefix twice. Both digests are still verified.
+fn read_executable_identity_with_hasher(
+    executable: &[u8],
+) -> Result<(ExecutableIdentity<'_>, Sha256)> {
     let tail_size = 32 + 8 + IDENTITY_MAGIC.len();
     if executable.len() <= tail_size
         || executable.len() > MAX_EXECUTABLE_BYTES
@@ -588,24 +597,30 @@ pub fn read_executable_identity(executable: &[u8]) -> Result<ExecutableIdentity<
     let identity: EmbeddedIdentity = decode(document, MAX_IDENTITY_BYTES)?;
     identity.validate()?;
     let payload = &executable[..document_offset];
-    if payload.ends_with(IDENTITY_MAGIC) || sha256_hex(payload) != identity.payload_sha256 {
+    if payload.ends_with(IDENTITY_MAGIC) {
         return Err(ReleaseError);
     }
-    Ok(ExecutableIdentity { identity, payload })
+    let mut hasher = Sha256::new();
+    hasher.update(payload);
+    if format!("{:x}", hasher.clone().finalize()) != identity.payload_sha256 {
+        return Err(ReleaseError);
+    }
+    Ok((ExecutableIdentity { identity, payload }, hasher))
 }
 /// Matches Go's installed-pair proof. The index digest still needs authentication.
 pub fn verify_installed_pair<'a>(
     record: &InstalledRecord,
     executable: &'a [u8],
 ) -> Result<ExecutableIdentity<'a>> {
-    let parsed = read_executable_identity(executable)?;
+    let (parsed, mut hasher) = read_executable_identity_with_hasher(executable)?;
+    hasher.update(&executable[parsed.payload().len()..]);
     let release = record.release_identity();
     if parsed.repository() != release.repository()
         || parsed.tag() != release.tag()
         || parsed.commit() != release.commit()
         || parsed.sequence() != record.sequence()
         || parsed.architecture().as_str() != record.architecture()
-        || sha256_hex(executable) != record.executable_sha256()
+        || format!("{:x}", hasher.finalize()) != record.executable_sha256()
     {
         return Err(ReleaseError);
     }
@@ -742,7 +757,7 @@ pub fn inspect_release_executable(
     {
         return Err(ReleaseError);
     }
-    inspect_linux_artifact(executable, architecture)
+    inspect_linux_identity(&identity, architecture)
 }
 
 fn range(bytes: &[u8], offset: u64, size: u64) -> Result<&[u8]> {

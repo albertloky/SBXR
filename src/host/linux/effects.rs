@@ -133,15 +133,11 @@ impl<R: CommandRunner> LinuxHost<R> {
                 crate::release_identity::MAX_EXECUTABLE_BYTES,
             )?
             .ok_or(HostError::Unsafe)?;
-        if installed.release_identity() != *release
-            || installed.architecture() != "amd64"
-            || installed.executable_sha256() != sha256_hex(&executable)
-        {
+        if installed.release_identity() != *release || installed.architecture() != "amd64" {
             return Err(HostError::Foreign);
         }
-        crate::release_identity::verify_installed_pair(&installed, &executable)
-            .map_err(|_| HostError::Foreign)?;
-        crate::release_identity::inspect_linux_artifact(
+        crate::release_identity::verify_installed_linux_pair(
+            &installed,
             &executable,
             crate::release_identity::Architecture::Amd64,
         )
