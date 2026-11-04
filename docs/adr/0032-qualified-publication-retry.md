@@ -303,3 +303,22 @@ changes or admission of candidate, signing, failure mutation or VPS jobs.
 No remote draft, asset, tag or signature is changed. Build210 remains failed;
 startup fixes and diagnostics do not retroactively qualify it. Sequence211,
 prospectively v3.1.137, requires fresh global admission and complete qualification.
+
+## Retained q211 identity — 2026-11-04
+
+The Owner-authorized continuation resolves failed v3.1.137/211 by retaining
+signed-unqualified draft 430636507, source
+`a0abe154f4380b2c2f5d28a979c9417d4059e90d`, run 41312490744. The exact manifest is
+`81107d0cbeed9c0b3f2c759938065d08259966411acb68c1f1d01e282280989e`.
+Fresh GET-only inspection matched all four downloaded assets and absent release
+and burn refs; genuine retained attestation verification passed. See the
+[dated disposition report](../acceptance/reports/q211-retained-reservation-2026-11-04.md).
+
+New facts bind all nine exact reservations, with q203–210 unchanged. Missing or
+changed drafts/assets and unavailable or present refs refuse. Build211's version,
+sequence and release ID cannot be reused or promoted. Its finalizer deliberately
+stopped for a disposition decision; the failed run remains failed. No finalizer
+retry, burn, remote draft/tag/asset mutation or workflow permission change occurs.
+The existing inventory helper sufficed locally, so inventory-only workflow scope
+remains q210. Prospective v3.1.138/212 still requires fresh global admission,
+final-source CI and a separately authorized complete live qualification.

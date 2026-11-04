@@ -34,6 +34,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [q211 retained reservation — 2026-11-04](q211-retained-reservation-2026-11-04.md)
+  — exact signed-unqualified draft retained; intentional failure-finalization stop preserved; no new live attempt.
+
 - [q205 administrative cleanup closeout — 2026-10-30](q205-administrative-cleanup-2026-10-30.md)
   — separately approved package/residual cleanup completed; build205 remains unqualified, with exact-source CI and remaining five-journey/product-scan limits recorded.
 
