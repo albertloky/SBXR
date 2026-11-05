@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Offline implementation verified; native CI pending; live criterion deferred
+**Status**: Offline implementation and native CI verified at `6c2b287`; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.

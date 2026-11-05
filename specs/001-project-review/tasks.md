@@ -56,7 +56,8 @@ and is explicitly deferred, not a completed task. Do not create a candidate to t
 this change for the first time.
 
 Post-commit closeout: approved push of 6e87493 succeeded; Verify run 41973179692
-passed all four jobs. This checklist closeout is local and does not change tested code.
+passed all four jobs. That checklist closeout was included in 6c2b287; it did not
+change the earlier tested code. The continuation CI result is recorded in review.md.
 
 ## Continuation: remaining menu-frame cost
 
@@ -67,3 +68,17 @@ passed all four jobs. This checklist closeout is local and does not change teste
 
 Dependency: T013 -> T014 -> T015 -> T016. Tests use existing protected files and
 runtime observation boundaries; no live qualification is part of this continuation.
+
+
+## Phase 6: Convergence
+
+- [x] T017 [US1] Reconcile successful exact-source CI, workflow provenance, and the existing release prerequisites in spec.md, review.md and analysis.md per FR-009, SC-005 and T012 (partial; HIGH, C001).
+- [ ] T018 [US2] Verify the unchanged 90-second details/menu criterion on a separately authorized exact candidate and record the actual result, five-journey outcome and scoped cleanup in a dated report per SC-003 and US2/AC1 (partial; HIGH, C002).
+
+T017 is independent offline documentation work. T018 is blocked by missing
+specific live authorization and fresh readiness; it grants no candidate dispatch,
+failure disposition, host/client/security mutation, cleanup or publication authority.
+The five existing live journeys and their cleanup are prerequisites to a release
+claim, not new requirements introduced by convergence. Leave T018 unchecked until
+the criterion is met and the actual outcome and cleanup are recorded; failed or
+missing observations cannot satisfy it.
