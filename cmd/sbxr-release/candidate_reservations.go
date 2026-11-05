@@ -23,7 +23,7 @@ type candidateReservation struct {
 	Tag                         string          `json:"tag"`
 }
 
-// Source-controlled Owner decisions of 2026-10-29, 2026-10-31, 2026-11-01 and 2026-11-04. Return fresh values so callers
+// Source-controlled Owner decisions of 2026-10-29, 2026-10-31, 2026-11-01, 2026-11-04 and 2026-11-05. Return fresh values so callers
 // cannot mutate the policy. Changing this record requires a separate review.
 func approvedCandidateReservations() []candidateReservation {
 	return []candidateReservation{{
@@ -124,6 +124,17 @@ func approvedCandidateReservations() []candidateReservation {
 			{ID: 698562869, Name: "sbxr-linux-amd64.tar.gz", Size: 6231471, Digest: "da0f81c9d312236788ddb5cd624eb5eca0c0faec80a8d1cc4a133b513d315d85"},
 			{ID: 698562874, Name: "sbxr-linux-arm64.tar.gz", Size: 5277144, Digest: "e5d6deb730d54393a1fd3fd1c8d83db543c9975999b5ed6d38f66ebc31b92fad"},
 		},
+	}, {
+		Tag: "v3.1.138", Sequence: 212, ReleaseID: 434759360,
+		Commit: "13431bc29500bf20dc108dc325590403d0ca056c", RunID: "41958829811", SigningState: "signed-unqualified",
+		ReleaseIndexSHA256:          "f006de0f4719bc8a6fe21af86a11fd837cc20cf7e73911e13b905e0cdd187a98",
+		QualificationManifestSHA256: "30bbbeb56f16bb16ebc6be0cb2dbfa305cc16e403d0c3a609dc0918ac2591b74",
+		Assets: []observedAsset{
+			{ID: 711955170, Name: "install.sh", Size: 76781, Digest: "ce5eb38b4ed36acaa538cba191be8cf6b07c62a57957ed9703095f76634e9263"},
+			{ID: 711955169, Name: "release-index.json", Size: 609, Digest: "f006de0f4719bc8a6fe21af86a11fd837cc20cf7e73911e13b905e0cdd187a98"},
+			{ID: 711955171, Name: "sbxr-linux-amd64.tar.gz", Size: 6231778, Digest: "38b156d63f4f0fb9e56ed184298578497b27a6a78a086b97cc3399620a69db76"},
+			{ID: 711955172, Name: "sbxr-linux-arm64.tar.gz", Size: 5332376, Digest: "0b47b5925a941ffc7c46d7f45dda305b4551456cf43b6138d32437c5b5543253"},
+		},
 	}}
 }
 
@@ -192,8 +203,8 @@ type reservationObservations struct {
 
 func checkCandidateReservations(observed reservationObservations, allowed []string) bool {
 	policy := approvedCandidateReservations()
-	// The Owner-approved exception is exactly these nine retained identities.
-	if len(policy) != 9 || observed.Releases == nil || len(observed.Refs) != len(policy) {
+	// The Owner-approved exception is exactly these ten retained identities.
+	if len(policy) != 10 || observed.Releases == nil || len(observed.Refs) != len(policy) {
 		return false
 	}
 	for i, r := range policy {

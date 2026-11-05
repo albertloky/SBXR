@@ -17,3 +17,15 @@ through CARGO_HOME/RUSTUP_HOME; call $CARGO_HOME/bin/cargo when absent from PATH
 Expected: output selection avoids unused adapter/status aggregation, old prepared
 authority refuses, fallback and failed-output behavior remain correct, existing
 menu/admission/disclosure regressions pass. Live 90-second success remains unverified.
+
+
+## Approved reservation validation
+
+Use Go 1.26.6, umask 022 and a short real workspace TMPDIR as in the code map.
+Run the new exact build-212 regression before the policy change (expected failure),
+then focused candidate-reservation/sequence checks after it. Run
+`go test ./cmd/sbxr-release -count=1`, root integration checks and `go vet ./...`.
+Existing complete CI verifies native architectures and retained release seams.
+Read-only full reservation observation replay must accept exactly ten matching
+records and twenty absent refs. Inspect refusal and single-field collision tests;
+no test may dispatch a candidate or mutate remote assets. Record all limits.

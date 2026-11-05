@@ -62,3 +62,13 @@ other files. Implement completed the authorized documentation work for C001;
 C002 cannot be closed by offline tests. No follow-up empty convergence phase or
 claim of full implementation/live acceptance is warranted. Supporting evidence
 and remaining prerequisites are in review.md. No extension hooks configured.
+
+
+## Approved reservation consistency analysis
+
+FR-011/SC-007 map to T019–T024 under US3. The explicit Owner decision supplies only
+the exact reservation authority previously missing from F004; original FR-008
+continues to prohibit unauthorized live/remote release effects. All earlier scope,
+failure and live limitations remain. No unresolved requirement ambiguity or new
+constitution conflict was found. T018 is not a dependency authorizing a live test.
+The 16-item specification-quality checklist remains satisfied; no marker changes.

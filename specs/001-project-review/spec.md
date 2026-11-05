@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Offline implementation and native CI verified at `6c2b287`; live criterion unverified
+**Status**: Product repairs verified; approved reservation local checks passed; final-source CI tracked separately; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.
@@ -98,7 +98,9 @@ implemented correction, deferred decision and untouched external action.
   documentation mismatch, unverified behavior or decision required.
 - **FR-007**: Existing unrelated changes and failed candidate bytes MUST be preserved.
 - **FR-008**: No new live test, failure disposition, security change or publication
-  may be performed under this offline review authorization.
+  may be performed under the original offline review authorization. The separately
+  approved reservation-only continuation below does not authorize any live or
+  remote release mutation.
 - **FR-009**: Reports MUST distinguish implemented, regression-tested and
   live-validated behavior, and identify exact remaining prerequisites.
 
@@ -149,3 +151,28 @@ Acceptance: given a running installation, rendering the frame uses one combined
 status read; given changed facts at the next input boundary, the next frame shows
 fresh facts or refusal. An earlier Prepared Action expires on the combined read.
 Unavailable HTTP authority must not hide separately admitted removal actions.
+
+
+## Approved continuation: retain failed build 212 (2026-11-05)
+
+The Owner separately approved preserving build 212 through the exact fixed
+reservation mechanism, including source, tests, documentation, commit/push and CI.
+This resolves the policy decision in F004 only for that identity; it does not
+expand the original review authorization to live operations or publication.
+
+- **FR-011**: The existing fixed reservation policy MUST additionally bind failed
+  v3.1.138/212, draft 434759360, source 13431bc29500bf20dc108dc325590403d0ca056c,
+  run 41958829811, as signed-unqualified, including its verified manifest, index
+  and four exact asset identities. The preceding nine records MUST remain unchanged.
+  Missing/changed/unknown authority or refs MUST refuse. Its tag, sequence and
+  release ID MUST remain unavailable for reuse or promotion. Existing admission
+  and historical evidence semantics MUST remain intact.
+- **SC-007**: Fresh read-only checks match the approved record; regression checks
+  prove the ten-record policy, preserved refusals and next-sequence admission
+  without remote mutation. Final-source checks/CI pass. The failed run, draft,
+  assets and signature remain unchanged and no live attempt is made.
+
+US3 acceptance: given the exact approved failed identity, the supported workflow
+can retain it and evaluate a fresh candidate above all published, burned and
+reserved sequences. Given any changed identity, omitted reservation or attempted
+reuse, it refuses. A reservation never makes the failed candidate qualified.

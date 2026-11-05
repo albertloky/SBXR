@@ -322,3 +322,28 @@ retry, burn, remote draft/tag/asset mutation or workflow permission change occur
 The existing inventory helper sufficed locally, so inventory-only workflow scope
 remains q210. Prospective v3.1.138/212 still requires fresh global admission,
 final-source CI and a separately authorized complete live qualification.
+
+
+## Retained q212 identity — 2026-11-05
+
+The Owner explicitly approved retaining failed v3.1.138/212 through the existing
+fixed reservation mechanism. It remains signed-unqualified: draft 434759360,
+source `13431bc29500bf20dc108dc325590403d0ca056c`, run 41958829811 and manifest
+`30bbbeb56f16bb16ebc6be0cb2dbfa305cc16e403d0c3a609dc0918ac2591b74`.
+Fresh GET-only checks matched the original draft and all four independently
+downloaded asset bytes; the retained genuine attestation was reverified for the
+exact repository, candidate workflow, main ref, source and hosted runner.
+See the [dated reservation report](../acceptance/reports/q212-retained-reservation-2026-11-05.md).
+
+New facts bind all ten exact reservations, with q203–211 unchanged. The compiled
+record pins the index and four asset IDs, sizes and digests. Missing or changed
+drafts/assets and unavailable or present release/burn refs refuse. Build 212's
+tag, sequence and release ID cannot be reused or promoted through the supported
+workflow. Its failed qualification and intentional disposition stop remain failed;
+this is preservation, not a finalizer retry, burn, unsigned claim or qualification.
+
+No remote draft, asset, tag or signature is changed. No workflow permission or
+inventory-dispatch scope changes. The approval covers the bounded source/tests/
+documentation change, review, commit/push and CI, not a live attempt, VPS change,
+cleanup or publication. Prospective v3.1.139/213 requires fresh global admission,
+final-source CI and a separately authorized complete qualification.

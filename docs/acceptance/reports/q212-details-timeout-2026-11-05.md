@@ -49,3 +49,8 @@ Private local evidence: old SBXR workspace
 state, final draft metadata, timing captures and scoped cleanup comparisons.
 The full-project follow-up is tracked in
 [the review specification](../../../specs/001-project-review/spec.md).
+
+
+Subsequent separately approved preservation is recorded in the
+[build 212 reservation report](q212-retained-reservation-2026-11-05.md).
+It does not change this failure or its dated cleanup observations.

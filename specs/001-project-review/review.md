@@ -199,5 +199,31 @@ not permission to execute them or new policy.
 
 Local constitution ratification remains unestablished. Existing AGENTS/current
 ADRs govern this work; ratifying that consolidation is not a prerequisite invented
-by this review. The exact next operational decision is build 212 disposition;
-its concrete action proposal must be prepared and checked before seeking approval.
+by this review. The build 212 preservation decision was subsequently approved as recorded below.
+A new live attempt still requires its separate concrete approval after final-source
+CI and fresh readiness.
+
+
+## Separately approved build 212 preservation
+
+The Owner approved exact signed-unqualified retention after reviewing the concrete
+identity/asset proposal. FR-011/SC-007 and T019–T024 track this bounded continuation.
+The existing Plan/Tasks/Implement workflow was followed: installed setup scripts
+preserved the plan and resolved the task template, requirements/design/tasks were
+reconciled, and adjacent red/green regressions precede adoption. No new project or
+feature branch was initialized; no extension hooks are configured.
+
+The implementation and verification are recorded in the
+[dated reservation report](../../docs/acceptance/reports/q212-retained-reservation-2026-11-05.md).
+F004's build-212 preservation decision is resolved within that exact scope; the
+failed run and all bytes remain unchanged. The earlier prerequisite list describes
+the gate identified before this approval. Fresh live approval/readiness and T018
+remain outstanding; reservation adoption supplies no live evidence or publication
+permission. The local constitution remains unratified and unchanged.
+
+
+Reservation validation: new regressions failed against the nine-record policy;
+focused reservation tests, full release-tool package, root integration checks and
+Go vet now pass. Fresh observations accepted ten exact records and twenty absent
+refs; previous nine pins and historical initial fixtures are unchanged. The
+remaining post-push CI task is tracked separately from the still-open live task.

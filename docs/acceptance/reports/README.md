@@ -37,6 +37,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Release attempts and publication
 
+- [q212 retained reservation — 2026-11-05](q212-retained-reservation-2026-11-05.md)
+  — exact signed-unqualified draft preserved after explicit approval; no live retry or publication.
+
 - [q211 retained reservation — 2026-11-04](q211-retained-reservation-2026-11-04.md)
   — exact signed-unqualified draft retained; intentional failure-finalization stop preserved; no new live attempt.
 

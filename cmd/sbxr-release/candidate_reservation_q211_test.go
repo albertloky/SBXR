@@ -7,7 +7,7 @@ import (
 
 func TestQ211ExactReservation(t *testing.T) {
 	p := approvedCandidateReservations()
-	if len(p) != 9 || p[8].Tag != "v3.1.137" || p[8].Sequence != 211 || p[8].ReleaseID != 430636507 || p[8].SigningState != "signed-unqualified" || p[8].RunID != "41312490744" {
+	if len(p) != 10 || p[8].Tag != "v3.1.137" || p[8].Sequence != 211 || p[8].ReleaseID != 430636507 || p[8].SigningState != "signed-unqualified" || p[8].RunID != "41312490744" {
 		t.Fatal("wrong ninth identity")
 	}
 	if p[8].Commit != "a0abe154f4380b2c2f5d28a979c9417d4059e90d" || p[8].ReleaseIndexSHA256 != "5bf9794eef667e8459eda7e24c6d0e4d9aed687bed7cae8e6297273c46185d68" || p[8].QualificationManifestSHA256 != "81107d0cbeed9c0b3f2c759938065d08259966411acb68c1f1d01e282280989e" {
@@ -57,12 +57,12 @@ func TestQ211ExactReservation(t *testing.T) {
 }
 
 func TestQ211ReservationCannotBeOmittedOrRelabeled(t *testing.T) {
-	if len(approvedCandidateReservations()) != 9 {
+	if len(approvedCandidateReservations()) != 10 {
 		t.Fatal("missing ninth reservation")
 	}
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.138", 212
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.139", 213
 	for name, mutate := range map[string]func(*qualificationFacts){
 		"old eight only": func(f *qualificationFacts) { f.ReservedIdentities = f.ReservedIdentities[:8] },
 		"unsigned":       func(f *qualificationFacts) { f.ReservedIdentities[8].SigningState = "unsigned" },

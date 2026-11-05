@@ -1,7 +1,9 @@
 # Tasks: Existing SBXR project review
 
 Input: [spec.md](spec.md), [plan.md](plan.md), research, data model and contracts.
-Tests are required by FR-005. No task authorizes live work or failure disposition.
+Tests are required by FR-005. No task authorizes live work. Phase 7 records the
+separately approved exact build-212 preservation; no remote disposition mutation
+is authorized.
 
 ## Phase 1: Setup
 
@@ -82,3 +84,18 @@ The five existing live journeys and their cleanup are prerequisites to a release
 claim, not new requirements introduced by convergence. Leave T018 unchecked until
 the criterion is met and the actual outcome and cleanup are recorded; failed or
 missing observations cannot satisfy it.
+
+
+## Phase 7: US3 — Approved build 212 preservation
+
+- [x] T019 [US3] Recheck exact failed identity/assets/signature/refs and record FR-011/SC-007 plus the preservation contract in spec.md, plan.md, research.md and contracts/retained-candidate.md.
+- [x] T020 [US3] Add an exact build-212 reservation regression and demonstrate failure against the nine-record policy in cmd/sbxr-release/candidate_reservation_q212_test.go.
+- [x] T021 [US3] Add the tenth exact record, strict collector count and coherent current-candidate/refusal fixtures in cmd/sbxr-release/candidate_reservations.go, adjacent tests and .github/scripts/check-candidate-reservations.sh.
+- [x] T022 [P] [US3] Record the approved preservation in docs/adr/0032-qualified-publication-retry.md, docs/acceptance/reports/q212-retained-reservation-2026-11-05.md and its report index; reconcile review.md.
+- [x] T023 [US3] Validate focused/full release-tool and root integration checks, vet, full current reservation observations and the final diff; record results in the dated reservation report.
+- [ ] T024 [US3] Commit/push the reviewed preservation on main and verify exact-source CI; retain results under .scratch/acceptance/q212res/.
+
+Dependency: T019 -> T020 -> T021 -> T023 -> T024. T022 can run independently after
+T019 and is finalized with T023 results. The invariant is exact retained identity
+and refusal of changed/reused authority, not a live qualification claim. T018
+remains open and independent. No existing task is retroactively marked live-passed.

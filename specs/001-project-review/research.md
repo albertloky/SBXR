@@ -55,3 +55,18 @@ observations, adjacent Owner regressions, native guard regressions and terminal
 input-boundary assertions. The old clean-absent benchmark does not represent the
 running HTTP path and is not used to predict VPS speed. A smaller duplicate pair
 read in native journeys is deferred to avoid combining independent trust changes.
+
+
+## Approved build 212 preservation
+
+Decision: extend the existing fixed reservation set by exactly build 212 after
+its explicit Owner approval. Current nine-record policy refuses the outstanding
+draft, and draft metadata alone does not advance the published/burned/reserved
+sequence. Fresh GETs and downloads at 09:18:54 UTC matched its original metadata
+and all four asset sizes/digests; release/burn refs were absent. Retained manifest
+signature verification binds the exact repository/workflow/main/source/hosted runner.
+
+Alternative rejected: delete/finalize/burn the failed draft, broaden an allow-list,
+reuse its sequence, or interpret old live approval as a new attempt. The approved
+preservation mechanism requires none of those actions. A new final-source commit
+and CI remain necessary before a separately approved candidate can be prepared.

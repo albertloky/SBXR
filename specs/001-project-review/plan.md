@@ -59,3 +59,26 @@ the result for the first and every later frame. Other action reviews are unchang
 Files: src/proxyinstallation.rs, proxyinstallation/{owner,subscription}.rs,
 host/admission.rs, terminal.rs and their adjacent/integration tests. No new schema,
 dependency, CLI, policy, or remote operation. Constitution check remains PASS.
+
+
+## Approved build 212 reservation continuation
+
+Use the existing retained-candidate model and validators; append one exact record
+in cmd/sbxr-release/candidate_reservations.go and update its fixed count plus
+.github/scripts/check-candidate-reservations.sh. Keep all nine earlier records,
+unknown-signing semantics and historical replay unchanged. No schema, product
+Rust, workflow permission, gate or remote mutation changes are needed.
+
+Adjacent candidate-reservation and qualification fixtures must use a fresh
+unreserved candidate (prospectively 139/213) where appropriate. Isolated tag,
+sequence and release-ID collision tests must not accidentally collide on another
+field. Preserve historical initial facts/decisions. Add exact-record regression
+before the policy change, then run focused, release-tool and root integration
+checks, formatting, vet and final-source CI. Fresh authenticated GET/hash checks
+precede adoption; full observation replay verifies all ten reservations together.
+
+Record the approved policy in ADR-0032 and a dated indexed reservation report.
+Keep T018 live validation open. This continuation uses existing Spec Kit artifacts;
+setup-plan preserves the existing plan and setup-tasks resolves its template.
+Constitution check: PASS against existing rules and the explicit new exact-identity
+approval; the local unratified consolidation is unchanged.
