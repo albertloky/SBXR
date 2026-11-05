@@ -14,6 +14,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Direct Rust diagnostics
 
+- [q212 details timeout and verified scoped cleanup — 2026-11-05](q212-details-timeout-2026-11-05.md)
+  — install/setup passed, details deadline failed, later journeys not reached; draft preserved.
+
 - [q210 serving readiness and incomplete enablement — 2026-11-01](q210-serving-readiness-2026-11-01.md)
   — reproduced Type=simple readiness race; bounded offline correction, live cause still unproved.
 

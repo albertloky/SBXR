@@ -14,7 +14,11 @@ establish a live installation or stable release.
 
 ## Latest dated qualification closeout
 
-[q205 administrative cleanup, 2026-10-30](acceptance/reports/q205-administrative-cleanup-2026-10-30.md) records completed approved cleanup of the failed build205 installation, exact candidate/source/CI bindings, preservation limits and remaining qualification work. It supersedes older missing-evidence/residue statements only where the dated observations resolve them; it does not qualify build205 or change the finite scope below.
+[q212 details timeout and scoped cleanup, 2026-11-05](acceptance/reports/q212-details-timeout-2026-11-05.md)
+records successful packaged installation/Standard setup, the failed initial details
+cycle and verified scoped cleanup. Outside proxy, subscription, credential and
+Karing journeys were not reached. These bounded observations do not qualify the
+candidate or remove the remaining checks in the finite matrix below.
 
 ## Scope reconciliation
 

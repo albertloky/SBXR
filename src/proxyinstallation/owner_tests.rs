@@ -117,3 +117,156 @@ fn details_reopen_failure_keeps_independently_observed_removal_visible() {
     assert!(review.legal_actions.contains(&Action::CompleteRemoval));
     assert!(review.prepared.is_none());
 }
+
+#[test]
+fn output_details_selects_only_fresh_primary_and_drops_it_before_disclosure() {
+    use std::cell::Cell;
+    struct Observed {
+        opened: Rc<RefCell<Vec<Journey>>>,
+        alive: Rc<Cell<bool>>,
+    }
+    struct Primary(Rc<Cell<bool>>);
+    impl Drop for Primary {
+        fn drop(&mut self) {
+            self.0.set(false);
+        }
+    }
+    impl Interface for Primary {
+        fn review(&self, action: Action) -> Review {
+            assert_eq!(
+                action,
+                Action::ViewDetails,
+                "output must not aggregate unused status/actions"
+            );
+            RemovalStatus.review(action)
+        }
+        fn execute(&mut self, _: PreparedAction, _: Confirmation) -> crate::domain::Result {
+            panic!("details cannot execute")
+        }
+    }
+    impl OwnerSources<'_> for Observed {
+        fn journeys(&self) -> std::result::Result<Vec<Journey>, HostError> {
+            Ok(vec![
+                Journey::Tunnel,
+                Journey::Standard,
+                Journey::Identity,
+                Journey::Disclosure,
+            ])
+        }
+        fn open(&self, j: Journey) -> std::result::Result<Box<dyn Interface>, HostError> {
+            self.opened.borrow_mut().push(j);
+            match j {
+                Journey::Tunnel => Err(HostError::LiveUnavailable),
+                Journey::Standard => {
+                    assert!(!self.alive.replace(true));
+                    Ok(Box::new(Primary(self.alive.clone())))
+                }
+                Journey::Disclosure => {
+                    assert!(
+                        !self.alive.get(),
+                        "primary must release resources before disclosure"
+                    );
+                    Err(HostError::Foreign)
+                }
+                _ => panic!("unrelated adapter must not open for output"),
+            }
+        }
+        fn mode(&self) -> ExecutionMode {
+            ExecutionMode::InjectedHost
+        }
+    }
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let mut owner = OwnerInstallation::new(Observed {
+        opened: opened.clone(),
+        alive: Rc::new(Cell::new(false)),
+    });
+    let mut output = Vec::new();
+    assert!(owner.write_details(&mut output).is_err());
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "Independent removal observation\n"
+    );
+    assert_eq!(
+        *opened.borrow(),
+        [Journey::Tunnel, Journey::Standard, Journey::Disclosure]
+    );
+}
+
+#[test]
+fn output_details_invalidates_prepared_action_even_when_primary_disappears() {
+    struct Changing(std::cell::Cell<bool>);
+    impl OwnerSources<'_> for Changing {
+        fn journeys(&self) -> std::result::Result<Vec<Journey>, HostError> {
+            if self.0.get() {
+                Ok(vec![Journey::Standard])
+            } else {
+                Err(HostError::Foreign)
+            }
+        }
+        fn open(&self, _: Journey) -> std::result::Result<Box<dyn Interface>, HostError> {
+            if self.0.get() {
+                Ok(Box::new(Installation::simulation()))
+            } else {
+                Err(HostError::Foreign)
+            }
+        }
+        fn mode(&self) -> ExecutionMode {
+            ExecutionMode::InjectedHost
+        }
+    }
+    for present in [true, false] {
+        let mut owner = OwnerInstallation::new(Changing(std::cell::Cell::new(true)));
+        let prepared = owner.review(Action::StartSetup).prepared.unwrap();
+        owner.sources().0.set(present);
+        let mut output = Vec::new();
+        owner.write_details(&mut output).unwrap();
+        assert_eq!(
+            owner.execute(prepared, Confirmation::Approved).outcome,
+            Outcome::Refused
+        );
+        assert!(!output.is_empty());
+        if !present {
+            assert!(
+                String::from_utf8(output)
+                    .unwrap()
+                    .contains("could not be verified")
+            );
+        }
+    }
+}
+
+#[test]
+fn output_details_write_failure_prevents_disclosure_lookup() {
+    struct Once(std::cell::Cell<usize>);
+    impl OwnerSources<'_> for Once {
+        fn journeys(&self) -> std::result::Result<Vec<Journey>, HostError> {
+            let n = self.0.get();
+            self.0.set(n + 1);
+            assert_eq!(
+                n, 0,
+                "output failure must stop before disclosure eligibility"
+            );
+            Ok(vec![Journey::Removal])
+        }
+        fn open(&self, _: Journey) -> std::result::Result<Box<dyn Interface>, HostError> {
+            Ok(Box::new(RemovalStatus))
+        }
+        fn mode(&self) -> ExecutionMode {
+            ExecutionMode::InjectedHost
+        }
+    }
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut owner = OwnerInstallation::new(Once(std::cell::Cell::new(0)));
+    assert_eq!(
+        owner.write_details(&mut Broken).unwrap_err().kind(),
+        std::io::ErrorKind::BrokenPipe
+    );
+}

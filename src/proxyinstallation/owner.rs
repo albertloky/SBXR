@@ -250,7 +250,26 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
     }
     fn write_details(&mut self, output: &mut dyn std::io::Write) -> std::io::Result<()> {
         let _phase = crate::host::timing::span(crate::host::timing::Phase::Details);
-        let reviewed = self.review(Action::ViewDetails);
+        // Output does not consume the aggregate legal-action menu. Select a fresh
+        // primary directly instead of reviewing every unrelated journey first.
+        // As with Review, invalidate any earlier prepared authority before reads.
+        *self.owner.get_mut() = Rc::new(());
+        self.active.get_mut().take();
+        let reviewed = self
+            .sources
+            .journeys()
+            .ok()
+            .and_then(|journeys| {
+                journeys.into_iter().find_map(|journey| {
+                    self.sources
+                        .open(journey)
+                        .ok()
+                        .map(|module| module.review(Action::ViewDetails))
+                })
+            })
+            .unwrap_or_else(|| self.refusal());
+        // The primary module is dropped before the separately fresh disclosure
+        // path below; no retained module or cached authority crosses that boundary.
         for line in reviewed.details {
             writeln!(output, "{line}")?;
         }
