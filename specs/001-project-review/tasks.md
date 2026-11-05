@@ -39,7 +39,7 @@ no unsupported feature or unauthorized operation enters the plan.
 ## Final Phase: Cross-cutting validation
 
 - [x] T011 Run formatting, strict Clippy and applicable checks; review the final diff and record results in specs/001-project-review/review.md.
-- [ ] T012 Commit reviewed changes on main and verify CI; record source/run references in specs/001-project-review/review.md.
+- [x] T012 Commit reviewed changes on main and verify CI; record source/run references in specs/001-project-review/review.md.
 
 ## Dependencies and execution order
 
@@ -54,3 +54,16 @@ Deliver accurate readiness first, then the bounded tested performance correction
 then the final review. SC-003 requires a separately authorized future live test
 and is explicitly deferred, not a completed task. Do not create a candidate to test
 this change for the first time.
+
+Post-commit closeout: approved push of 6e87493 succeeded; Verify run 41973179692
+passed all four jobs. This checklist closeout is local and does not change tested code.
+
+## Continuation: remaining menu-frame cost
+
+- [x] T013 [US2] Trace and specify repeated HTTP inspection in research.md and spec.md (FR-010/SC-006).
+- [x] T014 [US2] Add failing combined-status and fresh-input regressions in src/proxyinstallation/owner_tests.rs, subscription_tests.rs, host/admission_tests.rs and tests/menu.rs.
+- [x] T015 [US2] Implement in-call combined observation through src/proxyinstallation.rs, owner.rs, subscription.rs, host/admission.rs and terminal.rs.
+- [x] T016 [US2] Run focused and broader checks, review the diff and report measured limits in review.md.
+
+Dependency: T013 -> T014 -> T015 -> T016. Tests use existing protected files and
+runtime observation boundaries; no live qualification is part of this continuation.

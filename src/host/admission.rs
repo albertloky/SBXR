@@ -431,6 +431,12 @@ impl crate::proxyinstallation::Interface for BoundJourney<'_> {
         }
         self.inner.review(a)
     }
+    fn review_status(&self) -> (crate::proxyinstallation::Review, &'static str) {
+        if self.snapshot.verify().is_err() {
+            return (Self::refusal(), "Problem detected");
+        }
+        self.inner.review_status()
+    }
     fn review_tunnel_setup(&self, hostname: &str) -> crate::proxyinstallation::Review {
         if self.snapshot.verify().is_err() {
             return Self::refusal();

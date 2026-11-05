@@ -621,3 +621,41 @@ fn stale_process_proof_blocks_streaming_execution_without_output_or_effects() {
     assert!(journey.write_details(&mut output).is_err());
     assert!(output.is_empty());
 }
+
+#[test]
+fn combined_status_keeps_native_snapshot_guard_and_delegates_one_observation() {
+    use crate::{
+        domain::*,
+        proxyinstallation::{Installation, Interface, PreparedAction, Review},
+    };
+    struct Combined;
+    impl Interface for Combined {
+        fn review(&self, _: Action) -> Review {
+            panic!("must delegate combined observation")
+        }
+        fn review_status(&self) -> (Review, &'static str) {
+            (
+                Installation::simulation().review(Action::Status),
+                "Not enabled",
+            )
+        }
+        fn execute(&mut self, _: PreparedAction, _: Confirmation) -> crate::domain::Result {
+            panic!("read only")
+        }
+    }
+    for cancel in [false, true] {
+        let f = Fixture::new();
+        let snapshot = f.capture().unwrap();
+        let journey = BoundJourney::new(&snapshot, Box::new(Combined));
+        assert_eq!(journey.review_status().1, "Not enabled");
+        if cancel {
+            snapshot.stop.cancel();
+        } else {
+            f.write(EXECUTABLE, b"changed", 0o755);
+        }
+        let (review, status) = journey.review_status();
+        assert_eq!(status, "Problem detected");
+        assert_eq!(review.status, Status::ProblemDetected);
+        assert!(review.prepared.is_none());
+    }
+}

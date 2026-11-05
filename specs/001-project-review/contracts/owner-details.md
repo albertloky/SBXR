@@ -14,3 +14,12 @@ across input boundaries.
 
 Public review(Status/ViewDetails) still aggregates legal actions, including
 independent removal. Native open rechecks journey membership and admission.
+
+## Menu status reads
+
+The combined review_status call returns the existing Review plus a static
+subscription display status. It is a read-only presentation result, never effect
+authority. It invalidates earlier prepared authority just like review(Status).
+Every call is fresh. Native guarded adapters must reject stale admission before
+inner observation. The terminal must not issue a second subscription-status read
+for that frame or reuse the frame after Owner input.

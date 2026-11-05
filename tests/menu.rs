@@ -373,6 +373,18 @@ fn first_frame_uses_one_status_review_and_later_input_boundaries_refresh_it() {
             }
             ReadOnlyOwner(sbxr::proxyinstallation::ExecutionMode::Native).review(action)
         }
+        fn review_status(&self) -> (Review, &'static str) {
+            let review = self.review(Action::Status);
+            let subscription = if self.0.get() == 1 {
+                "Not enabled"
+            } else {
+                "Problem detected"
+            };
+            (review, subscription)
+        }
+        fn subscription_status(&self) -> &'static str {
+            panic!("a menu frame must not repeat its combined subscription observation")
+        }
         fn execute(
             &mut self,
             _: sbxr::proxyinstallation::PreparedAction,
@@ -428,6 +440,18 @@ fn first_frame_uses_one_status_review_and_later_input_boundaries_refresh_it() {
     .unwrap();
     assert!(input.expected.is_empty());
     assert_eq!(reviews.get(), 5); // Includes pre-lifecycle authority invalidation.
+    assert_eq!(
+        String::from_utf8_lossy(&output)
+            .matches("Subscription status: Not enabled")
+            .count(),
+        1
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output)
+            .matches("Subscription status: Problem detected")
+            .count(),
+        3
+    );
     let output = String::from_utf8(output).unwrap();
     assert_eq!(output.lines().filter(|line| *line == "SBXR V3").count(), 4);
     assert!(output.contains("Press Enter to return to the menu."));

@@ -34,3 +34,24 @@ A new live run, failure disposition and publication remain outside this plan.
 Root cause is bounded to measured repeated work, not a claim that all latency is
 explained. No external technology or dependency choice is needed; existing pinned
 implementations are retained. No technical clarification prevents offline work.
+
+## Remaining frame duplication at 6e87493
+
+Confirmed from build 212: after aggregate ReviewStatus ended at native elapsed
+39.164s, a new journeys (0.649s), open-http (1.906s) and HTTP inspection continued
+to about 46.804s: approximately 7.64s of additional subscription-status presentation.
+The first fix removed unused action aggregation from details, but did not change
+this separate per-frame lookup. HttpInstallation already calculates status_for
+from state() during review, then subscription_status calls state() again.
+
+Decision: expose an in-call combined review/status result. Existing adapters get
+a compatibility default; HTTP derives both values from the same state; Owner
+obtains the selected status journey's value during existing action aggregation;
+BoundJourney retains its admission guard. Terminal calls once per frame. No stored
+cache, relaxed admission, changed action set, or deadline increase.
+
+Validation uses existing ComposedSources with real protected-file/OwnerRuntime
+observations, adjacent Owner regressions, native guard regressions and terminal
+input-boundary assertions. The old clean-absent benchmark does not represent the
+running HTTP path and is not used to predict VPS speed. A smaller duplicate pair
+read in native journeys is deferred to avoid combining independent trust changes.

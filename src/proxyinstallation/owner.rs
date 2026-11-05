@@ -125,6 +125,100 @@ impl<'a, S: OwnerSources<'a>> OwnerInstallation<'a, S> {
         }
     }
 }
+impl<'a, S: OwnerSources<'a>> OwnerInstallation<'a, S> {
+    fn review_observation(
+        &self,
+        action: Action,
+        capture_subscription: bool,
+    ) -> (Review, Option<&'static str>) {
+        use crate::host::timing::{Phase, span};
+        let _phase = span(match action {
+            Action::Status => Phase::ReviewStatus,
+            Action::ViewDetails => Phase::ReviewDetails,
+            _ => Phase::ReviewAction,
+        });
+        let mut subscription_status = None;
+        *self.owner.borrow_mut() = Rc::new(());
+        self.active.borrow_mut().take();
+        let Ok(journeys) = self.sources.journeys() else {
+            return (self.refusal(), subscription_status);
+        };
+        let subscription_journey = if journeys.first() == Some(&Journey::Identity) {
+            Journey::Identity
+        } else {
+            Journey::Http
+        };
+        let mut legal = Vec::new();
+        let mut routes = Vec::new();
+        let mut primary = None;
+        for journey in journeys.iter().copied() {
+            let Ok(module) = self.sources.open(journey) else {
+                continue;
+            };
+            let reviewed = if capture_subscription && journey == subscription_journey {
+                let (reviewed, status) = module.review_status();
+                subscription_status = Some(status);
+                reviewed
+            } else {
+                module.review(Action::Status)
+            };
+            for a in reviewed
+                .legal_actions
+                .iter()
+                .copied()
+                .filter(|a| journey.accepts(*a))
+            {
+                if !legal.contains(&a) {
+                    legal.push(a);
+                    routes.push((a, journey));
+                }
+            }
+            if primary.is_none() {
+                primary = Some((journey, reviewed));
+            }
+        }
+        let Some((primary_journey, mut reviewed)) = primary else {
+            return (self.refusal(), subscription_status);
+        };
+        legal.push(Action::ViewDetails);
+        reviewed.legal_actions = legal;
+        reviewed.mode = self.sources.mode();
+        reviewed.prepared = None;
+        if matches!(action, Action::Status | Action::ViewDetails) {
+            if action == Action::ViewDetails {
+                match self.sources.open(primary_journey) {
+                    Ok(module) => reviewed.details = module.review(action).details,
+                    Err(_) => {
+                        reviewed.status = Status::ProblemDetected;
+                        reviewed.details = vec!["The primary details adapter became unavailable; independently observed actions must be reviewed before execution.".into()];
+                    }
+                }
+            }
+            return (reviewed, subscription_status);
+        }
+        if !reviewed.legal_actions.contains(&action) {
+            reviewed.refusal = Some("The action is unavailable for the observed Owner state.");
+            return (reviewed, subscription_status);
+        }
+        let Some((_, journey)) = routes.into_iter().find(|(a, _)| *a == action) else {
+            return (self.refusal(), subscription_status);
+        };
+        let Ok(module) = self.sources.open(journey) else {
+            return (self.refusal(), subscription_status);
+        };
+        let mut selected = module.review(action);
+        selected.mode = self.sources.mode();
+        if let Some(inner) = selected.prepared.take() {
+            selected.prepared = Some(PreparedAction {
+                owner: self.owner.borrow().clone(),
+                action,
+                basis: PreparedBasis::Owner(Box::new(OwnerPrepared { inner, journey })),
+            });
+            *self.active.borrow_mut() = Some((journey, module));
+        }
+        (selected, subscription_status)
+    }
+}
 impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
     fn supports_tunnel(&self) -> bool {
         self.sources
@@ -161,80 +255,16 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
     }
 
     fn review(&self, action: Action) -> Review {
-        use crate::host::timing::{Phase, span};
-        let _phase = span(match action {
-            Action::Status => Phase::ReviewStatus,
-            Action::ViewDetails => Phase::ReviewDetails,
-            _ => Phase::ReviewAction,
-        });
-        *self.owner.borrow_mut() = Rc::new(());
-        self.active.borrow_mut().take();
-        let Ok(journeys) = self.sources.journeys() else {
-            return self.refusal();
-        };
-        let mut legal = Vec::new();
-        let mut routes = Vec::new();
-        let mut primary = None;
-        for journey in journeys.iter().copied() {
-            let Ok(module) = self.sources.open(journey) else {
-                continue;
-            };
-            let reviewed = module.review(Action::Status);
-            for a in reviewed
-                .legal_actions
-                .iter()
-                .copied()
-                .filter(|a| journey.accepts(*a))
-            {
-                if !legal.contains(&a) {
-                    legal.push(a);
-                    routes.push((a, journey));
-                }
-            }
-            if primary.is_none() {
-                primary = Some((journey, reviewed));
-            }
-        }
-        let Some((primary_journey, mut reviewed)) = primary else {
-            return self.refusal();
-        };
-        legal.push(Action::ViewDetails);
-        reviewed.legal_actions = legal;
-        reviewed.mode = self.sources.mode();
-        reviewed.prepared = None;
-        if matches!(action, Action::Status | Action::ViewDetails) {
-            if action == Action::ViewDetails {
-                match self.sources.open(primary_journey) {
-                    Ok(module) => reviewed.details = module.review(action).details,
-                    Err(_) => {
-                        reviewed.status = Status::ProblemDetected;
-                        reviewed.details = vec!["The primary details adapter became unavailable; independently observed actions must be reviewed before execution.".into()];
-                    }
-                }
-            }
-            return reviewed;
-        }
-        if !reviewed.legal_actions.contains(&action) {
-            reviewed.refusal = Some("The action is unavailable for the observed Owner state.");
-            return reviewed;
-        }
-        let Some((_, journey)) = routes.into_iter().find(|(a, _)| *a == action) else {
-            return self.refusal();
-        };
-        let Ok(module) = self.sources.open(journey) else {
-            return self.refusal();
-        };
-        let mut selected = module.review(action);
-        selected.mode = self.sources.mode();
-        if let Some(inner) = selected.prepared.take() {
-            selected.prepared = Some(PreparedAction {
-                owner: self.owner.borrow().clone(),
-                action,
-                basis: PreparedBasis::Owner(Box::new(OwnerPrepared { inner, journey })),
-            });
-            *self.active.borrow_mut() = Some((journey, module));
-        }
-        selected
+        self.review_observation(action, false).0
+    }
+    fn review_status(&self) -> (Review, &'static str) {
+        let (reviewed, status) = self.review_observation(Action::Status, true);
+        // An unavailable status adapter keeps the standalone fallback, including
+        // its fresh eligibility and opening checks. No observation is retained.
+        (
+            reviewed,
+            status.unwrap_or_else(|| self.subscription_status()),
+        )
     }
     fn execute(&mut self, p: PreparedAction, c: Confirmation) -> crate::domain::Result {
         self.apply(p, c, None)

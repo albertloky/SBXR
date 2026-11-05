@@ -131,3 +131,21 @@ implemented correction, deferred decision and untouched external action.
 - Local tests can establish bounded repairs but cannot replace real outside/Karing evidence.
 - Existing toolchains and fixtures will be reused; dependencies are not upgraded merely for review.
 - A new exact-candidate live attempt and failed-candidate disposition need separate authorization.
+
+## Continuation: coherent menu status (2026-11-05)
+
+Owner instruction: continue the fix using Spec Kit. This refines US2 and FR-004;
+all existing scope and authorization limits remain unchanged.
+
+- **FR-010**: A displayed menu frame MUST obtain proxy and subscription status
+  together without repeating the same HTTP inspection solely for presentation.
+  Every subsequent frame and action MUST still observe fresh state. No status
+  or authority may be reused across Owner input.
+- **SC-006**: A running HTTP fixture MUST demonstrate one HTTP inspection per
+  combined status read, with new observations after input/state changes. The
+  public menu/action selection and independent removal availability stay intact.
+
+Acceptance: given a running installation, rendering the frame uses one combined
+status read; given changed facts at the next input boundary, the next frame shows
+fresh facts or refusal. An earlier Prepared Action expires on the combined read.
+Unavailable HTTP authority must not hide separately admitted removal actions.

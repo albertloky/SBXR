@@ -61,3 +61,41 @@ Constitution ratification is pending; existing rules remain authoritative.
 Logs are private in .scratch/acceptance/project-review/. The local Spec Kit
 integration and unratified constitution remain untracked; existing AGENTS and ADRs
 are unchanged. The tracked specification records existing requirements only.
+
+## Native CI closeout
+
+Commit `6e87493d90ceedd639fdf04afc01bc6c689f5b09` was pushed after explicit
+approval of the previously denied operation. [Verify run 41973179692](https://github.com/albertloky/SBXR/actions/runs/41973179692)
+passed all four native and assembled amd64/arm64 jobs. No new live candidate,
+failure-disposition operation or publication ran. This post-CI note is local;
+remote main remains the exact approved and tested commit.
+
+## Continued details diagnosis and repair
+
+The remaining measured repeat was subscription status: build 212 spent about 7.64 seconds
+reopening/inspecting HTTP after its aggregate status review. This continuation
+adds an in-call combined status read through the existing Interface, HTTP, Owner,
+native admission guard and terminal. It changes no deadline or authority policy.
+
+Before/after regressions at existing protected-file/runtime boundaries:
+HTTP frame: 2 → 1 runtime package observations; composed HTTP/Identity menu frame:
+3 → 2. Independent identity/action observations remain. Tests require fresh changed
+facts on subsequent frames, expired prepared-action refusal, cancellation/changed
+executable rejection, unchanged configuration/ownership, and no token creation.
+The terminal regression failed before and passes after the caller change.
+
+The first HTTP green attempt included an intervening refused execution's result
+inspection in its cumulative counter; the test was corrected to measure each
+frame separately, without weakening the one-observation requirement. Raw logs:
+.scratch/acceptance/p2/ and .scratch/acceptance/project-review-continued/.
+
+This removes proved redundant work. It does not establish 7.64 seconds saved on a future
+host, an atomic status snapshot, or success of the complete 90-second live cycle.
+The smaller repeated installed-pair read in journeys is not changed by this repair.
+
+Final continuation validation: `cargo test --locked --offline` passed in one clean
+invocation: 690 tests including five compile-fail doctests, zero failures, two
+ignored. Formatting, strict all-target Clippy and diff whitespace checks passed.
+Native Linux CI for this continuation is pending; the earlier four-job success
+belongs to 6e87493. No VPS, credential, security, failure-disposition or publication
+operation was performed by this continuation.

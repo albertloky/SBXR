@@ -270,3 +270,114 @@ fn output_details_write_failure_prevents_disclosure_lookup() {
         std::io::ErrorKind::BrokenPipe
     );
 }
+
+#[test]
+fn menu_status_shares_selected_adapter_without_reopening_or_cross_frame_cache() {
+    use std::cell::Cell;
+    struct FrameSources {
+        calls: Rc<RefCell<Vec<Journey>>>,
+        available: Rc<Cell<bool>>,
+        identity_first: bool,
+    }
+    struct FrameModule {
+        journey: Journey,
+        available: Rc<Cell<bool>>,
+    }
+    impl Interface for FrameModule {
+        fn review(&self, _: Action) -> Review {
+            let mut review = RemovalStatus.review(Action::Status);
+            review.legal_actions = match self.journey {
+                Journey::Http => vec![Action::EnableSubscription],
+                Journey::Identity => vec![Action::RotateClientIdentity],
+                _ => vec![Action::CompleteRemoval],
+            };
+            review
+        }
+        fn review_status(&self) -> (Review, &'static str) {
+            (
+                self.review(Action::Status),
+                if self.available.get() {
+                    "Available"
+                } else {
+                    "Not enabled"
+                },
+            )
+        }
+        fn subscription_status(&self) -> &'static str {
+            panic!("combined frame must not request a second observation")
+        }
+        fn execute(&mut self, _: PreparedAction, _: Confirmation) -> crate::domain::Result {
+            panic!("read only")
+        }
+    }
+    impl OwnerSources<'_> for FrameSources {
+        fn journeys(&self) -> std::result::Result<Vec<Journey>, HostError> {
+            Ok(if self.identity_first {
+                vec![Journey::Identity, Journey::Removal]
+            } else {
+                vec![Journey::Http, Journey::Identity, Journey::Removal]
+            })
+        }
+        fn open(&self, journey: Journey) -> std::result::Result<Box<dyn Interface>, HostError> {
+            self.calls.borrow_mut().push(journey);
+            Ok(Box::new(FrameModule {
+                journey,
+                available: self.available.clone(),
+            }))
+        }
+        fn mode(&self) -> ExecutionMode {
+            ExecutionMode::InjectedHost
+        }
+    }
+    for identity_first in [false, true] {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let available = Rc::new(Cell::new(false));
+        let owner = OwnerInstallation::new(FrameSources {
+            calls: calls.clone(),
+            available: available.clone(),
+            identity_first,
+        });
+        for (fresh, expected) in [(false, "Not enabled"), (true, "Available")] {
+            available.set(fresh);
+            calls.borrow_mut().clear();
+            let (review, status) = owner.review_status();
+            assert_eq!(status, expected);
+            assert!(review.prepared.is_none());
+            assert!(review.legal_actions.contains(&Action::CompleteRemoval));
+            assert!(review.legal_actions.contains(&Action::RotateClientIdentity));
+            let expected_calls = if identity_first {
+                vec![Journey::Identity, Journey::Removal]
+            } else {
+                vec![Journey::Http, Journey::Identity, Journey::Removal]
+            };
+            assert_eq!(*calls.borrow(), expected_calls);
+        }
+    }
+}
+
+#[test]
+fn combined_status_invalidates_prepared_action_and_preserves_removal_fallback() {
+    let mut owner = OwnerInstallation::new(Sources {
+        removal: true,
+        standard: true,
+    });
+    let prepared = owner.review(Action::StartSetup).prepared.unwrap();
+    let (review, status) = owner.review_status();
+    assert!(review.legal_actions.contains(&Action::CompleteRemoval));
+    assert_eq!(status, "Problem detected"); // No HTTP adapter in this setup fixture.
+    assert_eq!(
+        owner.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    let owner = OwnerInstallation::new(Sources {
+        removal: true,
+        standard: false,
+    });
+    assert!(
+        owner
+            .review_status()
+            .0
+            .legal_actions
+            .contains(&Action::CompleteRemoval)
+    );
+}

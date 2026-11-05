@@ -445,12 +445,12 @@ impl<'a>
         )
     }
 }
-impl<H: SubscriptionHost> Interface for HttpInstallation<H> {
-    fn review(&self, action: Action) -> Review {
+impl<H: SubscriptionHost> HttpInstallation<H> {
+    fn review_observation(&self, action: Action) -> (Review, &'static str) {
         *self.owner.borrow_mut() = Rc::new(());
         let state = self.state();
         let Ok(state) = state else {
-            return Review{mode:self.mode(),status:Status::ProblemDetected,details:vec!["HTTP authority or protected host facts could not be verified; preserve unknown resources.".into()],legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("HTTP subscription authority cannot be verified."),prepared:None};
+            return (Review{mode:self.mode(),status:Status::ProblemDetected,details:vec!["HTTP authority or protected host facts could not be verified; preserve unknown resources.".into()],legal_actions:vec![Action::ViewDetails],plan:vec![],refusal:Some("HTTP subscription authority cannot be verified."),prepared:None}, "Problem detected");
         };
         let subscription_status = Self::status_for(&state);
         let prepared = if state.actions.contains(&action) && action != Action::ViewDetails {
@@ -472,18 +472,29 @@ impl<H: SubscriptionHost> Interface for HttpInstallation<H> {
             Action::FinishSubscriptionChange=>vec![format!("Finish the recorded {:?} direction; never generate another credential.",state.record.pending_change().and_then(|p|p.direction()))],
             _=>vec![],
         };
-        Review {
-            mode: self.mode(),
-            status: Status::Running,
-            details: vec![format!(
-                "HTTP subscription: {}. Proxy configuration remains bound to its Ownership Record.",
-                subscription_status
-            )],
-            legal_actions: state.actions,
-            plan,
-            refusal: None,
-            prepared,
-        }
+        (
+            Review {
+                mode: self.mode(),
+                status: Status::Running,
+                details: vec![format!(
+                    "HTTP subscription: {}. Proxy configuration remains bound to its Ownership Record.",
+                    subscription_status
+                )],
+                legal_actions: state.actions,
+                plan,
+                refusal: None,
+                prepared,
+            },
+            subscription_status,
+        )
+    }
+}
+impl<H: SubscriptionHost> Interface for HttpInstallation<H> {
+    fn review(&self, action: Action) -> Review {
+        self.review_observation(action).0
+    }
+    fn review_status(&self) -> (Review, &'static str) {
+        self.review_observation(Action::Status)
     }
     fn execute(
         &mut self,

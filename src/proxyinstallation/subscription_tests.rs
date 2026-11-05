@@ -1471,6 +1471,7 @@ struct OwnerIoFixture {
     address: SocketAddr,
     bad: AtomicUsize,
     serving_starts: AtomicUsize,
+    package_observations: AtomicUsize,
     delayed_bind: Arc<AtomicBool>,
 }
 impl OwnerIoFixture {
@@ -1505,6 +1506,7 @@ impl OwnerIoFixture {
             address,
             bad: AtomicUsize::new(0),
             serving_starts: AtomicUsize::new(0),
+            package_observations: AtomicUsize::new(0),
             delayed_bind: Arc::new(AtomicBool::new(false)),
         });
         io.cgroup(crate::host::owner_runtime::Unit::Proxy, true);
@@ -1677,6 +1679,9 @@ impl crate::host::owner_runtime::OwnerIo for OwnerIoFixture {
     ) -> Result<crate::host::process::CommandOutput, HostError> {
         use crate::host::owner_runtime::{Observation as O, Property as P, Unit as U};
         c.check().map_err(|_| HostError::Cancelled)?;
+        if o == O::Package {
+            self.package_observations.fetch_add(1, Ordering::SeqCst);
+        }
         let b = self.backend.lock().unwrap();
         let mut code = 0;
         // Reproduce the retained failed, unloaded unit observed around q209.
@@ -3138,4 +3143,142 @@ fn owner_enable_diagnostic_distinguishes_verify_commit_and_success() {
         assert_eq!(rows[0].as_object().unwrap().len(), 4);
         assert_eq!(m.take_subscription_link().is_some(), mode == 0);
     }
+}
+
+#[test]
+fn combined_http_status_observes_runtime_once_and_expires_prepared_authority() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let sources = ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    };
+    let mut module = sources.open(Journey::Http).unwrap();
+    let stale = module.review(Action::EnableSubscription).prepared.unwrap();
+    io.package_observations.store(0, Ordering::SeqCst);
+    let (review, status) = module.review_status();
+    assert_eq!(review.status, Status::Running);
+    assert_eq!(status, "Not enabled");
+    assert!(review.legal_actions.contains(&Action::EnableSubscription));
+    assert_eq!(
+        io.package_observations.load(Ordering::SeqCst),
+        1,
+        "one combined HTTP frame must inspect the real runtime once"
+    );
+    assert_eq!(
+        module.execute(stale, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+
+    // A refused execute may observe status while rendering its result. Count
+    // this next frame independently from that result observation.
+    io.package_observations.store(0, Ordering::SeqCst);
+    // A changed observed group must be checked again, not served from the frame.
+    io.bad.store(8, Ordering::SeqCst);
+    let (review, status) = module.review_status();
+    assert_eq!(review.status, Status::ProblemDetected);
+    assert_eq!(status, "Problem detected");
+    assert!(!review.legal_actions.contains(&Action::EnableSubscription));
+    assert_eq!(io.package_observations.load(Ordering::SeqCst), 1);
+    assert!(!root.0.join(TOKEN).exists());
+}
+
+#[test]
+fn composed_terminal_status_observes_each_runtime_once_per_fresh_frame() {
+    use std::io::{self, BufRead};
+    struct ChangingInput {
+        bytes: io::Cursor<&'static [u8]>,
+        io: Arc<OwnerIoFixture>,
+        frames: usize,
+    }
+    impl Read for ChangingInput {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            panic!("use BufRead")
+        }
+    }
+    impl BufRead for ChangingInput {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            self.frames += 1;
+            assert_eq!(
+                self.io.package_observations.load(Ordering::SeqCst),
+                2 * self.frames,
+                "each frame needs one HTTP and one independent Identity observation"
+            );
+            // Change a real fixed runtime observation after the first displayed
+            // frame. The next frame must refuse enablement rather than reuse it.
+            if self.frames == 1 {
+                self.io.bad.store(8, Ordering::SeqCst);
+            }
+            let bytes = self.bytes.fill_buf()?;
+            let end = bytes
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(bytes.len(), |n| n + 1);
+            Ok(&bytes[..end])
+        }
+        fn consume(&mut self, n: usize) {
+            self.bytes.consume(n);
+        }
+    }
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = Arc::new(
+        archive
+            .bind_current(
+                archive.executable(),
+                archive.executable(),
+                &crate::artifact_trust::SelectionBudget::new(),
+            )
+            .unwrap(),
+    );
+    let io = OwnerIoFixture::new(&root, archive, proof.clone());
+    let mut owner = OwnerInstallation::new(ComposedSources {
+        root: &root,
+        proof: &proof,
+        io: io.clone(),
+    });
+    let before = fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap();
+    let configuration = fs::read(root.0.join("etc/sing-box/config.json")).unwrap();
+    let stale = owner.review(Action::EnableSubscription).prepared.unwrap();
+    io.package_observations.store(0, Ordering::SeqCst);
+    let mut input = ChangingInput {
+        bytes: io::Cursor::new(b"bad\n0\n"),
+        io: io.clone(),
+        frames: 0,
+    };
+    let mut output = Vec::new();
+    crate::terminal::run(&mut input, &mut output, &mut owner).unwrap();
+    assert_eq!(input.frames, 2);
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("Subscription status: Not enabled"), "{text}");
+    assert!(
+        text.contains("Subscription status: Problem detected"),
+        "{text}"
+    );
+    assert_eq!(
+        owner.execute(stale, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    assert_eq!(
+        fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
+        before
+    );
+    assert_eq!(
+        fs::read(root.0.join("etc/sing-box/config.json")).unwrap(),
+        configuration
+    );
+    assert!(!root.0.join(TOKEN).exists());
 }

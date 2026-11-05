@@ -27,8 +27,8 @@ fn run_inner(
     installation: &mut impl Interface,
     mut lifecycle: Option<&mut dyn crate::software_lifecycle::Interface>,
 ) -> io::Result<()> {
-    let initial = installation.review(Action::Status);
-    match initial.mode {
+    let initial = installation.review_status();
+    match initial.0.mode {
         ExecutionMode::Native => {}
         ExecutionMode::NativeUnavailable => {
             writeln!(output, "SBXR Rust — native installation unavailable")?;
@@ -63,9 +63,9 @@ fn run_inner(
     loop {
         // Consume the fresh banner review once, before any Owner input. Every
         // later frame still observes anew and invalidates prepared authority.
-        let mut current = initial
+        let (mut current, subscription_status) = initial
             .take()
-            .unwrap_or_else(|| installation.review(Action::Status));
+            .unwrap_or_else(|| installation.review_status());
         let qualifier = match current.mode {
             ExecutionMode::Native => "local",
             ExecutionMode::Simulation => "simulated",
@@ -77,17 +77,13 @@ fn run_inner(
             // Retained public driver frame. Fixture modes must never emit it.
             writeln!(output, "SBXR V3")?;
             writeln!(output, "Proxy status: {}", current.status)?;
-            writeln!(
-                output,
-                "Subscription status: {}",
-                installation.subscription_status()
-            )?;
+            writeln!(output, "Subscription status: {}", subscription_status)?;
         } else {
             writeln!(output, "Proxy status: {} ({qualifier})", current.status)?;
             writeln!(
                 output,
                 "Subscription status: {} ({qualifier})",
-                installation.subscription_status()
+                subscription_status
             )?;
         }
         if let Some(module) = &mut lifecycle {

@@ -43,3 +43,19 @@ docs/rust-acceptance.md and docs/acceptance/reports/.
 ## Complexity Tracking
 
 No constitution violation or additional runtime mechanism proposed.
+
+## Continuation design
+
+Add Interface::review_status -> (Review, subscription display status), with a
+default retaining existing review(Status) then subscription_status behavior.
+HttpInstallation factors its existing review so combined reads share one state().
+Owner retains its aggregate action logic, collecting subscription status from
+Identity when first in the fresh journey list, otherwise Http. If that adapter
+cannot be opened, retain the existing fallback lookup/refusal behavior. Neither
+modules nor observations persist for reuse across input. Native BoundJourney
+checks its retained proof before delegating the combined read. The terminal uses
+the result for the first and every later frame. Other action reviews are unchanged.
+
+Files: src/proxyinstallation.rs, proxyinstallation/{owner,subscription}.rs,
+host/admission.rs, terminal.rs and their adjacent/integration tests. No new schema,
+dependency, CLI, policy, or remote operation. Constitution check remains PASS.

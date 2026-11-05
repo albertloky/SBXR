@@ -86,6 +86,12 @@ pub trait Interface {
         review
     }
     fn review(&self, action: Action) -> Review;
+    /// Fresh facts for one menu frame. Implementations may share an observation
+    /// within this call, but must not retain it across Owner input.
+    fn review_status(&self) -> (Review, &'static str) {
+        (self.review(Action::Status), self.subscription_status())
+    }
+
     fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> Result;
     fn execute_output(
         &mut self,
