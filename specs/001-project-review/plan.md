@@ -82,3 +82,26 @@ Keep T018 live validation open. This continuation uses existing Spec Kit artifac
 setup-plan preserves the existing plan and setup-tasks resolves its template.
 Constitution check: PASS against existing rules and the explicit new exact-identity
 approval; the local unratified consolidation is unchanged.
+
+## Separately approved CI cleanup-fixture repair
+
+Investigate the existing protected-cleanup fixture failure exposed by Verify run
+42003224687, separately from the reservation policy. This continuation serves
+existing FR-005/FR-009 and SC-002; it adds no requirement or project rule. The
+production menu-session driver, cleanup budgets and release policy stay unchanged.
+
+Replace only the five SIGUSR1 cleanup fixtures' indefinite stdin reads with a
+short periodic idle loop. Those reads merely keep the child alive; their tests do
+not depend on stdin data or EOF. Keep the real signal handler, large stderr writes,
+normal exit and complete-cleanup assertions. Add failure context to the spawn
+relay test without weakening its assertions. Leave other stdin-based fixtures alone.
+
+The controlled pending-signal experiment exercises the actual child process and
+production stop path: old idle is killed after the unchanged cleanup budget,
+whereas periodic idle handles the signal and drains all output. This establishes
+a fixture susceptibility, not proof of the original Linux CI cause. Run focused
+and complete Python checks plus the relevant Go race wrapper, review the bounded
+diff, and obtain final-source CI. A retry of unchanged a3d01a9 is diagnostic evidence
+only; it cannot validate changed fixtures. Record evidence and limits in the dated
+cleanup-fixture report. T024 and T027 remain open pending final-source CI, and T018
+remains independent and open. The local constitution remains unratified/unchanged.

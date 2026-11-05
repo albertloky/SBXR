@@ -9,6 +9,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Local audit repairs
 
+- [Cleanup signal fixture repair — 2026-11-05](cleanup-signal-fixture-2026-11-05.md)
+  — reproduced a Python signal/read race in offline cleanup fixtures; production driver unchanged.
+
 - [Combined local audit repairs — 2026-10-28](local-audit-repairs-2026-10-28.md)
   — reviewed Rust/Go/workflow repairs and bounded local evidence; unresolved design and live qualification gaps remain.
 

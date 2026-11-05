@@ -227,3 +227,45 @@ focused reservation tests, full release-tool package, root integration checks an
 Go vet now pass. Fresh observations accepted ten exact records and twenty absent
 refs; previous nine pins and historical initial fixtures are unchanged. The
 remaining post-push CI task is tracked separately from the still-open live task.
+
+## Separately approved CI cleanup-fixture repair
+
+The reservation push reached main as a3d01a9286fd06b14dd3d48f16275ff1376284ac.
+Verify run 42003224687 attempt 1 then failed on amd64 in the Go race wrapper's
+`test_spawn_diagnostic_sink_failure_still_allows_full_protected_cleanup`:
+`session.stop()` returned -9 instead of 0. The arm64 tests passed before its archive
+step was cancelled; assembly was skipped. The reservation change did not modify
+this fixture or the production stop path. The observed forced termination alone
+does not establish why the signal handler failed to finish.
+
+The Owner separately authorized diagnosis, a bounded fix and CI verification.
+The unchanged failing test passed 100 local Python 3.9 repetitions (cf1), and the
+focused Go race wrapper passed in 16.779 seconds (cf2). These local passes do not
+invalidate the CI failure. A controlled Mac Python 3.13 experiment (cf3) used a
+test-process-only DYLD interposer to hold a real SIGUSR1 and deliver it to the C
+handler immediately before the child's blocking stdin read. With the old idle,
+stop returned -9 after 20.009 seconds, the Python handler was not entered, and no
+stderr bytes were drained. With periodic idle, stop returned 0 after 0.0378 seconds,
+the handler ran, and all 196608 emitted stderr bytes were drained. Both probe
+processes were cleaned up. Raw results and the probe/interposer source are under
+.scratch/acceptance/cf3/.
+
+This reproduces a pending-signal susceptibility at the real fixture boundary;
+it is consistent with, but does not prove, the original Linux CI cause. The bounded
+repair changes only the idle loops in five SIGUSR1 protected-cleanup fixtures and
+adds failure evidence to the spawn-relay assertion. The real handlers, stderr
+backpressure, zero-exit and cleanup assertions remain, as do the production driver
+and its time budgets. No product or release-policy behavior is changed.
+
+The complete menu-driver suite passed on Python 3.9.6 in 14.188 seconds and
+Python 3.13.18 in 14.004 seconds: 67 tests each, with four platform-specific skips
+each. The actual Go race wrapper passed in 16.512 seconds. The cf4 logs retain
+these results. Independent review found no blocking issue; the bounded diff and
+whitespace checks passed. These local checks do not establish Linux CI success.
+
+The [dated cleanup-fixture report](../../docs/acceptance/reports/cleanup-signal-fixture-2026-11-05.md)
+records the diagnosis and validation. T025/T026 are complete; T027 and T024 remain
+open pending push and successful final-source CI. Attempt 2 of run 42003224687 on
+unchanged a3d01a9 was running at this checkpoint and cannot validate the repaired
+source. T018 remains open: this offline fixture work adds no live timing, client,
+host-readiness or publication evidence.

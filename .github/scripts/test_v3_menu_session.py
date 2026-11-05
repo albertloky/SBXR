@@ -271,17 +271,21 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                         session.process.stdin.close()
                         session.process.stdout.close()
 
+    # These SIGUSR1 fixtures idle with bounded sleeps. An indefinite stdin read
+    # can begin after CPython receives a signal but before its Python handler
+    # runs, stranding that handler until another signal or stdin input arrives.
+    # Keep the real signal and stderr backpressure, without that fixture race.
     def test_protected_cleanup_services_stderr_until_the_wrapper_finishes(self):
         with tempfile.TemporaryDirectory() as temporary:
             done=Path(temporary)/"done"
             entered=Path(temporary)/"entered"
-            child=("import os,signal,sys,pathlib\n"
+            child=("import os,signal,sys,pathlib,time\n"
                    "def finish(*_):\n"
                    " pathlib.Path(sys.argv[2]).touch()\n"
                    " written=os.write(2,b'X'*131072)\n"
                    " pathlib.Path(sys.argv[1]).write_text(str(written))\n"
                    " sys.exit(0)\n"
-                   "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nsys.stdin.read()")
+                   "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nwhile True: time.sleep(.01)")
             journal=io.StringIO()
             session=menu.MenuSession([sys.executable,"-c",child,str(done),str(entered)],io.BytesIO(),time.monotonic()+5,
                                      timing=menu.PhaseTiming(journal,time.monotonic()+5))
@@ -356,6 +360,7 @@ class MenuSessionDeadlineTest(unittest.TestCase):
     def test_spawn_diagnostic_sink_failure_still_allows_full_protected_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:
             ready, done = Path(temporary)/"ready", Path(temporary)/"done"
+            entered = Path(temporary)/"entered"
             failed = threading.Event()
             class Sink(io.StringIO):
                 def write(self, value):
@@ -363,21 +368,29 @@ class MenuSessionDeadlineTest(unittest.TestCase):
                         failed.set()
                         raise OSError("fixture capture unavailable")
                     return super().write(value)
-            child = ("import os,signal,sys,pathlib\n"
-                     "def finish(*_):\n os.write(2,b'RAW-SECRET /private/path'*8192);pathlib.Path(sys.argv[2]).touch();sys.exit(0)\n"
-                     "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nprint('READY',flush=True)\nsys.stdin.read()")
+            child = ("import os,signal,sys,pathlib,time\n"
+                     "def finish(*_):\n pathlib.Path(sys.argv[3]).touch()\n written=os.write(2,b'RAW-SECRET /private/path'*8192)\n pathlib.Path(sys.argv[2]).write_text(str(written))\n sys.exit(0)\n"
+                     "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nprint('READY',flush=True)\nwhile True: time.sleep(.01)")
             sink = Sink()
             timing = menu.PhaseTiming(sink,time.monotonic()+5)
-            session = menu.MenuSession([sys.executable,"-c",child,str(ready),str(done)],
+            session = menu.MenuSession([sys.executable,"-c",child,str(ready),str(done),str(entered)],
                                        io.BytesIO(),timing.deadline,timing=timing)
             try:
                 self.assertEqual(session.stream.line(session.deadline),"READY")
                 self.assertTrue(failed.wait(timeout=2),"exercise a real failed relay write")
                 session.protected_wrapper = True
                 started = time.monotonic()
-                self.assertEqual(session.stop(),0)
-                self.assertLess(time.monotonic()-started,2)
-                self.assertTrue(done.exists())
+                code = session.stop()
+                elapsed = time.monotonic()-started
+                evidence = dict(returncode=code, elapsed=elapsed,
+                                handler_entered=entered.exists(), done=done.exists(),
+                                stderr_bytes=session.stream.diagnostics.total,
+                                stderr_exceeded=session.stream.diagnostics.exceeded)
+                self.assertEqual(code,0,evidence)
+                self.assertLess(elapsed,2,evidence)
+                self.assertTrue(done.exists(),evidence)
+                self.assertEqual(done.read_text(),str(len(b"RAW-SECRET /private/path"*8192)),evidence)
+                self.assertEqual(session.stream.diagnostics.total,int(done.read_text()),evidence)
                 self.assertTrue(session.cleaned)
                 self.assertTrue(session.process.stderr.closed)
                 self.assertNotIn("RAW-SECRET",sink.getvalue())
@@ -415,9 +428,9 @@ class MenuSessionDeadlineTest(unittest.TestCase):
     def test_constructor_failure_still_completes_chatty_protected_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:
             ready, done = Path(temporary)/"ready", Path(temporary)/"done"
-            child = ("import os,signal,sys,pathlib\n"
+            child = ("import os,signal,sys,pathlib,time\n"
                      "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[2]).write_text('done');sys.exit(0)\n"
-                     "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nsys.stdin.read()")
+                     "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nwhile True: time.sleep(.01)")
             class FailingTiming(menu.PhaseTiming):
                 def __call__(self, event, *args):
                     if event == "spawn-complete":
@@ -456,9 +469,9 @@ class MenuSessionDeadlineTest(unittest.TestCase):
         for failure in (False, True):
             with self.subTest(constructor_failure=failure), tempfile.TemporaryDirectory() as temporary:
                 ready, done = Path(temporary)/"ready", Path(temporary)/"done"
-                child = ("import os,signal,sys,pathlib\n"
+                child = ("import os,signal,sys,pathlib,time\n"
                          "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[2]).touch();sys.exit(0)\n"
-                         "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nprint('READY',flush=True)\nsys.stdin.read()")
+                         "signal.signal(signal.SIGUSR1,finish)\npathlib.Path(sys.argv[1]).touch()\nprint('READY',flush=True)\nwhile True: time.sleep(.01)")
                 pipes, sessions = [], []
                 real_popen, real_read, real_poll = menu.subprocess.Popen, os.read, select.poll
                 class HighPipe:
@@ -538,9 +551,9 @@ class MenuSessionDeadlineTest(unittest.TestCase):
         for persistent in (False, True):
             with self.subTest(persistent=persistent), tempfile.TemporaryDirectory() as temporary:
                 done = Path(temporary)/"done"
-                child = ("import os,signal,sys,pathlib\n"
+                child = ("import os,signal,sys,pathlib,time\n"
                          "def finish(*_):\n os.write(2,b'X'*131072);pathlib.Path(sys.argv[1]).touch();sys.exit(0)\n"
-                         "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nsys.stdin.read()")
+                         "signal.signal(signal.SIGUSR1,finish)\nprint('READY',flush=True)\nwhile True: time.sleep(.01)")
                 timing = menu.PhaseTiming(io.StringIO(),time.monotonic()+5)
                 session = menu.MenuSession([sys.executable,"-c",child,str(done)],
                                            io.BytesIO(),timing.deadline,timing=timing)

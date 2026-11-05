@@ -99,3 +99,19 @@ Dependency: T019 -> T020 -> T021 -> T023 -> T024. T022 can run independently aft
 T019 and is finalized with T023 results. The invariant is exact retained identity
 and refusal of changed/reused authority, not a live qualification claim. T018
 remains open and independent. No existing task is retroactively marked live-passed.
+
+## Phase 8: US3 — Separately approved CI cleanup-fixture repair
+
+The preservation push a3d01a9 succeeded, but Verify run 42003224687 attempt 1
+failed the amd64 protected-cleanup fixture. T024 therefore remains open. Its
+unchanged-source attempt 2 was pending at this checkpoint; either outcome is
+separate from validation of the repaired fixtures.
+
+- [x] T025 [US3] Diagnose the failed cleanup assertion and affected callers; record the controlled real-signal old/new idle comparison and original-CI uncertainty from .scratch/acceptance/cf1/, cf2/ and cf3/ in review.md and docs/acceptance/reports/cleanup-signal-fixture-2026-11-05.md.
+- [x] T026 [US3] Repair the five signal-cleanup idle fixtures and add spawn-relay failure context in .github/scripts/test_v3_menu_session.py; preserve production behavior, assertions and budgets, then validate the focused/full Python tests, relevant Go race wrapper and final diff.
+- [ ] T027 [US3] Commit/push the reviewed bounded repair on main and verify exact-source CI; retain the original failure and unchanged-source retry outcome, and record final validation in the dated cleanup-fixture report.
+
+Dependency: T025 -> T026 -> T027. Successful final-source CI is also required to
+close T024; a local pass or unchanged-source retry is insufficient for the repaired
+source. T018 remains unchecked. This continuation grants no live attempt, cleanup
+execution, release publication or security-setting authority.
