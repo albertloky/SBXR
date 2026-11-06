@@ -24,8 +24,9 @@ be handled explicitly by the prepared operator procedure.
 
 The [current budget profile](../bounded-operator-cleanup.md) defines ordered
 900-second M1 and 1200-second HTTP/Karing cleanup allocations (1230 seconds
-when M5 needs a manual cleanup handoff), per-scenario action caps, downstream verification reserves, manual handoff thresholds and a separate
-final transport allowance. These are selected stopping allocations. Build 212's
+when M5 needs a manual cleanup handoff), per-scenario action caps, downstream
+verification reserves, manual handoff thresholds and a separate final transport
+allowance. These are selected stopping allocations. Build 212's
 observed removal and cleanup times are evidence for that earlier state, not
 upper bounds for HTTP/Karing or an interrupted transaction.
 
@@ -58,8 +59,8 @@ Evidence: `.scratch/acceptance/ob1/` (red/final green and diagnostics),
 `.scratch/acceptance/b6r/` (rehearsal and integration). No VPS, outside client,
 Karing, signing, dispatch, cleanup execution or publication was used for these
 checks. No Go/Rust implementation changed; broad local native/race checks were
-not repeated solely for this Python/documentation continuation. Final-source
-GitHub Verify is recorded separately when available.
+not repeated solely for this Python/documentation continuation. The exact-source
+GitHub Verify result is recorded below.
 
 ## Remaining limits and next admission
 
@@ -80,3 +81,32 @@ candidate allocation, host/client readiness and a new approved attended window
 remain necessary before live work. T018's full 90-second details result and all
 five exact-candidate journeys remain unproved. No current live-readiness claim is
 made by this report.
+
+
+## Exact-source CI closeout — 2026-11-06
+
+Commit `ab8f0601125a85d86f975608e3c8e8a0e2c9ae14` reached GitHub main.
+[Verify 42240439778](https://github.com/albertloky/SBXR/actions/runs/42240439778),
+attempt 1, completed successfully at 15:40:34 UTC with all four native and
+assembly jobs passing. Fresh GitHub reads after the Mac reconnected confirmed
+that source/run association and every job's successful result.
+
+| Architecture | Release-tool normal / race | Root integration normal / race |
+|---|---|---|
+| amd64 | 314.212s / 531.685s | 110.042s / 110.232s |
+| arm64 | 267.340s / 477.139s | 90.914s / 90.460s |
+
+Decoded logs confirm the full unchanged normal/race Go commands, Rust checks,
+formatting, Clippy, vet, native archive inspection, four-asset assembly and closed
+dispatch checks passed. Cargo suites totaled 710 passed and two ignored per
+architecture across product and packaging tests. The two ignored entries are a
+child fixture invoked by timeout-controlled parent tests and a manual timing
+measurement. The operator-runner suite is executed through the passing root
+integration wrapper; successful individual Python output is suppressed there.
+The local 17-test result above remains separately identified.
+
+This closes T056 for the implemented source and its native CI. Receipt and job
+identities are retained in `.scratch/acceptance/b6r/ci-completed.json`. The closeout
+changes documentation only and claims no test run for a later commit. T018 and all
+stated live timing/readiness limitations remain unchanged; no VPS/client access,
+new candidate, signing, live test or publication occurred.
