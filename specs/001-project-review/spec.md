@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Prior repairs and CI verified; approved q213 retention locally validated; reservation final-source CI pending; live criterion unverified
+**Status**: Prior repairs and q213 reservation CI verified; bounded failure-cleanup repair locally verified; repair push/CI pending; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.
@@ -205,3 +205,42 @@ omission, relabelling or reuse of build 213, it refuses. Retention supplies neit
 qualification evidence nor permission to alter or finalize the failed release.
 No new signing, finalizer rerun, burn, deletion, VPS/client/security change,
 cleanup execution or publication is authorized by this continuation.
+
+## Approved continuation: bounded failure cleanup — 2026-11-06
+
+The Owner authorized offline repair of the existing failure-cleanup callers and
+pending-response handling. This implements the existing requirement that safe
+cleanup must not depend on a missing client reply; it authorizes no live execution
+or change to product authentication, ownership rules or qualification deadlines.
+
+- **FR-013**: After a failed or stopped journey, the explicit failure-cleanup
+  route MUST admit only the currently supported Complete removal or Finish
+  removal action, with fresh product authority, existing confirmation and bounded
+  process supervision. It MUST preserve the original failure evidence and its
+  timestamps. A pending response MUST remain pending and grant no extra cleanup
+  time. Cleanup MUST use the original request plus only actual completed waits,
+  capped by the signed finish, existing handoff deadline, explicit absolute
+  cleanup cutoff and existing protected runtime limits, leaving the required
+  post-action verification reserve. The full configured action cap plus that
+  reserve MUST fit the remaining original window before launch. Missing,
+  mismatched, sealed, expired or unsafe timing authority MUST refuse before
+  product launch. The
+  whole cleanup sequence MUST share its original budget and recheck it before
+  each launch; no per-command reset or automatic retry is permitted.
+- **SC-009**: Relevant real-process/filesystem regressions fail before the repair
+  and pass afterward for both permitted actions, pending and completed response
+  states, expiry between steps and invalid authority. Refusals launch no product
+  action; pending records and original failure bytes/timestamps remain unchanged.
+  Normal qualification action and sealing behavior, confirmation, cancellation
+  and process cleanup remain protected. Final-source local checks and CI pass;
+  actual client, secret, transport and owned-absence checks remain separate from
+  a successful menu result and from any future live qualification.
+
+US3 acceptance: given valid unsealed timing authority and an admitted removal
+state, bounded cleanup can use that state's existing removal action without a
+client response. Given uncertainty or exhausted time, it refuses and leaves the
+actual incomplete/unknown outcome to the existing failure-reporting path. Given
+another action, a pending normal qualification action or sealing a pending draft,
+the existing refusal remains. Cleanup
+cannot synthesize a response, continue setup, rotate identity, request details,
+retry mutations, recreate authentication or turn the failed journey into a pass.

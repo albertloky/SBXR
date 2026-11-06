@@ -134,3 +134,29 @@ The pre-live Pending failure-state file remains historical signed input; later
 failure facts and administrative cleanup remain separate. Current draft body
 matches construction text, but unchanged body since creation is not independently
 proved. No technical ambiguity requires a new requirement or policy decision.
+
+## Failure-cleanup caller and pending response — 2026-11-06
+
+Current guidance already requires cleanup access independent of a missing client
+reply, while original failure submission ends candidate authentication. Current
+`operation-deadline` refuses pending responses, so the same normal action route
+cannot implement that cleanup contract during an unfinished handoff. This is a
+caller/timing distinction, not evidence of defective product removal or a reason
+to recreate trust after terminal submission.
+
+Agreed decision: use a read-only cleanup-only calculation over unchanged private
+request/draft authority, then restrict the existing supervised driver to the two
+removal actions. Count only completed response waits; cap by the original timing,
+protected runtime deadline and explicit cutoff with a verification reserve.
+Preserve the pending response, failure bytes/timestamps and normal refusal rules.
+The earlier generic packaged helper's setup/detail/loop behavior is not authority
+for the new explicit mode. A thin caller exposes one reviewed action, not a new
+runner or automatic state-repair sequence.
+
+Rejected alternatives: synthetic response/abandonment events, reusing the normal
+operation route by dropping clock inputs, advancing setup or credentials during
+failure cleanup, renewed per-command clocks, a fresh transport, or claiming all
+cleanup from the product result code. Exact live duration and all surrounding
+client/secret/transport checks remain unproved; the implementation and bounded
+local checks are recorded in review.md. No new product-policy decision is required
+for this bounded design.

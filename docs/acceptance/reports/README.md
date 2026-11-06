@@ -9,6 +9,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Local audit repairs
 
+- [Bounded supported cleanup preparation — 2026-11-06](bounded-safety-cleanup-2026-11-06.md)
+  — offline cleanup-only clock/menu path preserves pending evidence and original limits; full live cleanup duration remains unproved.
+
 - [Cleanup signal fixture repair — 2026-11-05](cleanup-signal-fixture-2026-11-05.md)
   — reproduced a Python signal/read race in offline cleanup fixtures; production driver unchanged.
 

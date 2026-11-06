@@ -42,3 +42,13 @@ and root integration suites, vet and final-source CI. Confirm the previous ten
 record bytes and historical replay remain unchanged. Current full observation
 replay must accept eleven exact drafts and twenty-two explicitly absent refs.
 No candidate/live dispatch, signing or remote mutation belongs to these checks.
+
+## Bounded failure-cleanup validation
+
+Use scoped private logs and real disposable process/filesystem fixtures. First
+prove the new clock/driver/caller regressions fail before implementation, then
+rerun focused .github/scripts/test_mvp_observe.py and test_v3_menu_session.py checks
+plus the affected root caller tests. Include refusal before launch, shared cutoff
+and reserve exhaustion, unchanged original/pending evidence, and process cleanup.
+Run relevant broad checks and final-source CI after review. A menu success alone
+must not satisfy client/secret/transport or live qualification checks.

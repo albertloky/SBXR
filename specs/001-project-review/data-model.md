@@ -26,3 +26,10 @@ The current set becomes exactly eleven, q203–213; the preceding ten are unchan
 This does not change the wire schema or transition any failed candidate to
 qualified, unsigned, burned or published. Attempt 1 is verified provenance;
 the existing reservation schema continues to bind its run ID and manifest digest.
+
+Failure-cleanup continuation: reuse the existing private request and unsealed,
+request-bound observation draft without changing either schema or bytes. Completed
+handoffs contribute only their recorded waits; a pending handoff remains pending.
+The caller also uses an explicit absolute cutoff, post-action verification reserve
+and protected candidate runtime deadline. These bound one supervised removal
+action; they do not create response, success, cleanup-completion or release authority.

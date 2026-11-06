@@ -1434,4 +1434,203 @@ class SubscriptionDiagnosticTests(unittest.TestCase):
         bad += [None, [], raw.replace(b'"id": 1', b'"id": 1, "id": 2'), raw[:25]]
         self.assertEqual(self.relay(bad), [])
 
+
+class SafetyCleanupTest(unittest.TestCase):
+    """Actual menu subprocess boundary; no VPS or installed product effects."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.executable = self.root / "sbxr"
+        # Bound the fixture itself even if the driver regresses or the parent
+        # assertion/communication fails. This is not the driver's cleanup proof.
+        self.executable.write_text(FIXTURE.replace(
+            'for diagnostic in spec.get("diagnostics", []):',
+            'import signal; signal.alarm(6)\n(root/"spawned").write_text(str(os.getpid()))\nfor diagnostic in spec.get("diagnostics", []):', 1))
+        self.executable.chmod(0o700)
+        self.now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        self.epoch = int(self.now.timestamp())
+        stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.request = self.root / "request.json"
+        self.draft = self.root / "draft.json"
+        self.clock = self.root / "clock.py"
+        self.runtime = self.root / "runtime-deadline"
+        self.request_value = {
+            "scenario_id": "mvp-subscription", "not_before": stamp(self.now-dt.timedelta(minutes=1)),
+            "deadline_unix": self.epoch+7140, "scenario_limit_seconds": 7200,
+            "qualification_manifest_sha256": "a"*64, "required_checks": ["karing-import"],
+            "karing_response_limit_seconds": 3600, "attended_finish_by": stamp(self.now+dt.timedelta(hours=3)),
+        }
+        self.request.write_text(json.dumps(self.request_value))
+        self.draft_value = {"request_sha256": hashlib.sha256(self.request.read_bytes()).hexdigest(), "observation": {
+            "scenario_id": "mvp-subscription", "started_at": self.request_value["not_before"], "completed_at": None,
+            "checks": [{"check": "karing-import", "observed_at": None, "result": None}],
+            "karing_handoffs": [{"phase": "profile-import", "prepared_at": stamp(self.now-dt.timedelta(seconds=30)),
+                "notified_at": stamp(self.now-dt.timedelta(seconds=20)), "responded_at": None}],
+        }}
+        self.draft.write_text(json.dumps(self.draft_value))
+        self.clock.write_bytes(DRIVER.with_name("mvp-observe.py").read_bytes())
+        self.runtime.write_text(str(self.epoch+1800)+"\n")
+        for path in (self.request, self.draft, self.clock, self.runtime):
+            path.chmod(0o600)
+        self.spec = {"label": "Complete removal", "kind": "terminal", "prompt": menu.REMOVAL_PROMPT,
+                     "expected": "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"}
+        self.env = dict(os.environ, FIXTURE_ROOT=str(self.root), FIXTURE_SPEC=json.dumps(self.spec),
+                        SBXR_QUALIFICATION_REQUEST=str(self.request), SBXR_QUALIFICATION_DRAFT=str(self.draft),
+                        SBXR_QUALIFICATION_CLOCK=str(self.clock), SBXR_QUALIFICATION_CLOCK_SHA256=hashlib.sha256(self.clock.read_bytes()).hexdigest())
+
+    def arguments(self, label="Complete removal", confirmation="remove", expected=None, cutoff=None, reserve=60, timeout=3):
+        return [sys.executable, str(DRIVER), "safety-cleanup", label,
+                expected or self.spec["expected"], "--confirmation", confirmation,
+                "--executable", str(self.executable), "--timeout", str(timeout),
+                "--cleanup-cutoff", str(self.epoch+600 if cutoff is None else cutoff),
+                "--cleanup-reserve", str(reserve), "--runtime-deadline", str(self.runtime)]
+
+    def call(self, **kwargs):
+        return subprocess.run(self.arguments(**kwargs), env=self.env, capture_output=True, text=True, timeout=8)
+
+    def assert_unstarted(self, result):
+        self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertFalse((self.root/"spawned").exists(), result.stderr)
+
+    def test_pending_cleanup_removes_once_preserving_original_evidence(self):
+        originals = {p: p.read_bytes() for p in (self.request, self.draft, self.clock, self.runtime)}
+        result = self.call()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        events = [json.loads(line) for line in (self.root/"events.jsonl").read_text().splitlines()]
+        self.assertEqual(events, [{"selected": "7"}, {"answer": "REMOVE SBXR"}])
+        for path, body in originals.items():
+            self.assertEqual(path.read_bytes(), body)
+        self.assertIsNone(json.loads(self.draft.read_text())["observation"]["karing_handoffs"][0]["responded_at"])
+
+    def test_thin_packaged_caller_preserves_binding_and_single_action(self):
+        script = DRIVER.with_name("v3-packaged-live.sh")
+        result = subprocess.run(["bash", "-c", 'source "$1"; shift; menu_session_safety_cleanup "$@"', "cleanup",
+            str(script), "Complete removal", str(self.epoch+600), "60", "--runtime-deadline", str(self.runtime),
+            "--timeout", "3", "--executable", str(self.executable)], env=self.env, text=True, capture_output=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        events = [json.loads(line) for line in (self.root/"events.jsonl").read_text().splitlines()]
+        self.assertEqual(events, [{"selected": "7"}, {"answer": "REMOVE SBXR"}])
+        self.assertIsNone(json.loads(self.draft.read_text())["observation"]["karing_handoffs"][0]["responded_at"])
+
+    def test_sealed_or_other_request_draft_is_never_reopened(self):
+        for variant in ("sealed", "other-request"):
+            with self.subTest(variant=variant):
+                value = json.loads(json.dumps(self.draft_value))
+                if variant == "sealed":
+                    value["observation"]["completed_at"] = self.now.strftime("%Y-%m-%dT%H:%M:%SZ")
+                else:
+                    value["request_sha256"] = "b"*64
+                self.draft.write_text(json.dumps(value))
+                original = self.draft.read_bytes()
+                self.assert_unstarted(self.call())
+                self.assertEqual(self.draft.read_bytes(), original)
+
+    def test_runtime_caps_a_later_requested_cutoff(self):
+        self.runtime.write_text(str(self.epoch+61)+"\n")
+        self.assert_unstarted(self.call(timeout=3, reserve=60))
+
+    def test_signal_stops_one_product_and_retains_pending_failure(self):
+        self.spec["prompt_delay"] = 30
+        self.env["FIXTURE_SPEC"] = json.dumps(self.spec)
+        original = self.draft.read_bytes()
+        process = subprocess.Popen(self.arguments(timeout=10), env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            until = time.monotonic()+5
+            while not (self.root/"events.jsonl").exists() and time.monotonic() < until:
+                time.sleep(.01)
+            self.assertTrue((self.root/"events.jsonl").exists())
+            process.send_signal(signal.SIGINT)
+            _, stderr = process.communicate(timeout=8)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("phase=signal-cancelled", stderr)
+            pid = int((self.root/"spawned").read_text())
+            with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+            self.assertEqual(self.draft.read_bytes(), original)
+            self.assertEqual(len((self.root/"events.jsonl").read_text().splitlines()), 1)
+        finally:
+            if process.poll() is None:
+                process.kill(); process.communicate(timeout=5)
+
+    def test_finish_removal_has_no_second_confirmation(self):
+        self.spec.update(label="Finish removal")
+        del self.spec["prompt"]
+        self.env["FIXTURE_SPEC"] = json.dumps(self.spec)
+        result = self.call(label="Finish removal", confirmation="none")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/"events.jsonl").read_text().splitlines(), ['{"selected": "7"}'])
+
+    def test_cleanup_only_allows_exact_removal_contract(self):
+        for kwargs in ({"label": "Start setup", "confirmation": "yes"}, {"label": "Finish setup", "confirmation": "yes"},
+                       {"label": "Rotate Client Identity", "confirmation": "yes"}, {"label": "Check", "confirmation": "none"},
+                       {"expected": "PROXY-INSTALLATION-ACTION-REFUSED"}, {"confirmation": "none"},
+                       {"label": "Finish removal", "confirmation": "remove"}):
+            with self.subTest(kwargs=kwargs):
+                self.assert_unstarted(self.call(**kwargs))
+
+    def test_cutoff_runtime_and_verification_reserve_are_required(self):
+        for kwargs in ({"cutoff": self.epoch-1}, {"cutoff": self.epoch+2, "reserve": 5},
+                       {"reserve": 0}, {"reserve": -1}, {"cutoff": self.epoch+62, "reserve": 60, "timeout": 3}):
+            with self.subTest(kwargs=kwargs):
+                self.assert_unstarted(self.call(**kwargs))
+        self.runtime.write_text(str(self.epoch-1)+"\n")
+        self.assert_unstarted(self.call())
+
+    def test_missing_or_unsafe_inputs_never_launch(self):
+        for name in ("SBXR_QUALIFICATION_REQUEST", "SBXR_QUALIFICATION_DRAFT", "SBXR_QUALIFICATION_CLOCK", "SBXR_QUALIFICATION_CLOCK_SHA256"):
+            with self.subTest(name=name):
+                value = self.env.pop(name)
+                self.assert_unstarted(self.call())
+                self.env[name] = value
+        self.env["SBXR_QUALIFICATION_CLOCK_SHA256"] = "0"*64
+        self.assert_unstarted(self.call())
+
+    def test_runtime_requires_private_owned_single_link_regular_file(self):
+        for variant in ("public", "symlink", "hardlink", "malformed"):
+            with self.subTest(variant=variant):
+                backup = self.root/"saved-runtime"
+                if variant == "public":
+                    self.runtime.chmod(0o644)
+                elif variant in ("symlink", "hardlink"):
+                    self.runtime.rename(backup)
+                    if variant == "symlink": self.runtime.symlink_to(backup)
+                    else: os.link(backup, self.runtime)
+                else:
+                    self.runtime.write_text("tomorrow\n")
+                self.assert_unstarted(self.call())
+                if variant in ("symlink", "hardlink"):
+                    self.runtime.unlink(); backup.rename(self.runtime)
+                self.runtime.write_text(str(self.epoch+1800)+"\n"); self.runtime.chmod(0o600)
+
+    def test_fifo_request_refuses_without_blocking_parent_or_spawning(self):
+        self.request.unlink()
+        os.mkfifo(self.request, 0o600)
+        start = time.monotonic()
+        result = self.call()
+        self.assert_unstarted(result)
+        self.assertLess(time.monotonic()-start, 3)
+
+    def test_original_failure_and_expired_request_are_not_repaired(self):
+        original = self.draft.read_bytes()
+        self.request.write_text("STOP\n")
+        self.assert_unstarted(self.call())
+        self.assertEqual(self.draft.read_bytes(), original)
+
+    def test_normal_mode_cannot_use_cleanup_options(self):
+        args = self.arguments(); args[2] = "action"
+        result = subprocess.run(args, env=self.env, capture_output=True, text=True, timeout=8)
+        self.assert_unstarted(result)
+
+    def test_timeout_reaps_selected_product_without_replay(self):
+        self.spec["prompt_delay"] = 4
+        self.env["FIXTURE_SPEC"] = json.dumps(self.spec)
+        result = self.call(timeout=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("phase=output-deadline", result.stderr)
+        events = [json.loads(line) for line in (self.root/"events.jsonl").read_text().splitlines()]
+        self.assertEqual(events, [{"selected": "7"}])
+        pid = int((self.root/"spawned").read_text())
+        with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
+
+
 if __name__ == "__main__": unittest.main()

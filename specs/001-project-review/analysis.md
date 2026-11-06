@@ -104,3 +104,30 @@ exact-source push/CI and T018 remains open.
 The subsequent read-only Analyze/Converge execution checked 12 FRs, eight SCs,
 three stories and 38 tasks: no unmapped coverage or new authority blocker; one
 stale status summary was corrected. The live criterion remains unverified. No checklist markers or constitution rules changed.
+
+## Failure-cleanup continuation mapping — 2026-11-06
+
+FR-013/SC-009 map to US3 and T039–T044. Existing FR-004/005/007/008/009 and
+SC-002/004/005 retain fresh authority, regression, preservation and accurate
+reporting obligations. The normal clock and product contract remain unchanged;
+the conservative cleanup route supplies no additional operational authority.
+T038 closes from its exact-source CI receipt. The initial design left T040–T044
+and live T018 open; the assessment and local closeout below supersede that status.
+
+## Failure-cleanup Analyze / Converge closeout — 2026-11-06
+
+The installed read-only Analyze and current-code Converge workflows checked all
+13 FRs, nine SCs, three stories and 44 tasks, using existing verified evidence for
+unchanged work. All requirements/criteria have mapped tasks (coverage 100% is
+traceability, not completion); there are no unmapped tasks, new ambiguity,
+duplication, critical conflict or constitution-rule contradiction. FR-013/SC-009
+map to T039–T044; state/action boundaries, conservative deadlines, private input
+validation and pending-evidence preservation match the agreed design.
+
+The shared FIFO loader repair belongs to the required malformed-input/refusal
+boundary; it adds no operation or timing authority. Real subprocess/filesystem
+regressions and the final root checks support T040–T043 closure. The remaining
+partial outcomes are SC-009/T044 exact-source push/CI and SC-003/T018 live proof,
+both already represented; no duplicate tasks or empty phase were added. The
+existing 16-item checklist and unratified constitution were unchanged, with no
+configured extension hooks. Review.md records exact results and skipped boundaries.

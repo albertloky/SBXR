@@ -784,15 +784,18 @@ class MenuSession:
             time.sleep(0.01)
 
 
-def qualification_deadline(path):
+def qualification_deadline(path, *, cleanup=False):
     """Keep legacy callers unchanged; opted-in operations use reviewed clock bytes."""
-    with open(path, "rb") as stream:
-        document = json.loads(stream.read())
-    deadline = document.get("deadline_unix")
-    if type(deadline) is not int:
-        raise ProtocolError("request-deadline")
-    if "karing_response_limit_seconds" not in document:
-        return deadline
+    if not cleanup:
+        with open(path, "rb") as stream:
+            document = json.loads(stream.read())
+        deadline = document.get("deadline_unix")
+        if type(deadline) is not int:
+            raise ProtocolError("request-deadline")
+        if "karing_response_limit_seconds" not in document:
+            return deadline
+    # Cleanup always uses the bounded protected clock subprocess, including its
+    # strict request loader. Never open an untrusted FIFO in this parent first.
     clock = os.environ.get("SBXR_QUALIFICATION_CLOCK", "")
     wanted = os.environ.get("SBXR_QUALIFICATION_CLOCK_SHA256", "")
     draft = os.environ.get("SBXR_QUALIFICATION_DRAFT", "")
@@ -809,7 +812,8 @@ def qualification_deadline(path):
         if len(body) > 65536 or hashlib.sha256(body).hexdigest() != wanted:
             raise ProtocolError("request-clock-identity")
         # Execute the verified bytes, avoiding a second path lookup after hash.
-        result = subprocess.run([sys.executable, "-B", "-", "operation-deadline", "--request", path,
+        command = "cleanup-deadline" if cleanup else "operation-deadline"
+        result = subprocess.run([sys.executable, "-B", "-", command, "--request", path,
                                  "--draft", draft], input=body, capture_output=True, timeout=10)
         if result.returncode or not re.fullmatch(rb"[0-9]+\n", result.stdout):
             raise ProtocolError("request-clock-refused")
@@ -818,14 +822,61 @@ def qualification_deadline(path):
         raise ProtocolError("request-clock-unavailable") from None
 
 
+def cleanup_runtime_deadline(path):
+    """Read the existing protected transport cutoff; never create/extend it."""
+    if not os.path.isabs(path):
+        raise ProtocolError("cleanup-runtime-identity")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
+                    stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise ProtocolError("cleanup-runtime-identity")
+            value = stream.read(33)
+        if not re.fullmatch(rb"[0-9]{1,10}\n", value):
+            raise ProtocolError("cleanup-runtime-identity")
+        return int(value)
+    except OSError:
+        raise ProtocolError("cleanup-runtime-unavailable") from None
+
+
+def safety_cleanup_deadline(args, request):
+    # This is one reviewed supported finishing action, never a general way to
+    # run a qualification operation while its human response is still missing.
+    confirmations = {"Complete removal": "remove", "Finish removal": "none"}
+    if (args.label not in confirmations or args.confirmation != confirmations[args.label] or
+            args.expected != "SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED"):
+        raise ProtocolError("cleanup-action-refused")
+    reserve = args.cleanup_reserve
+    supervision = 30 if args.protected_wrapper else 10
+    if (not request or args.cleanup_cutoff is None or reserve is None or reserve < supervision):
+        raise ProtocolError("cleanup-budget-required")
+    scenario = qualification_deadline(request, cleanup=True)
+    runtime = cleanup_runtime_deadline(args.runtime_deadline or "/root/sbxr-qualification-v3/runtime-deadline")
+    cutoff = min(scenario, runtime, args.cleanup_cutoff)
+    # Require the full requested action cap plus the caller's explicit remaining
+    # verification reserve. Do not silently shorten an unworkable reviewed plan.
+    remaining = cutoff - time.time() - reserve
+    if remaining <= args.timeout:
+        raise ProtocolError("cleanup-budget-exhausted")
+    return time.monotonic() + remaining
+
+
 def drive(args, cancelled=None, timing=None):
     deadline = timing.deadline if timing else time.monotonic() + float(args.timeout)
     if timing:
         timing("driver-start")
     request = os.environ.get("SBXR_QUALIFICATION_REQUEST")
-    if request:
-        request_deadline = qualification_deadline(request)
-        deadline = min(deadline, time.monotonic() + request_deadline - time.time())
+    if args.mode == "safety-cleanup":
+        deadline = min(deadline, safety_cleanup_deadline(args, request))
+    else:
+        if any(getattr(args, name, None) is not None for name in
+               ("cleanup_cutoff", "cleanup_reserve", "runtime_deadline")):
+            raise ProtocolError("cleanup-options-require-safety-mode")
+        if request:
+            request_deadline = qualification_deadline(request)
+            deadline = min(deadline, time.monotonic() + request_deadline - time.time())
     if time.monotonic() >= deadline:
         raise ProtocolError("deadline-before-start")
     if timing:
@@ -897,13 +948,16 @@ def drive(args, cancelled=None, timing=None):
 
 def parser():
     result = argparse.ArgumentParser(add_help=False)
-    result.add_argument("mode", choices=("action", "details", "disclose", "observe"))
+    result.add_argument("mode", choices=("action", "details", "disclose", "observe", "safety-cleanup"))
     result.add_argument("label")
     result.add_argument("expected", nargs="?", default="")
     result.add_argument("--confirmation", choices=("none", "yes", "remove"), default="none")
     result.add_argument("--executable", default=os.environ.get("SBXR_EXECUTABLE", "/usr/local/bin/sbxr"))
     result.add_argument("--timeout", type=int, default=900)
     result.add_argument("--protected-wrapper", action="store_true")
+    result.add_argument("--cleanup-cutoff", type=int)
+    result.add_argument("--cleanup-reserve", type=int)
+    result.add_argument("--runtime-deadline", help="local fixture override; live callers use the fixed transport path")
     return result
 
 

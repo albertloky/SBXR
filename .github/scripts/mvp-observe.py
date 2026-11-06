@@ -27,7 +27,7 @@ def pairs(items):
 
 
 def load(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or
@@ -187,10 +187,10 @@ def run(options):
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     not_before, deadline = validate_request(request, now)
     digest = hashlib.sha256(raw).hexdigest()
-    if options.command in ("deadline", "operation-deadline"):
+    if options.command in ("deadline", "operation-deadline", "cleanup-deadline"):
         if options.check or options.output or options.phase or options.prepared_at or options.notified_at:
             raise Refusal("deadline takes only request and draft")
-        if options.command == "operation-deadline" and not os.path.lexists(options.draft):
+        if options.command in ("operation-deadline", "cleanup-deadline") and not os.path.lexists(options.draft):
             raise Refusal("product action requires a current observation draft")
         observation = {"started_at": request["not_before"], "completed_at": None}
         if os.path.lexists(options.draft):
@@ -201,6 +201,18 @@ def run(options):
             if (observation["completed_at"] is not None or now > deadline or
                     any(h["responded_at"] is None for h in observation.get("karing_handoffs", []))):
                 raise Refusal("product action requires an active technical window with no pending response")
+        if options.command == "cleanup-deadline":
+            # Preserve the unanswered handoff. Only completed recorded waits add
+            # technical time; cleanup cannot spend an unfinished response hour.
+            completed_waits = sum((parse(h["responded_at"]) - parse(h["notified_at"])
+                                   for h in observation.get("karing_handoffs", [])
+                                   if h["responded_at"] is not None), dt.timedelta())
+            base = dt.datetime.fromtimestamp(request["deadline_unix"], tz=dt.timezone.utc)
+            deadline = min(deadline, base + completed_waits)
+            if "attended_finish_by" in request:
+                deadline = min(deadline, parse(request["attended_finish_by"]))
+            if observation["completed_at"] is not None or now >= deadline:
+                raise Refusal("cleanup requires an unsealed draft and remaining technical time")
         print(int(deadline.timestamp()))
         return
     if options.command not in ("ready",) and (options.phase or options.prepared_at or options.notified_at):
@@ -272,7 +284,7 @@ def run(options):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("start", "observe", "status", "finish", "ready", "responded", "deadline", "operation-deadline"))
+    parser.add_argument("command", choices=("start", "observe", "status", "finish", "ready", "responded", "deadline", "operation-deadline", "cleanup-deadline"))
     parser.add_argument("--request", required=True)
     parser.add_argument("--draft", required=True)
     parser.add_argument("--check")

@@ -157,3 +157,49 @@ research, contract, data model and tasks below map this continuation to FR-012,
 SC-008 and US3. The requirements checklist and unratified local constitution are
 unchanged. Existing AGENTS/ADRs plus the exact Owner approval supply authority;
 no new policy gates or operational permissions are inferred. T018 stays open.
+
+## Bounded failure-cleanup continuation — 2026-11-06
+
+Use the existing recorder and supervised menu driver; do not add a general runner.
+Add a read-only `cleanup-deadline` command in .github/scripts/mvp-observe.py.
+Require the original private, unsealed, request-matching draft. Its deadline is
+conservatively the original request deadline plus actual completed waits, capped
+by the signed finish and existing handoff deadline. A pending wait adds no
+technical credit and stays unchanged. Missing, sealed, expired or malformed
+authority refuses. Normal `operation-deadline` and success/sealing behavior stay
+unchanged; no new schema, handoff state, response event or signed-clock rule.
+
+Add explicit `safety-cleanup` mode to .github/scripts/v3-menu-session.py, closed
+to Complete removal / Finish removal with their fixed expected result and existing
+confirmation. Always require hash-bound clock bytes, an absolute cleanup cutoff,
+a post-action verification reserve and the protected candidate runtime-deadline
+file. Before spawning, require the full configured action timeout cap plus reserve
+to fit the remaining minimum of the original cleanup clock, runtime limit and
+cutoff. The reserve includes process supervision and final verification; defaults
+are bounds, not measurements. Recheck before each launch and pass the same
+absolute limits through the whole sequence. Never reset a clock, bypass fresh
+product authentication/ownership, or use this route for setup,
+identity mutation, details or automatic retries.
+
+The thin `menu_session_safety_cleanup` helper in existing
+.github/scripts/v3-packaged-live.sh invokes one reviewed removal action through
+that mode, binding the exact result code and confirmation from its selected label.
+Its cutoff/reserve and existing driver options do not add arbitrary action scope.
+Keep legacy `remote_failure_cleanup` historical; current guidance names this
+bounded route for fresh Rust qualification. Surrounding read-only state and
+final-verification steps use the existing bounded SSH mechanism and a freshly
+prepared caller sharing the cutoff;
+there is no independent general-purpose cleanup runner. A successful menu result
+is not whole-cleanup proof: separately verify owned absence, outside rejection,
+client/secret restoration and transport cleanup within their actual authority.
+Blocked or uncertain cleanup stays reportable without changing the original
+failure evidence or converting the failed qualification into a pass.
+
+Tests must exercise actual recorder and driver subprocesses and private files:
+permitted actions and confirmation, pending/completed waits, rejected ordinary
+pending actions, malformed/sealed/mismatched/expired authority, reserve exhaustion,
+expiry between steps, failure/cancellation and process reaping. Hold source clock
+bytes and protected runtime-file identity to existing ownership/hash expectations.
+Run focused and relevant broad suites, independent review, and exact-source CI.
+No numeric full-cleanup duration or live readiness is established by this design.
+T018 stays open. Existing rules and the unratified constitution remain unchanged.

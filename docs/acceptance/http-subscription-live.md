@@ -350,6 +350,91 @@ workflow cleanup do not themselves remove the product installation; any later
 administrative recovery needs its applicable specific authorization. The helper's
 fixed warning explains this boundary; it is not a new permission or cleanup gate.
 
+
+### Bounded supported cleanup after a stopped journey
+
+For a fresh Rust HTTP attempt, use the maintained `menu_session_safety_cleanup`
+caller in `.github/scripts/v3-packaged-live.sh`, or the same driver's explicit
+`safety-cleanup` mode. Retain the current `SBXR_QUALIFICATION_REQUEST`,
+`SBXR_QUALIFICATION_DRAFT`, `SBXR_QUALIFICATION_CLOCK` and its SHA-256 binding.
+Do not unset them to get past a pending client reply. Preserve the failed action's
+actual evidence and the original draft, including an unanswered handoff.
+
+Only two freshly reviewed states/actions are admitted by this caller:
+
+| Current supported action | Confirmation | Required result |
+|---|---|---|
+| Complete removal | `REMOVE SBXR` | `SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED` |
+| Finish removal | None | Same completed result |
+
+The current Rust removal interface can review installed-only, incomplete setup,
+and pending subscription/identity resources. Product authentication and fresh
+ownership checks still decide whether removal is legal. Do not automatically
+finish setup, rotate credentials, repeat details, loop through actions or retry
+an uncertain removal. An absent executable requires independent absence or
+exact-finisher assessment; this caller does not reinstall it or perform
+administrative deletion. The historical `remote_failure_cleanup` loop is not the
+fresh Rust HTTP caller.
+
+Prepare the single operation and its remaining verification budget before live
+use. From the reviewed operator copy, with current bound inputs already present:
+
+```sh
+menu_session_safety_cleanup 'Complete removal' "$cleanup_cutoff_unix" \
+  "$remaining_verification_seconds" --timeout "$reviewed_action_seconds" \
+  --runtime-deadline /root/sbxr-qualification-v3/runtime-deadline
+```
+
+Choose `Finish removal` only when the fresh state admits that finishing action.
+The cutoff is an absolute timestamp shared by the complete cleanup caller, not
+`now + duration` regenerated for each step. The runtime file must be the existing
+protected transport file at the fixed path shown, never a fabricated later timestamp.
+Its alternate-path option is for local fixtures only. File metadata alone does not
+prove the current transport identity; fresh candidate/ownership checks still do. Freeze the exact
+source/helper identities in the attempt's normal preparation. This example grants
+no permission or present host-readiness claim.
+
+The read-only `cleanup-deadline` clock requires the original matching unsealed
+private draft. It validates all handoff records but grants time only for actual
+completed waits. Its bound is the earliest of the base technical deadline plus
+those completed waits, the existing handoff deadline and signed attended finish.
+An unanswered response adds no technical-time credit. Ordinary
+`operation-deadline` still refuses a pending response. Neither command fabricates
+an observation, records a response, changes a timestamp or reopens a sealed draft.
+Before opening a handoff, require its five/ten-minute short response allowance
+plus the complete cleanup reserve to fit this conservative deadline. Do not use
+the later pending-response deadline as extra cleanup time.
+Malformed, missing, mismatched, sealed or expired inputs refuse before the product
+starts; those cases need an explicit state assessment, not clock repair.
+
+Before spawning, the driver requires the full requested action timeout plus the
+explicit verification reserve to fit before the earliest of that cleanup clock,
+the existing candidate runtime deadline and the caller's cleanup cutoff. The
+reserve includes process quiescence and all still-needed state/absence, outside,
+SSH, client and secret checks. It must at least cover the existing process-stop
+allowance (10 seconds, or 30 with the separate protected wrapper), but that floor
+is **not** an estimate or guarantee of complete verification time. Missing or
+insufficient budgets refuse; no default whole-cleanup duration is inferred.
+
+After the one action, independently inspect its actual outcome and verify owned
+absence, outside refusal, SSH/unrelated resources, client restoration and secret
+cleanup using reviewed bounded calls within the same cutoff. Clamp each remote
+inspection to the remaining shared budget too: `bounded-ssh.py` bounds the local
+SSH process only, and a timeout leaves the remote outcome unknown. It does not
+prove remote quiescence or authorize another action. A menu completion
+code is not complete cleanup or a passing journey. Retain captures on refusal or
+interruption and do not replay an uncertain operation. Submit the original failure
+with the actual cleanup status only afterward; terminal submission and collector
+expiry can remove authentication earlier than the global window.
+
+The collector creates the next scenario request immediately after accepting the
+previous result. Prepare next-scenario inputs before submission; then bind its
+actual new request and draft and recalculate remaining time. Do not restart its
+clock at operator readiness. Keep each scenario's early-stop margin and the final
+transport/verification reserve separate. A bounded caller supplies no measured
+full-cleanup duration for HTTP/Karing or interrupted transactions, and does not by
+itself establish that a new live run is ready.
+
 ## Future native settings comparison
 
 The Owner approved this prospective correction on 2026-10-19. New preparations

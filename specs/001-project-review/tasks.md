@@ -154,11 +154,35 @@ prior records, historical semantics and refusal boundaries remain intact.
 - [x] T035 [US3] Append only the exact record and eleven-record validation in cmd/sbxr-release/candidate_reservations.go and .github/scripts/check-candidate-reservations.sh; preserve ten prior records, historical replay and coherent current-candidate/collision fixtures in adjacent tests.
 - [x] T036 [P] [US3] Record the approved disposition in docs/adr/0032-qualified-publication-retry.md and an indexed dated report under docs/acceptance/reports/; reconcile current counts and specs/001-project-review/review.md without rewriting historical outcomes.
 - [x] T037 [US3] Validate exact pins, focused/full release-tool and root integration checks, vet, all eleven current observations and twenty-two absent refs, plus independent final-diff review; record evidence and limits in the dated reservation report.
-- [ ] T038 [US3] Commit/push the reviewed reservation on main and verify exact-source CI; record source/run/results in specs/001-project-review/review.md and the dated reservation report.
+- [x] T038 [US3] Commit/push the reviewed reservation on main and verify exact-source CI; record source/run/results in specs/001-project-review/review.md and the dated reservation report.
 
 Dependency: T033 -> T034 -> T035 -> T037 -> T038. T036 can proceed independently
 of production/test changes after T033, then incorporates T037 evidence before
 T038. The smallest complete increment is this single approved reservation.
-T035–T037 are complete. T038 remains pending until exact-source push/CI is established. T018 remains open.
+T035–T038 are complete; the exact-source CI receipt is recorded below. T018 remains open.
 No live attempt, signing, failed-finalizer replay, remote release mutation, cleanup
 execution or publication is part of Phase 10.
+
+Phase 10 closeout: c60efd0306ebf92aaad7dce930fa3bfaab2549ed reached main;
+Verify 42208919789 passed all four jobs, as recorded in
+.scratch/acceptance/q213res/{push-result,ci-completed}.json. T038 is complete;
+this establishes no live qualification or current cleanup readiness.
+
+## Phase 11: US3 — Bounded state-specific failure cleanup
+
+Independent check: the two existing removal actions retain fresh authority and
+process supervision while the cleanup-only clock preserves original limits and
+pending/failure evidence. No whole-cleanup/live claim follows from menu success.
+
+- [x] T039 [US3] Specify and clarify FR-013/SC-009 and the agreed cleanup-only deadline/action boundary in spec.md, plan.md, research.md and data-model.md; preserve prior rules and close only evidenced T038.
+- [x] T040 [US3] Add and demonstrate failing boundary regressions in .github/scripts/test_mvp_observe.py, .github/scripts/test_v3_menu_session.py and relevant root caller tests for pending/expired/mismatched authority, action allow-list, shared cutoff/reserve, failure preservation and process cleanup.
+- [x] T041 [US3] Implement read-only cleanup-deadline in .github/scripts/mvp-observe.py, explicit safety-cleanup in .github/scripts/v3-menu-session.py and menu_session_safety_cleanup in .github/scripts/v3-packaged-live.sh; preserve normal actions, confirmations, clock semantics and original failure evidence.
+- [x] T042 [P] [US3] Document the bounded caller and separate final-verification prerequisites in .github/scripts/README.md and docs/acceptance/http-subscription-live.md, with a dated indexed report under docs/acceptance/reports/ and limits in review.md.
+- [x] T043 [US3] Validate focused and relevant broad recorder/driver/caller checks, independent final-diff review and secret-safe evidence; record actual results, unavailable boundaries and duration limits in review.md and the dated report.
+- [ ] T044 [US3] Commit/push the reviewed bounded repair on main and verify exact-source CI; record source/run/results in review.md and the dated report.
+
+Dependency: T039 -> T040 -> T041 -> T043 -> T044. T042 can proceed after T039
+on separate documentation files and incorporates final T043 evidence before
+T044. T040–T043 are complete from the local evidence recorded in review.md;
+T044 remains pending exact-source push/CI. T018 remains open. No live attempt, cleanup execution, new signing, remote release mutation,
+security change, deletion or publication is authorized by this offline work.

@@ -21,6 +21,24 @@ menu_session_action() {
   menu_session_driver action "$label" "${expected#Code: }" --confirmation "$confirmation"
 }
 
+
+# One explicitly reviewed Rust removal action after qualification has stopped.
+# Original request/draft/clock variables remain set, even for a missing reply.
+# The shared absolute cutoff and post-action reserve cover the complete caller;
+# a successful menu result alone does not prove host/client/secret cleanup.
+menu_session_safety_cleanup() {
+  test "$#" -ge 3 || return 1
+  local label=$1 cutoff=$2 reserve=$3 confirmation
+  shift 3
+  case "$label" in
+    'Complete removal') confirmation=remove ;;
+    'Finish removal') confirmation=none ;;
+    *) return 1 ;;
+  esac
+  menu_session_driver safety-cleanup "$label" SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED \
+    --confirmation "$confirmation" --cleanup-cutoff "$cutoff" --cleanup-reserve "$reserve" "$@"
+}
+
 # The public Recover menu emits review_recover() before considering approval.
 # Ready has no recovery direction, so the internal recover() result is never
 # emitted and no confirmation must be sent. Other states still fail exactly.
@@ -244,6 +262,8 @@ seal_failure_evidence() {
   install -m 0600 /dev/null "$marker"
 }
 
+# Retained historical multi-action helper. Fresh Rust HTTP safety cleanup uses
+# menu_session_safety_cleanup, with explicit state selection and shared bounds.
 remote_failure_cleanup() {
   local WORK=${WORK:-/run/sbxr-qualification}
   local action after before details details_number evidence evidence_safe input expected output status

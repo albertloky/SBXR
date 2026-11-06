@@ -400,3 +400,18 @@ its four pinned assets and two refs. Assets are hashed, never executed. A denial
 or mismatch stops without retry. The ten-minute job uploads local observations;
 it does not alter the draft, tags, assets or qualification result. Reads are not
 an atomic snapshot. Normal candidate dispatch defaults this mode to false.
+
+
+For fresh Rust HTTP failure cleanup, `v3-packaged-live.sh` exposes
+`menu_session_safety_cleanup LABEL CUTOFF_UNIX VERIFICATION_SECONDS [driver options]`.
+It binds only Complete removal or Finish removal to the existing authenticated
+menu driver. The explicit `safety-cleanup` mode retains request/draft/verified-clock
+bindings and reads the existing protected runtime cutoff. `mvp-observe.py`
+`cleanup-deadline` is read-only and permits a pending reply without inventing a
+response; only completed waits add technical time. Normal qualification actions
+remain blocked by pending replies. Full action-cap plus post-action reserve must
+fit; process supervision, confirmation and final result checking are unchanged.
+No status/details loop or automatic setup/credential completion is added. See the
+[current bounded-cleanup procedure](../../docs/acceptance/http-subscription-live.md#bounded-supported-cleanup-after-a-stopped-journey)
+for preserved evidence, state selection, shared cutoff and independent verification.
+The historical `remote_failure_cleanup` helper is not this fresh Rust path.
