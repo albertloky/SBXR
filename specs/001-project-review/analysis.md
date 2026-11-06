@@ -182,3 +182,12 @@ No assertion failure or race warning preceded the alarm, but successful unsplit
 execution is unproved. The authorized validation clarification retains this
 failed result and requires unchanged unsplit native CI; it neither raises a
 timeout nor treats batched coverage as a package pass.
+
+## Verified CI evidence reconciliation
+
+The subsequent exact-source Verify 42225366942 passed all four jobs for
+2634a9cb2b48920e04f7ae4c9b8752c86b951a71, completing the existing
+SC-009/SC-010 CI obligations and T044/T050. This evidence resolves C003 without
+adding a task, changing an assertion/timeout or weakening original failures.
+C002/SC-003/T018 remains open: no live proof was produced. The prior local
+unsplit failure, constitution status and all authority limits remain unchanged.

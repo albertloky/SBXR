@@ -97,3 +97,26 @@ subsequent outcomes.
 The existing Spec Kit project review tracks this bounded continuation. Its live
 90-second details/five-journey criterion remains open. Offline test efficiency
 cannot establish safe live cleanup duration or qualify any candidate.
+
+## Exact-source native CI result
+
+The repair was pushed as `2634a9cb2b48920e04f7ae4c9b8752c86b951a71`.
+[Verify 42225366942](https://github.com/albertloky/SBXR/actions/runs/42225366942),
+attempt 1, completed successfully; both native jobs and both assembly jobs passed.
+
+| Release-tool package | Normal | Full race | Race margin below 600s |
+|---|---:|---:|---:|
+| Linux amd64 | 233.680s | 399.908s | 200.092s |
+| Linux arm64 | 250.112s | 463.059s | 136.941s |
+
+CI retained its full unsplit normal/race commands, timeout, assertions and four
+verification jobs. No timeout or race warning appeared in the inspected native
+logs. The new amd64 result clears the reported cumulative-timeout failure;
+runner variation means the complete timing difference is not solely attributed
+to build reuse. The Mac's unsplit local failure remains an explicit limitation.
+
+The verified remote main ref, workflow metadata, all four job/step results and
+selected command/result lines are recorded in `.scratch/acceptance/c5g/`.
+Spec Kit T044/T050 are closed from these results; live T018 remains open.
+Neither this CI result nor the test optimization establishes VPS/Karing readiness,
+whole-cleanup duration or live qualification of a candidate.

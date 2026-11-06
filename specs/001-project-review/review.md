@@ -559,3 +559,21 @@ stale evidence status) were corrected in this subsequent authorized artifact
 closeout. Existing verification/live gaps already have tasks, so no duplicate
 convergence phase or whole-feature convergence claim was added. The 16-item
 checklist and unratified constitution remain unchanged.
+
+## Verified CI closeout — 2026-11-06
+
+Repair commit `2634a9cb2b48920e04f7ae4c9b8752c86b951a71` reached GitHub main.
+[Verify 42225366942](https://github.com/albertloky/SBXR/actions/runs/42225366942),
+attempt 1, completed successfully with all four jobs passing. The release-tool
+normal/race package times were 233.680s/399.908s on amd64 and
+250.112s/463.059s on arm64. Both full race runs retained the default 600-second
+limit, all ordinary commands and assertions, and no batching in CI. These are
+observed CI timings, not a controlled attribution of every saved second.
+
+The original 335769c failure and the unsplit local Mac timeout stay failed;
+local case coverage does not retroactively change either outcome. T044/T050
+are complete from this repaired exact source and recorded evidence; T018 remains
+open. No live qualification, VPS access, signing or publication occurred.
+The receipt and selected command/result log lines are preserved in
+`.scratch/acceptance/c5g/`; full decoded native logs were inspected through GitHub.
+This documentation closeout changes no implementation or operational authority.

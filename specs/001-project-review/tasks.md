@@ -179,7 +179,7 @@ pending/failure evidence. No whole-cleanup/live claim follows from menu success.
 - [x] T041 [US3] Implement read-only cleanup-deadline in .github/scripts/mvp-observe.py, explicit safety-cleanup in .github/scripts/v3-menu-session.py and menu_session_safety_cleanup in .github/scripts/v3-packaged-live.sh; preserve normal actions, confirmations, clock semantics and original failure evidence.
 - [x] T042 [P] [US3] Document the bounded caller and separate final-verification prerequisites in .github/scripts/README.md and docs/acceptance/http-subscription-live.md, with a dated indexed report under docs/acceptance/reports/ and limits in review.md.
 - [x] T043 [US3] Validate focused and relevant broad recorder/driver/caller checks, independent final-diff review and secret-safe evidence; record actual results, unavailable boundaries and duration limits in review.md and the dated report.
-- [ ] T044 [US3] Commit/push the reviewed bounded repair on main and verify exact-source CI; record source/run/results in review.md and the dated report.
+- [x] T044 [US3] Commit/push the reviewed bounded repair on main and verify exact-source CI; record source/run/results in review.md and the dated report.
 
 Dependency: T039 -> T040 -> T041 -> T043 -> T044. T042 can proceed after T039
 on separate documentation files and incorporates final T043 evidence before
@@ -204,7 +204,7 @@ No timeout, race coverage, assertions or release authority is relaxed.
 - [x] T047 [US3] Implement synchronized immutable-byte construction and fresh per-test executables in cmd/sbxr-release/release_test_binary_test.go; adapt the equivalent qualification test callers, retaining the declaration helper and every downstream command/reader check.
 - [x] T048 [P] [US3] Record the bounded diagnosis/repair and timing limitations in docs/acceptance/reports/release-test-build-reuse-2026-11-06.md, its index and specs/001-project-review/review.md; preserve original CI observations.
 - [x] T049 [US3] Verify focused red/green and comparable timing, applicable local normal/race checks and complete release-tool test coverage, reusable integration evidence, vet and independent final-diff review without changing timeout/coverage; retain any unsplit package failure separately from bounded remainder results in review.md and the dated report.
-- [ ] T050 [US3] Commit/push the reviewed test-only repair on main and verify exact-source CI; record the source/run/outcome in review.md and the dated report before closing T044.
+- [x] T050 [US3] Commit/push the reviewed test-only repair on main and verify exact-source CI; record the source/run/outcome in review.md and the dated report before closing T044.
 
 Dependency: T045 -> T046 -> T047 -> T049 -> T050. T048 can proceed after T045
 on separate documentation files and incorporates T049 evidence before T050.
@@ -215,3 +215,15 @@ at 600.359s; a separate 18-test remainder passed in 45.658s. Combined coverage
 is not an unsplit pass. T050/T044 require successful final-source native CI. T018
 remains unverified. No live test, signing, VPS/security change, deletion or publication
 is part of this test-tooling repair.
+
+## Phase 12 CI closeout
+
+The reviewed repair reached main as `2634a9cb2b48920e04f7ae4c9b8752c86b951a71`.
+[Verify 42225366942](https://github.com/albertloky/SBXR/actions/runs/42225366942),
+attempt 1, passed all four native and assembly jobs. The unchanged full normal
+and race commands passed on both architectures; release-tool race times were
+399.908s on amd64 and 463.059s on arm64, under the unchanged 600-second limit.
+The original failed run and unsplit Mac failure remain preserved. This closes
+T044/T050 from the repaired source's successful CI, superseding their pre-push
+checkpoint above. T018 remains the only open task; live proof is still missing.
+Evidence: `.scratch/acceptance/c5g/ci-completed.json` and the dated repair report.
