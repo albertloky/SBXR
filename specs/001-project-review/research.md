@@ -195,3 +195,21 @@ context and give each fixture a fresh executable. Reject shared mutable paths,
 skipped subprocess/reader checks, a generic cross-context cache, increased alarms
 or reduced race coverage. No product-policy clarification is needed; test-tooling
 implementation choices remain bounded by the existing regression requirements.
+
+## Operator-budget continuation — 2026-11-06
+
+Decision: extend the existing private-log operator wrapper with an explicit bounded
+mode rather than add an autonomous cleanup runner. The default exec path remains.
+Use a shared absolute cutoff, per-command monotonic cap and separate downstream
+reserve; keep selected wall allocations distinct from measured live durations.
+The existing menu reserve includes its stopping allowance, whereas the outer
+runner's R excludes its own ten seconds. The current procedure is the single
+source for the 900/1200/1230s arithmetic and manual-handoff constraints.
+
+Rejected alternatives: resetting deadlines per command, crediting a pending reply,
+automatic recovery/retry, treating SSH termination as remote quiescence, or using
+inert client fixtures as Karing evidence. The manual M3 route lacks demonstrated
+worst-case fit, and real HTTP/Karing/interrupted-state cleanup remains unmeasured.
+Those are explicit readiness limits, not reasons to weaken existing checks or
+create a new blanket operational prohibition. No new Owner policy decision was
+needed for this bounded offline implementation.

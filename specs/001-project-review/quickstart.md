@@ -65,3 +65,14 @@ account for unfinished tests in a separate bounded race batch; combined coverage
 is not an unsplit pass. Final-source native CI retains its full unsplit normal/race
 suites. Preserve the existing timeout and race settings. Compare timing only within its recorded
 environment; require final-source CI before closing T050 or prior T044.
+
+## Operator-budget continuation — 2026-11-06
+
+Use scoped workspace artifacts for the adjacent test_mvp_operator_run.py suite
+and existing root recorder/evidence, packaged-menu and release-safety wrappers.
+Check default exec, bounded refusal, shared-cutoff exhaustion, clock faults,
+cancellation, child/descendant stopping and exact signal results. Review the
+current cleanup profile's row sums, distinct reserve meanings and handoff
+thresholds. Retain the six-case inert clock/runtime/runner rehearsal separately
+from maintained tests. No fixture result proves remote quiescence, Karing cleanup
+or live readiness. Final-source native CI is T056; T018 remains independent.

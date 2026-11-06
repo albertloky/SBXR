@@ -238,3 +238,29 @@ Keep the existing race command and default 600-second
 package timeout unchanged. Do not infer Linux CI savings from local build timings.
 This continuation does not establish a sole timeout cause or fix until its checks
 pass; product, release rules, workflow permissions and all live limits stay intact.
+
+## Operator-budget continuation — 2026-11-06
+
+Extend only existing .github/scripts/mvp-operator-run.py with the all-or-none
+`--cutoff-unix E --timeout A --reserve R` options. Default execution retains the
+same PID/exec behavior. The bounded mode supervises one foreground process group
+and admits strictly `now + A + 10 + R < E`; R is downstream work excluding its
+fixed ten-second local stop allowance. Use a per-command monotonic cap plus the
+wall cutoff; no retry, observation generation, persistent sequence clock or
+remote/client-completion inference. Preserve exclusive private logs and signal
+results. Detached sessions and remote effects remain outside local supervision.
+
+The concrete docs/acceptance/bounded-operator-cleanup.md profile uses selected
+900s M1, 1200s HTTP/Karing and 1230s manual-M5 envelopes, shared original cutoffs
+and explicit downstream rows. Its menu reserve includes supervision, unlike R;
+retain the documented arithmetic and actual cleanup clock/runtime binding.
+Handoff preparation retains `H + 30 + C` strict fit and the signed 3600-second
+admission guard. The manual M3 worst-case route has no demonstrated fit. Current
+exact caller mapping, working client access and whole-cleanup timing remain
+future readiness work, not automatically established by this profile.
+
+Use adjacent real subprocess/filesystem tests in test_mvp_operator_run.py and the
+existing root recorder/menu/release-safety wrappers. Supplement with the actual
+hash-bound clock/runtime/runner inert composition and arithmetic rehearsal; it
+is retained local evidence, not a new maintained test or live proof. Reuse valid
+unchanged Go/Rust checks; final-source native CI remains required.

@@ -8,6 +8,11 @@ Use `subscription-clean-install-only`, empty incoming sources and `mvp-http-live
 under [ADR-0028](../adr/0028-clean-install-only.md). No source upgrade or subscription
 certificate issuance is required. Preparation and local tests do not prove a live pass.
 
+The [bounded operator preparation](bounded-operator-cleanup.md) makes action caps,
+cleanup reserves and early-stop thresholds explicit, with separate limits for
+local commands, SSH, outside clients and Karing. Its allocations do not establish
+live timing or present readiness.
+
 The procedure includes the exact-candidate SSH handoff and incremental observation
 recorder. The [temporary log-parent procedure](mvp-protected-log-parent-2026-09-19.md)
 applies only to the existing host shape with that prerequisite and requires fresh

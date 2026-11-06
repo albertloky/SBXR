@@ -577,3 +577,51 @@ open. No live qualification, VPS access, signing or publication occurred.
 The receipt and selected command/result log lines are preserved in
 `.scratch/acceptance/c5g/`; full decoded native logs were inspected through GitHub.
 This documentation closeout changes no implementation or operational authority.
+
+## Operator-budget continuation — 2026-11-06
+
+The agreed offline continuation extends FR-013/SC-009 without new product policy.
+The existing operator wrapper now has an optional one-command budget mode; default
+exact exec, original clocks, product authority and private captures remain intact.
+The [concrete cleanup profile](../../docs/acceptance/bounded-operator-cleanup.md)
+and [dated report](../../docs/acceptance/reports/bounded-operator-budget-2026-11-06.md)
+record selected 900/1200/1230-second allocations, supervision/reserve accounting,
+manual-handoff limits and remaining live uncertainty. No numerical allocation is
+a measured worst-case cleanup bound.
+
+Specify/Clarify/Plan/Tasks instructions were applied to the existing feature: the
+active template and paths-only prerequisite were resolved; setup-plan preserved
+the existing plan and setup-tasks resolved its template and inputs. Clarification
+required zero Owner questions: implementation details were resolved by the agreed
+design. Artifacts were authored in place, not regenerated or reinitialized.
+The installed Implement prerequisite passed. Requirements checklist 16/16 and the
+unratified constitution remain unchanged, with no extension hooks. Local source
+implementation and tests were performed by the parent/code agent; this artifact
+continuation does not claim to have rerun them.
+
+The bounded-options regression first failed against the old wrapper: unsupported
+arguments returned 2 instead of the inert command's 23. Final maintained Python
+tests passed **17/17 in 13.703s**, including default exec, invalid/exhausted budget
+refusal, private captures, TERM/INT/HUP cancellation, exited-leader descendants,
+signal status, sequential cutoff exhaustion and clock failures/jumps. Independent
+review's SIGKILL-disposition issue was repaired and regression-tested. Evidence:
+.scratch/acceptance/ob1/{red,green-final}.log.
+
+The three relevant root integration wrappers passed in **43.518s**
+(.scratch/acceptance/b6r/go-normal.log); final fixture-only tightening was then
+covered by the 17-test suite. The separate six-case rehearsal used the actual
+hash-bound cleanup clock loader, protected runtime reader and bounded runner.
+Pending and completed-plus-pending histories admitted an inert command; expired,
+sealed, missing and malformed histories refused. Original input bytes remained
+unchanged. This scratch rehearsal and table arithmetic are supplementary evidence,
+not maintained new tests or real SSH/client/cleanup execution. No changed Go/Rust
+source required redundant full local native/race runs; final-source CI is pending.
+
+Analyze/Converge assessed the current implementation against 14 FRs, ten SCs, three
+stories and 56 tasks, reusing established evidence for unchanged work. No new
+requirement gap, unmapped task, policy conflict or unrequested behavior was found.
+The installed stages' prerequisite checks passed; no duplicate convergence phase
+was needed. This subsequent authorized evidence closeout marks T051–T055 done;
+T056 and live T018 remain open. The manual M3 route lacks demonstrated worst-case
+fit; HTTP/Karing/interrupted-state duration, remote quiescence and exact future
+caller/client readiness remain explicitly unproved.

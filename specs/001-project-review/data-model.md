@@ -40,3 +40,13 @@ A build failure remains visible and leaves the cache empty; no error is cached.
 Each fixture owns a distinct temporary executable copy and lifetime.
 No product, qualification-wire or persistent schema changes; separate test processes
 and distinct build inputs do not inherit cached authority.
+
+## Operator-budget continuation — 2026-11-06
+
+An optional local invocation carries an absolute cutoff, positive command cap and
+nonnegative downstream reserve, supplied together and finite. Its fixed ten-second
+local stopping allowance is separate from that reserve. The original request,
+draft, signed/runtime cutoffs and failed observations retain their existing bytes
+and authority. Selected procedure rows describe allocations and remaining work;
+they are neither observations nor new qualification records. No product or signed
+wire schema changes, persistent sequence clock or automatic cleanup state machine.

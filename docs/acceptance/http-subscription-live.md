@@ -323,6 +323,12 @@ has an uncertain outcome: inspect its state before further action. Do not retry
 mutations to replace the original failure. Keep the accepted scenario receipts;
 only the complete five-journey result can qualify the candidate.
 
+Use the [bounded operator preparation](bounded-operator-cleanup.md) to assign
+explicit action caps, remaining verification reserves and early-stop thresholds.
+Its selected allocations are an operator preparation profile, not measured live
+duration guarantees or changes to the signed qualification contract. Freeze the
+actual prepared callers and recheck feasibility before an approved attempt.
+
 ### Terminal failure ends candidate authentication
 
 Submitting `v3-scenario-failure` through `v3-recurring-evidence.sh submit` is a

@@ -9,6 +9,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Local audit repairs
 
+- [Bounded operator budget preparation — 2026-11-06](bounded-operator-budget-2026-11-06.md)
+  — optional fixed-cutoff local command supervision and explicit cleanup allocations; live timing and client-route feasibility remain unverified.
+
 - [Release-tool test build reuse — 2026-11-06](release-test-build-reuse-2026-11-06.md)
   — cumulative race-suite timeout investigation and repeated CLI build reduction; original failure preserved.
 

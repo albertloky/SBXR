@@ -35,7 +35,7 @@ relax their source, payload, signature or publication requirements.
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
 | Native Karing receipt readbacks | `native-receipts.py`, `capture-native.py`, adjacent tests; shared comparisons and prepared capture/verification callers with actual native-store provenance and strict node comparison |
 | Filtered startup diagnosis | `capture-startup-diagnostics.py`, `test_capture_startup_diagnostics.py`; bounded fixed-category journal projection into an exclusive mode0600 local file; [capture limits](../../docs/acceptance/startup-diagnostics.md) |
-| Local operator command logs | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint outer logs and pre-launch capture refusal |
+| Local operator command logs and optional caps | `mvp-operator-run.py`, `test_mvp_operator_run.py`; disjoint private logs, pre-launch capture refusal and explicit fixed-cutoff foreground supervision |
 | Window expectation proxy pin | `prepare-mvp-window.py`, `test_prepare_mvp_window.py`; derive `/usr/bin/sing-box` SHA-256 from the receipt-verified local DEB without changing host facts |
 | Incremental explicit operator observations | `mvp-observe.py`, `test_mvp_observe.py`; explicit observations and signed opt-in attended response windows, no product driving or automatic pass |
 | Packaged public-menu helpers | `v3-packaged-live.sh`, `v3-menu-session.py` |
@@ -199,6 +199,37 @@ reservation; it is retained. Do not redirect outer logs onto inner capture
 paths. This local wrapper does not perform observations, submit evidence, retry
 an attempt, or authorize live work. Its nested-subprocess regression runs in the
 ordinary Go suite. The run-local helper in this example remains attempt-specific.
+
+The same wrapper has an explicit bounded mode for newly prepared foreground
+commands. Supply all three options, or none:
+
+```sh
+python3 .github/scripts/mvp-operator-run.py \
+  --run-directory "$run" --label cleanup-state \
+  --cutoff-unix "$cleanup_cutoff_unix" --timeout 80 --reserve 810 -- \
+  python3 "$run/reviewed-state-check.py"
+```
+
+This example names a prepared check, not a bundled implementation or permission
+to access a host. Bounded mode requires the full command cap, a separate ten-second
+local stopping allowance and the downstream reserve to fit strictly before the
+fixed cutoff. It never shortens a requested cap to make it fit. The running cap
+uses monotonic time, with an additional wall-clock cutoff check; clock changes do
+not grant more running time. It supervises one foreground process group and keeps
+partial private logs on refusal, timeout or cancellation. A child that detaches
+into another session, an SSH remote process and a Karing UI action are outside that
+local group. Do not nest `bounded-ssh.py` and assume its separate SSH session is
+contained. New prepared SSH calls use direct `ssh` under this mode and independently
+bound the reviewed remote command to the same cutoff. A transport timeout leaves
+the remote outcome unknown; it never authorizes replay.
+
+The wrapper's `--reserve` excludes its own ten-second allowance. The menu driver's
+`--cleanup-reserve` includes its own supervision allowance; the values are not
+interchangeable. Follow the [concrete cleanup budget](../../docs/acceptance/bounded-operator-cleanup.md)
+for each remaining stage, client work and the final transport reserve. Existing
+unbounded invocations retain the exact same-process exec behavior described above.
+Neither mode chooses an operation, handles client UI, records observations or
+certifies cleanup.
 
 Fresh native operator preparation copies `native-receipts.py` from this source
 alongside its capture/recording helpers before freezing their bytes. The current

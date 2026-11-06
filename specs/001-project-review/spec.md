@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Failure-cleanup repair pushed; CI blocked by release-tool package timeout; test-build reuse implemented; local race coverage complete across batches with unsplit timeout retained; native CI pending; live criterion unverified
+**Status**: Prior repairs verified in native CI; bounded operator-budget continuation locally verified, final-source CI pending; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.
@@ -276,3 +276,22 @@ fixture executable, later fixtures remain unchanged. Different build inputs do
 not acquire authority to reuse these bytes. Existing subprocess coverage remains
 required. The original failed CI outcome, T044 and live T018 remain unresolved
 until their respective evidence is established.
+
+## Operator-budget continuation — 2026-11-06
+
+The separately authorized offline continuation makes the surrounding cleanup
+procedure concrete under existing FR-013/SC-009, FR-005/009 and US1/US3. It adds
+no product requirement or live-operation authority. Every reviewed step must fit
+its full cap, local stopping allowance and downstream work before the same
+original absolute cutoff; pending responses supply no time. A refusal, timeout
+or missing observation remains incomplete/unknown, never proof of cleanup.
+
+Acceptance: optional bounded operator execution preserves the existing unbounded
+exact-exec behavior, private logs and one-command scope. It refuses incomplete or
+exhausted budgets before launch, limits admitted work and preserves cancellation
+and process cleanup without retry. The concrete procedure accounts separately
+for product removal, SSH/owned absence, outside rejection, client preservation,
+secret/capture handling, result submission and transport verification. Selected
+caps are stopping allocations, not measured live-duration guarantees. Local
+regressions and composed inert fixtures must distinguish tested mechanisms from
+unavailable real SSH/Karing/remote-state proof. T018 remains open.
