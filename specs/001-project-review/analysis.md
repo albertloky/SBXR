@@ -90,3 +90,17 @@ covered by T029/T030; high missing live validation remains T018. Completed,
 incomplete and Unknown safety_cleanup facts must all remain representable. A
 failure diagnostic is not a new cleanup gate. The unratified local constitution
 adds no authority; existing AGENTS/ADRs and user authorization govern the work.
+
+## Approved build 213 reservation mapping — 2026-11-06
+
+FR-012/SC-008 map to US3 and T033–T038. FR-005/007/008/009 and SC-002/004/005
+continue to require regression evidence, preservation, bounded authority and
+accurate reporting. The exact Owner decision resolves the q213 disposition choice
+only; it does not authorize remote release mutation or another live attempt.
+The existing schema and prior ten records remain unchanged. T032 is closed from
+its exact-source push/CI receipt; T035/T036 have implementation/documentation
+evidence; T037 now has full local validation and inventory replay. T038 awaits
+exact-source push/CI and T018 remains open.
+The subsequent read-only Analyze/Converge execution checked 12 FRs, eight SCs,
+three stories and 38 tasks: no unmapped coverage or new authority blocker; one
+stale status summary was corrected. The live criterion remains unverified. No checklist markers or constitution rules changed.

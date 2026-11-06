@@ -131,3 +131,29 @@ Preserve the q213 raw capture and candidate unchanged. No dependencies, schemas,
 product code, workflow gates, trust settings, windows or project rules change.
 Constitution check: PASS against existing AGENTS/ADRs; its local unratified
 consolidation remains unchanged. T018's live criterion stays unsatisfied.
+
+## Approved build 213 reservation continuation — 2026-11-06
+
+Extend the existing model and retained-candidate contract by one exact member;
+no schema, dependency, product Rust, workflow permission or signing gate changes.
+Append the approved q213 record in cmd/sbxr-release/candidate_reservations.go and
+change the strict policy and .github/scripts/check-candidate-reservations.sh
+collector counts from ten to eleven. Preserve the preceding ten records and
+historical replay. Shared current-candidate fixtures must use an unreserved
+identity (prospectively v3.1.140/214); isolated collision tests must exercise only
+the intended tag, sequence or release-ID collision. This fixture value allocates
+no real candidate and does not override fresh global admission.
+
+Prove the missing-record boundary before implementation, then run exact-record,
+omission/relabel, collision, changed/missing/duplicate observation, present/unknown
+ref and sequence checks through the actual policy/collector callers. Reuse the
+existing focused, release-tool and root integration checks, vet and final-source
+CI. Recheck retained metadata/bytes/signature read-only; replay all eleven records
+and twenty-two explicit absent refs. Stop on drift or unavailable authority.
+
+Update ADR-0032, the dated indexed reservation report and current count references;
+keep historical q212 results scoped to their original ten-record policy. Spec,
+research, contract, data model and tasks below map this continuation to FR-012,
+SC-008 and US3. The requirements checklist and unratified local constitution are
+unchanged. Existing AGENTS/ADRs plus the exact Owner approval supply authority;
+no new policy gates or operational permissions are inferred. T018 stays open.

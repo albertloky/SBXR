@@ -347,3 +347,31 @@ inventory-dispatch scope changes. The approval covers the bounded source/tests/
 documentation change, review, commit/push and CI, not a live attempt, VPS change,
 cleanup or publication. Prospective v3.1.139/213 requires fresh global admission,
 final-source CI and a separately authorized complete qualification.
+
+
+## Retained q213 identity — 2026-11-06
+
+The Owner explicitly approved retaining failed v3.1.139/213 through the existing
+fixed reservation mechanism, including bounded code, tests, documentation,
+review, commit/push and CI. It remains signed-unqualified: draft 435196915,
+source `f067ca24e9bb0d2bc3641ad6c96d44b41dcdb6f3`, run 42023983739 attempt 1,
+and signed manifest
+`e0ce70ea6c28537a3f8e33b1f29a6af75f0037ff87b572eb5e0cd201ffa3bc4c`.
+The index digest is
+`be311736e8d780cc382772461570a2af540d593b21e9956707cee06885a49fcf`;
+the compiled record binds all four asset IDs, sizes and digests. See the
+[dated preservation report](../acceptance/reports/q213-retained-reservation-2026-11-06.md).
+
+New facts bind all eleven exact reservations, with q203–212 unchanged. Read-only
+checks require matching drafts/assets and explicit absence of all release/burn
+refs. Missing, unavailable, duplicated or changed observations refuse. Build
+213's tag, sequence and release ID cannot be reused or promoted through supported
+workflows; the current-candidate allowance cannot exempt it. Historical signed
+facts retain their original meaning. The failed qualification and intentional
+failure-disposition stop remain failed; administrative cleanup did not qualify it.
+
+No original draft/body/asset/tag/signature or failed result changes. No finalizer
+rerun, burn, deletion, signing-authority or workflow-permission change follows.
+This decision does not authorize a new live attempt, VPS/client/security change,
+cleanup execution or publication. Prospective v3.1.140/214 still requires fresh
+global admission, final-source CI and separately approved complete qualification.

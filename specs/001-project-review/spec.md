@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Product/fixture repairs and prior CI verified; build 213 details incomplete; operator correction regression-tested; final-source CI pending; live criterion unverified
+**Status**: Prior repairs and CI verified; approved q213 retention locally validated; reservation final-source CI pending; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.
@@ -176,3 +176,32 @@ US3 acceptance: given the exact approved failed identity, the supported workflow
 can retain it and evaluate a fresh candidate above all published, burned and
 reserved sequences. Given any changed identity, omitted reservation or attempted
 reuse, it refuses. A reservation never makes the failed candidate qualified.
+
+## Approved continuation: retain failed build 213 (2026-11-06)
+
+The Owner separately approved exactly one further signed-unqualified reservation,
+including its bounded code, tests, documentation, review, commit/push and CI.
+This continuation preserves the previous build-212 decision and all original
+product and authority limits; the original read-only proposal is evidence, not
+itself the approval.
+
+- **FR-012**: Retention MUST additionally bind failed v3.1.139/213, draft
+  435196915, source f067ca24e9bb0d2bc3641ad6c96d44b41dcdb6f3, run
+  42023983739 attempt 1, as signed-unqualified, with its exact signed manifest,
+  release index and four asset identities. The previous ten reservations MUST
+  remain unchanged. The tag, sequence and release ID MUST be unavailable for
+  reuse or promotion; missing, changed, duplicated or unavailable observations,
+  or present release/burn refs, MUST refuse. Historical signed evidence MUST
+  retain its original meaning.
+- **SC-008**: Read-only evidence matches the approved identity; relevant checks
+  prove the exact eleven-reservation set, preserved refusals and fresh candidate
+  admission above all observed release/burn/reservation sequences. Final-source
+  checks and CI pass. The original failed draft, body, four assets, signature and
+  outcome remain preserved, without a remote release mutation or new live attempt.
+
+US3 acceptance: given all eleven exact retained identities and explicitly absent
+release/burn refs, the supported tooling can evaluate a fresh candidate. Given
+omission, relabelling or reuse of build 213, it refuses. Retention supplies neither
+qualification evidence nor permission to alter or finalize the failed release.
+No new signing, finalizer rerun, burn, deletion, VPS/client/security change,
+cleanup execution or publication is authorized by this continuation.

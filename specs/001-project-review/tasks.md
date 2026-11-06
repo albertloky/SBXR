@@ -127,7 +127,7 @@ no product requirement, authentication rule or qualification budget changes.
 - [x] T029 [US3] Add a failing real-subprocess regression at the terminal failure publication boundary in release_collector_test.go, then add the fixed secret-safe diagnostic in .github/scripts/v3-recurring-evidence.sh without gating honest incomplete-cleanup reports.
 - [x] T030 [P] [US1] Clarify existing cleanup/submission ordering in docs/acceptance/http-subscription-live.md and .github/scripts/README.md; add an indexed dated q213 report and refresh docs/rust-acceptance.md.
 - [x] T031 [US3] Verify focused/full relevant collector and menu regressions, review the diff independently, and record results and remaining qualification prerequisites in review.md and the dated report.
-- [ ] T032 [US3] Commit/push the reviewed continuation on main and verify exact-source CI; preserve build 213 draft/assets/signature and failed outcome.
+- [x] T032 [US3] Commit/push the reviewed continuation on main and verify exact-source CI; preserve build 213 draft/assets/signature and failed outcome.
 
 Dependency: T028 -> T029 -> T031 -> T032; T030 can run after T028 and is
 finalized with T031. T018 remains open: the interrupted details capture cannot
@@ -138,3 +138,27 @@ Prior CI closeout, freshly read 2026-11-06: f067ca2 reached GitHub main and
 Verify run 42009536182 passed all four native/assembly jobs. T024 and T027
 are therefore complete. The unchanged a3d01a9 retry (42003224687, attempt 2)
 ended cancelled; it does not validate the later fixture repair.
+
+Phase 9 closeout: bf72f30064b14aa3128ef69d409a2e6abdd0c88b reached main;
+Verify 42189134454 passed all four jobs, recorded in
+.scratch/acceptance/q3f/push-ci-completed.json. This completes T032 and supplies
+no live qualification evidence.
+
+## Phase 10: US3 — Approved build 213 preservation
+
+Independent check: the exact eleventh reservation is enforced while all ten
+prior records, historical semantics and refusal boundaries remain intact.
+
+- [x] T033 [US3] Record the separately approved FR-012/SC-008 identity and bounded design in spec.md, plan.md, research.md, data-model.md and contracts/retained-candidate.md using .scratch/acceptance/q213disp/ evidence; preserve previous decisions.
+- [x] T034 [US3] Add exact q213 and omission/relabel regressions in cmd/sbxr-release/candidate_reservation_q213_test.go and demonstrate failure against the ten-record policy; retain .scratch/acceptance/q13t/red-pinned.log.
+- [x] T035 [US3] Append only the exact record and eleven-record validation in cmd/sbxr-release/candidate_reservations.go and .github/scripts/check-candidate-reservations.sh; preserve ten prior records, historical replay and coherent current-candidate/collision fixtures in adjacent tests.
+- [x] T036 [P] [US3] Record the approved disposition in docs/adr/0032-qualified-publication-retry.md and an indexed dated report under docs/acceptance/reports/; reconcile current counts and specs/001-project-review/review.md without rewriting historical outcomes.
+- [x] T037 [US3] Validate exact pins, focused/full release-tool and root integration checks, vet, all eleven current observations and twenty-two absent refs, plus independent final-diff review; record evidence and limits in the dated reservation report.
+- [ ] T038 [US3] Commit/push the reviewed reservation on main and verify exact-source CI; record source/run/results in specs/001-project-review/review.md and the dated reservation report.
+
+Dependency: T033 -> T034 -> T035 -> T037 -> T038. T036 can proceed independently
+of production/test changes after T033, then incorporates T037 evidence before
+T038. The smallest complete increment is this single approved reservation.
+T035–T037 are complete. T038 remains pending until exact-source push/CI is established. T018 remains open.
+No live attempt, signing, failed-finalizer replay, remote release mutation, cleanup
+execution or publication is part of Phase 10.

@@ -105,3 +105,32 @@ left partial output and no result. That limits evidence. It does not justify
 replaying the action or treating missing records as a timeout. Future preparation
 must verify capture and cleanup access with offline interruption checks before
 asking for another live attempt; this continuation adds no detached execution.
+
+## Approved build 213 preservation — 2026-11-06
+
+Decision: append the exact approved q213 signed-unqualified identity to the fixed
+reservation set, preserving all ten earlier members and the original failed
+candidate. The ten-record policy cannot admit the unresolved q213 draft, and
+that draft alone does not advance published/burned/reserved sequence authority.
+The new exact-record and next-candidate regressions failed against that policy
+(.scratch/acceptance/q13t/red-pinned.log); implementation and final verification
+are separate tasks.
+
+The 09:58:41 UTC read-only review in .scratch/acceptance/q213disp/ matched all four
+newly downloaded asset streams to recorded metadata and the signed manifest.
+Current repository attestation verification bound the exact source, workflow,
+main ref, hosted runner and run/attempt. All five signed-artifact files matched
+the original retained bytes; release and burn refs were explicitly absent.
+A later 10:59:21 UTC metadata refresh (.scratch/acceptance/q213refresh/summary.json)
+matched all eleven drafts and twenty-two absent refs. That refresh did not
+independently redownload assets, reverify signatures or inspect global history.
+These are point-in-time observations, not a remote lock or current host readiness.
+
+The original proposal's unadopted status describes its creation; the subsequent
+explicit Owner approval authorizes only the bounded reservation implementation.
+Alternatives excluded by that decision: deletion, burn signing, finalizer replay,
+reusing q213, weakening the allow-list or treating retention as qualification.
+The pre-live Pending failure-state file remains historical signed input; later
+failure facts and administrative cleanup remain separate. Current draft body
+matches construction text, but unchanged body since creation is not independently
+proved. No technical ambiguity requires a new requirement or policy decision.
