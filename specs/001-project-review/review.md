@@ -269,3 +269,87 @@ open pending push and successful final-source CI. Attempt 2 of run 42003224687 o
 unchanged a3d01a9 was running at this checkpoint and cannot validate the repaired
 source. T018 remains open: this offline fixture work adds no live timing, client,
 host-readiness or publication evidence.
+
+
+## Build 213 continuation and prior CI closeout — 2026-11-06
+
+Fresh GitHub reads confirm main f067ca24e9bb0d2bc3641ad6c96d44b41dcdb6f3 and
+[Verify 42009536182](https://github.com/albertloky/SBXR/actions/runs/42009536182)
+completed successfully in all four amd64/arm64 native and assembly jobs. The
+unchanged a3d01a9 retry (42003224687 attempt 2) ended cancelled. This closes T024
+and T027; earlier pending statuses remain dated observations, not current blockers.
+
+The [q213 report](../../docs/acceptance/reports/q213-interrupted-details-cleanup-2026-11-06.md)
+records the following findings from preserved evidence and current sources:
+
+- F006 — confirmed operator sequencing error: terminal failure was submitted
+  before supported cleanup. Collector exit triggered transport/handoff teardown;
+  public authentication then refused before the removal menu. Strict admission
+  is correct, and no defect in removal effects was demonstrated. T029/T030 clarify
+  this boundary without delaying teardown or suppressing truthful failed cleanup.
+- F007 — unverified behavior: details output and continuation input were observed,
+  but the Mac capture ends during return-menu review with no final result. A pass
+  or new 90-second timeout cannot be inferred. Freshness, budgets and product code
+  remain unchanged; T018 stays open.
+- F008 — evidence limit: the private SSH caller writes completion only locally;
+  connection interruption left a partial capture. The canonical operator launcher
+  preserves foreground execution, not remote durable completion. Missing evidence
+  is not permission to rerun the command or manufacture an outcome.
+- F009 — completed separately authorized recovery: exact administrative cleanup
+  was independently verified within the new November 6 window. It does not supply
+  supported-product removal evidence. No further cleanup is pending in this work.
+
+The installed Analyze and Implement instructions and prerequisite scripts were
+applied to the existing feature, without reinitializing Spec Kit or inventing a
+new feature. Existing spec requirements cover the continuation; plan/research/tasks
+record the bounded correction. The requirements checklist remains 16/16, with no
+marker changes, and no extension hooks are configured. The local constitution
+remains unratified and unchanged. Independent read-only reviewers traced both the
+details and removal boundaries. Final implementation/check results follow below.
+
+### Current release prerequisites
+
+1. Decide the specific handling of build 213's unresolved signed draft; its exact
+   assets, signature and failed outcome remain preserved. Build 212 is already
+   reserved. No q213 reservation, burn, deletion or failed-release publication has
+   been authorized by this offline continuation.
+2. Complete final-source checks and CI, then prepare one exact future candidate
+   against fresh release history/reservations. Validate operator interruption and
+   cleanup ordering offline and bind reviewed callers; no candidate is fixed here.
+3. Obtain specific approval and a fresh attended window for the candidate's
+   signing/live effects and cleanup, with current host/client readiness. The old
+   windows are expired; historical cleanup does not prove future readiness.
+4. Prove the full unchanged 90-second details cycle and all five HTTP journeys,
+   including real outside traffic, actual Karing and supported removal/cleanup.
+   An incomplete attempt remains unqualified even when administrative recovery
+   succeeds. Optional VMess and native finisher/crash evidence remain separate.
+5. Only an exact candidate with successful qualification and cleanup becomes
+   eligible for separately approved stable publication.
+
+
+### Phase 9 verification closeout
+
+The original submission helper failed the three new warning-order assertions.
+The first diagnostic then failed the closed-stderr regression; making that fixed
+write best-effort corrected it. Final focused collector checks passed four top-level
+tests and 20 subcases, covering completed/unresolved cleanup, exact byte
+preservation, warning-before-publication on stderr, successful submissions without
+the warning, closed stderr and existing request/transfer/refusal cases. The fixture
+executes actual Bash/child publication commands on local files and substitutes the
+SSH transport; this is not a real remote collector/gateway test.
+
+The complete root Go integration package passed in 99.522 seconds on cached
+Go 1.26.6. Go vet passed after allowing normal retrieval of existing pinned module
+metadata: the initial offline-only vet lacked one transitive metadata entry and
+ran no useful vet check. Module integrity verification passed; go.mod/go.sum are
+unchanged. The existing Python menu-driver suite passed 67 tests (four platform
+skips) in 13.667 seconds. gofmt, Bash syntax, diff whitespace and local navigation
+checks passed. No product Rust changed; the prior source's native checks remain
+applicable, while final-source CI for this continuation is T032.
+
+Independent review found the stderr issue above, then no remaining material
+finding after its correction. Raw red/green evidence is under
+.scratch/acceptance/q213fix-tests/; broad checks are under .scratch/acceptance/q3f/.
+Temporary fixtures were removed. No live host/network changes, extra qualification,
+candidate disposition or publication occurred. The correction is operational
+warning/guidance, not a product authentication or live-performance repair.

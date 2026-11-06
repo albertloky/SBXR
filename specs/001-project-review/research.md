@@ -70,3 +70,38 @@ Alternative rejected: delete/finalize/burn the failed draft, broaden an allow-li
 reuse its sequence, or interpret old live approval as a new attempt. The approved
 preservation mechanism requires none of those actions. A new final-source commit
 and CI remain necessary before a separately approved candidate can be prepared.
+
+
+## Build 213: interrupted details and premature terminal failure
+
+Candidate v3.1.139/213 used f067ca24e9bb0d2bc3641ad6c96d44b41dcdb6f3,
+run 42023983739. Current and frozen menu-driver bytes match. The initial Owner
+review took about 37.738 seconds and details writing 19.547 seconds. Details and
+continuation input were observed at about 60.092 seconds, followed by a fresh
+return-menu review. Capture ends at about 79.98 seconds with about 10.02 seconds
+of the unchanged 90-second budget remaining. The local result file is absent.
+There is no captured timeout/refusal, complete return frame or process result;
+neither a pass nor a reproduced timeout can be inferred. Keep fresh-frame and
+cancellation behavior; no timing increase or cached authority is justified.
+
+The terminal failure submission returned success at 13:19:59 UTC on November 5.
+The collector accepts that failure and exits; its EXIT path writes STOP, then
+the candidate workflow's EXIT trap removes the transport and protected handoff.
+Removal started at 13:20:20 and exited before selection with empty stdout. Later
+read-only status diagnosis ended in authentication, and inventory proved the
+handoff/trust/transport absent. With full handoff absence, public entry selects
+stable authentication, which cannot authenticate this unqualified draft candidate.
+No removal effect or defective removal transaction was observed.
+
+Decision: clarify the terminal boundary in current guidance and the submit helper,
+with a fixed message before publication. Do not gate failure on safety_cleanup:
+not-started, incomplete and Unknown are necessary truthful states when ownership,
+SSH, authentication or cleanup cannot be established; completed is a supplied
+observation, not proof of current absence. Do not preserve/reconstruct temporary
+trust after failure, bypass authentication or introduce a collector handshake.
+
+The private operator caller wrote final completion only on the Mac; disconnect
+left partial output and no result. That limits evidence. It does not justify
+replaying the action or treating missing records as a timeout. Future preparation
+must verify capture and cleanup access with offline interruption checks before
+asking for another live attempt; this continuation adds no detached execution.

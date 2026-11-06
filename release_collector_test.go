@@ -208,7 +208,7 @@ func TestRecurringCollectorSubmitsExactTypedFailureWithoutDiscardingStdin(t *tes
 	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	facts := []byte(`{"failure":{"actual_result":"unexpected-failure","scenario_id":"baseline-postcommit"},"qualification_manifest":{"schema":"sbxr-qualification-manifest-v3","source_state":"v3-recurring","v3_attempt":{"attempt_id":"attempt-1"}},"schema":"sbxr-release-qualification-facts-v1","stage":"v3-scenario-failure"}`)
+	facts := []byte(`{"failure":{"actual_result":"unexpected-failure","scenario_id":"baseline-postcommit","vps_id":"private-fixture-do-not-echo"},"qualification_manifest":{"schema":"sbxr-qualification-manifest-v3","source_state":"v3-recurring","v3_attempt":{"attempt_id":"attempt-1"}},"safety_cleanup":{"host_state":"Unknown","status":"not-started"},"schema":"sbxr-release-qualification-facts-v1","stage":"v3-scenario-failure"}`)
 	factsPath := filepath.Join(directory, "failure-facts.json")
 	if err := os.WriteFile(factsPath, facts, 0o600); err != nil {
 		t.Fatal(err)
@@ -236,6 +236,7 @@ remote_command="${remote_command//\/root\/sbxr-qualification-evidence/$FAKE_REMO
 if test "$discard_stdin" = true; then
   exec bash -c "$remote_command" </dev/null
 fi
+printf '%s\n' SBXR_TEST_PUBLICATION_STARTED >&2 || true
 exec bash -c "$remote_command"
 `
 	if err := os.WriteFile(filepath.Join(binDirectory, "ssh"), []byte(fakeSSH), 0o700); err != nil {
@@ -265,10 +266,19 @@ esac
 	if err := os.WriteFile(knownHostsPath, []byte("test host key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	var submitStdout []byte
 	runSubmit := func(payloadMode string) ([]byte, error) {
-		command := exec.Command("bash", ".github/scripts/v3-recurring-evidence.sh", "submit", "example.test", keyPath, knownHostsPath, manifestPath, factsPath)
+		args := []string{".github/scripts/v3-recurring-evidence.sh", "submit", "example.test", keyPath, knownHostsPath, manifestPath, factsPath}
+		command := exec.Command("bash", args...)
+		if payloadMode == "closed-stderr" {
+			command = exec.Command("bash", append([]string{"-c", `exec 2>&-; exec bash "$@"`, "submit-closed-stderr"}, args...)...)
+		}
 		command.Env = append(os.Environ(), "PATH="+binDirectory+":"+os.Getenv("PATH"), "FAKE_REMOTE_DIRECTORY="+remoteDirectory, "FAKE_PAYLOAD_MODE="+payloadMode)
-		return command.CombinedOutput()
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		err := command.Run()
+		submitStdout = append([]byte(nil), stdout.Bytes()...)
+		return append(stdout.Bytes(), stderr.Bytes()...), err
 	}
 	if output, err := runSubmit(""); err != nil {
 		t.Fatalf("submit typed failure: %v\n%s", err, output)
@@ -345,4 +355,82 @@ esac
 			}
 		})
 	}
+	// Exercise the actual submit subprocess and exact remote publication command.
+	// The fixed warning must precede publication, never gate honest unresolved
+	// cleanup, change the private facts, or appear on a successful scenario.
+	const warning = "Accepted terminal failure ends collection and removes candidate authentication transport. Complete authorized safe product cleanup first. If cleanup is blocked, report incomplete cleanup honestly."
+	const publication = "SBXR_TEST_PUBLICATION_STARTED"
+	successFacts := []byte(`{"detailed_evidence":{"scenarios":[{"scenario_id":"baseline-postcommit"}]},"qualification_manifest":{"schema":"sbxr-qualification-manifest-v3","source_state":"v3-recurring","v3_attempt":{"attempt_id":"attempt-1"}},"schema":"sbxr-release-qualification-facts-v1","stage":"v3-scenario-result"}`)
+	for _, test := range []struct {
+		name  string
+		facts []byte
+		warn  bool
+	}{
+		{name: "terminal failure cleanup not started", facts: facts, warn: true},
+		{name: "terminal failure cleanup incomplete", facts: bytes.Replace(facts, []byte(`"status":"not-started"`), []byte(`"status":"incomplete"`), 1), warn: true},
+		{name: "terminal failure cleanup completed", facts: bytes.Replace(bytes.Replace(facts, []byte(`"status":"not-started"`), []byte(`"status":"completed"`), 1), []byte(`"host_state":"Unknown"`), []byte(`"host_state":"Not installed"`), 1), warn: true},
+		{name: "successful scenario", facts: successFacts},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(remoteDirectory, "request.json"), []byte(request), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(factsPath, test.facts, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := runSubmit("")
+			if err != nil {
+				t.Fatalf("submit facts: %v\n%s", err, output)
+			}
+			published, err := os.ReadFile(resultPath)
+			if err != nil || !bytes.Equal(published, test.facts) {
+				t.Fatalf("published facts changed: %v", err)
+			}
+			if err := os.Remove(resultPath); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(submitStdout, []byte("Accepted terminal failure")) {
+				t.Fatal("terminal warning was written to stdout instead of stderr")
+			}
+			position := bytes.Index(output, []byte(publication))
+			if position < 0 {
+				t.Fatalf("publication boundary not observed: %s", output)
+			}
+			if test.warn {
+				at := bytes.Index(output, []byte(warning))
+				if at < 0 || at >= position || bytes.Count(output, []byte(warning)) != 1 {
+					t.Fatalf("terminal warning missing or not before publication: %s", output)
+				}
+			} else if bytes.Contains(output, []byte("Accepted terminal failure")) {
+				t.Fatalf("successful scenario warned about failure: %s", output)
+			}
+			for _, private := range [][]byte{test.facts, []byte("private-fixture-do-not-echo"), []byte(keyPath), []byte(factsPath)} {
+				if bytes.Contains(output, private) {
+					t.Fatal("submission output exposed private facts or paths")
+				}
+			}
+		})
+	}
+	// Diagnostic output is best-effort: a closed sink must not prevent honest
+	// failure publication, including its unchanged unresolved-cleanup facts.
+	t.Run("closed stderr preserves truthful failure", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(remoteDirectory, "request.json"), []byte(request), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(factsPath, facts, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		output, err := runSubmit("closed-stderr")
+		if err != nil {
+			t.Fatalf("closed stderr blocked truthful failure publication: %v: %s", err, output)
+		}
+		published, err := os.ReadFile(resultPath)
+		if err != nil || !bytes.Equal(published, facts) {
+			t.Fatalf("closed stderr changed failure facts: %v", err)
+		}
+		if err := os.Remove(resultPath); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 }

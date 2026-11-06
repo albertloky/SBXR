@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Product repairs verified; approved reservation local checks passed; final-source CI tracked separately; live criterion unverified
+**Status**: Product/fixture repairs and prior CI verified; build 213 details incomplete; operator correction regression-tested; final-source CI pending; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.

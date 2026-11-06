@@ -105,3 +105,29 @@ diff, and obtain final-source CI. A retry of unchanged a3d01a9 is diagnostic evi
 only; it cannot validate changed fixtures. Record evidence and limits in the dated
 cleanup-fixture report. T024 and T027 remain open pending final-source CI, and T018
 remains independent and open. The local constitution remains unratified/unchanged.
+
+
+## Build 213 failure-boundary continuation (2026-11-06)
+
+The preserved run establishes an operator sequencing error: terminal failure
+submission ended the collector and its caller tore down candidate authentication
+before supported removal was attempted. Public entry correctly requires real
+authentication before showing the menu. Do not change that rule or keep temporary
+transport alive beyond its existing deadline. Details output was observed, but
+return-menu completion and the final driver result are missing after disconnect.
+No additional product defect is established by that truncated observation.
+
+Add a fixed secret-safe stderr diagnostic immediately before publishing a typed
+failure in the existing submit_result helper. Document safe/authorized cleanup
+before terminal submission while the original authentication/window is valid;
+when cleanup is blocked, preserve and report its actual incomplete/unknown state.
+Do not require a claimed cleanup success, introduce a new handshake or suppress
+failure reporting. Success submissions remain unchanged. Test the actual Bash
+submission and publication subprocess boundary with local files, including both
+completed and unresolved cleanup facts and absence of the diagnostic for success.
+
+Update the dated outcome, Spec Kit task/CI records and current evidence pointer.
+Preserve the q213 raw capture and candidate unchanged. No dependencies, schemas,
+product code, workflow gates, trust settings, windows or project rules change.
+Constitution check: PASS against existing AGENTS/ADRs; its local unratified
+consolidation remains unchanged. T018's live criterion stays unsatisfied.

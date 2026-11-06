@@ -17,6 +17,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Direct Rust diagnostics
 
+- [q213 interrupted details and administrative cleanup — 2026-11-06](q213-interrupted-details-cleanup-2026-11-06.md)
+  — details completion uncertain; premature terminal submission removed candidate authentication before removal; separately approved cleanup verified.
+
 - [q212 details timeout and verified scoped cleanup — 2026-11-05](q212-details-timeout-2026-11-05.md)
   — install/setup passed, details deadline failed, later journeys not reached; draft preserved.
 

@@ -323,6 +323,33 @@ has an uncertain outcome: inspect its state before further action. Do not retry
 mutations to replace the original failure. Keep the accepted scenario receipts;
 only the complete five-journey result can qualify the candidate.
 
+### Terminal failure ends candidate authentication
+
+Submitting `v3-scenario-failure` through `v3-recurring-evidence.sh submit` is a
+terminal operation, not just saving a report. The collector accepts the failed
+outcome, writes STOP, and exits. The candidate workflow's EXIT trap then removes
+the qualification gateway, protected handoff, temporary trust and routing.
+A signed draft candidate is not a Qualified Stable Release: after that teardown,
+its public menu cannot authenticate through the stable route, including for
+Complete removal. Unsetting recorder variables cannot restore authentication.
+
+On an unsuccessful or disconnected journey, stop test mutations and preserve the
+actual observations first. Inspect an uncertain action's state without replaying
+it. If ownership, access, existing authorization and the remaining original
+window permit, finish reviewed supported product removal and verify owned absence
+while candidate authentication is still available; preserve client settings and
+perform the authorized client/secret cleanup. Then submit the original failure
+with its actual cleanup status. Successful cleanup never converts the failed
+journey into a pass, and failure timestamps must not be replaced with cleanup times.
+
+If cleanup is blocked or its outcome is uncertain, report that truthfully through
+the existing failure path and identify the remaining resources. Do not claim
+`completed`, delay beyond the existing deadlines, recreate transport, bypass
+admission or repeat a mutation to obtain a clean report. Terminal failure and
+workflow cleanup do not themselves remove the product installation; any later
+administrative recovery needs its applicable specific authorization. The helper's
+fixed warning explains this boundary; it is not a new permission or cleanup gate.
+
 ## Future native settings comparison
 
 The Owner approved this prospective correction on 2026-10-19. New preparations

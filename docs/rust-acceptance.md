@@ -14,11 +14,13 @@ establish a live installation or stable release.
 
 ## Latest dated qualification closeout
 
-[q212 details timeout and scoped cleanup, 2026-11-05](acceptance/reports/q212-details-timeout-2026-11-05.md)
-records successful packaged installation/Standard setup, the failed initial details
-cycle and verified scoped cleanup. Outside proxy, subscription, credential and
-Karing journeys were not reached. These bounded observations do not qualify the
-candidate or remove the remaining checks in the finite matrix below.
+[q213 interrupted details and administrative cleanup, 2026-11-06](acceptance/reports/q213-interrupted-details-cleanup-2026-11-06.md)
+records successful packaged installation/Standard setup, incomplete details-cycle
+evidence after a connection interruption, and supported removal refusing before
+selection after terminal submission removed candidate authentication. Separately
+approved administrative cleanup was verified; it is not a passing product-removal
+journey. Outside traffic and later HTTP/Karing journeys remain unqualified. These
+observations do not qualify the candidate or remove the matrix's remaining checks.
 
 ## Scope reconciliation
 

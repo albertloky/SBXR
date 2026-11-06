@@ -93,7 +93,7 @@ missing observations cannot satisfy it.
 - [x] T021 [US3] Add the tenth exact record, strict collector count and coherent current-candidate/refusal fixtures in cmd/sbxr-release/candidate_reservations.go, adjacent tests and .github/scripts/check-candidate-reservations.sh.
 - [x] T022 [P] [US3] Record the approved preservation in docs/adr/0032-qualified-publication-retry.md, docs/acceptance/reports/q212-retained-reservation-2026-11-05.md and its report index; reconcile review.md.
 - [x] T023 [US3] Validate focused/full release-tool and root integration checks, vet, full current reservation observations and the final diff; record results in the dated reservation report.
-- [ ] T024 [US3] Commit/push the reviewed preservation on main and verify exact-source CI; retain results under .scratch/acceptance/q212res/.
+- [x] T024 [US3] Commit/push the reviewed preservation on main and verify exact-source CI; retain results under .scratch/acceptance/q212res/.
 
 Dependency: T019 -> T020 -> T021 -> T023 -> T024. T022 can run independently after
 T019 and is finalized with T023 results. The invariant is exact retained identity
@@ -109,9 +109,32 @@ separate from validation of the repaired fixtures.
 
 - [x] T025 [US3] Diagnose the failed cleanup assertion and affected callers; record the controlled real-signal old/new idle comparison and original-CI uncertainty from .scratch/acceptance/cf1/, cf2/ and cf3/ in review.md and docs/acceptance/reports/cleanup-signal-fixture-2026-11-05.md.
 - [x] T026 [US3] Repair the five signal-cleanup idle fixtures and add spawn-relay failure context in .github/scripts/test_v3_menu_session.py; preserve production behavior, assertions and budgets, then validate the focused/full Python tests, relevant Go race wrapper and final diff.
-- [ ] T027 [US3] Commit/push the reviewed bounded repair on main and verify exact-source CI; retain the original failure and unchanged-source retry outcome, and record final validation in the dated cleanup-fixture report.
+- [x] T027 [US3] Commit/push the reviewed bounded repair on main and verify exact-source CI; retain the original failure and unchanged-source retry outcome, and record final validation in the dated cleanup-fixture report.
 
 Dependency: T025 -> T026 -> T027. Successful final-source CI is also required to
 close T024; a local pass or unchanged-source retry is insufficient for the repaired
 source. T018 remains unchecked. This continuation grants no live attempt, cleanup
 execution, release publication or security-setting authority.
+
+
+## Phase 9: US1/US3 — Build 213 failure-boundary diagnosis
+
+This offline continuation follows the separately approved and verified build-213
+administrative cleanup. It serves FR-005/006/007/008/009 and SC-002/004/005;
+no product requirement, authentication rule or qualification budget changes.
+
+- [x] T028 [US1] Trace the preserved details/removal evidence against current driver, public admission, collector and workflow; distinguish confirmed sequencing from uncertain details completion in research.md.
+- [x] T029 [US3] Add a failing real-subprocess regression at the terminal failure publication boundary in release_collector_test.go, then add the fixed secret-safe diagnostic in .github/scripts/v3-recurring-evidence.sh without gating honest incomplete-cleanup reports.
+- [x] T030 [P] [US1] Clarify existing cleanup/submission ordering in docs/acceptance/http-subscription-live.md and .github/scripts/README.md; add an indexed dated q213 report and refresh docs/rust-acceptance.md.
+- [x] T031 [US3] Verify focused/full relevant collector and menu regressions, review the diff independently, and record results and remaining qualification prerequisites in review.md and the dated report.
+- [ ] T032 [US3] Commit/push the reviewed continuation on main and verify exact-source CI; preserve build 213 draft/assets/signature and failed outcome.
+
+Dependency: T028 -> T029 -> T031 -> T032; T030 can run after T028 and is
+finalized with T031. T018 remains open: the interrupted details capture cannot
+establish either complete 90-second success or an observed timeout. No live
+attempt, administrative cleanup replay or release disposition is part of Phase 9.
+
+Prior CI closeout, freshly read 2026-11-06: f067ca2 reached GitHub main and
+Verify run 42009536182 passed all four native/assembly jobs. T024 and T027
+are therefore complete. The unchanged a3d01a9 retry (42003224687, attempt 2)
+ended cancelled; it does not validate the later fixture repair.

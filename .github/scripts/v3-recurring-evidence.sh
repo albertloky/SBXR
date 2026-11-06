@@ -45,6 +45,11 @@ submit_result() {
   test "$submit_size" -gt 0
   test "$submit_size" -le 16777216
   submit_digest="$(sha256sum "$submit_facts" | cut -d' ' -f1)"
+  # Accepted terminal failure exits the collector and triggers transport teardown.
+  # Keep honest incomplete cleanup reportable; this notice adds no approval gate.
+  if jq -e '.stage == "v3-scenario-failure"' "$submit_facts" >/dev/null; then
+    printf '%s\n' 'Accepted terminal failure ends collection and removes candidate authentication transport. Complete authorized safe product cleanup first. If cleanup is blocked, report incomplete cleanup honestly.' >&2 || true
+  fi
   "${submit_remote[@]}" "root@$submit_host" "set -eu; directory=/root/sbxr-qualification-evidence; request=\"\$directory/request.json\"; temporary=\"\$directory/result.tmp\"; result=\"\$directory/result.json\"; test \"\$(sha256sum \"\$request\" | cut -d' ' -f1)\" = '$submit_request_digest'; test ! -e \"\$temporary\"; test ! -L \"\$temporary\"; test ! -e \"\$result\"; test ! -L \"\$result\"; umask 077; cat > \"\$temporary\"; test -f \"\$temporary\"; test ! -L \"\$temporary\"; test -O \"\$temporary\"; test \"\$(find \"\$temporary\" -prune -perm 0600 -links 1 -print)\" = \"\$temporary\"; test \"\$(wc -c < \"\$temporary\")\" -eq '$submit_size'; test \"\$(sha256sum \"\$temporary\" | cut -d' ' -f1)\" = '$submit_digest'; test \"\$(sha256sum \"\$request\" | cut -d' ' -f1)\" = '$submit_request_digest'; mv -T \"\$temporary\" \"\$result\"" < "$submit_facts"
 }
 

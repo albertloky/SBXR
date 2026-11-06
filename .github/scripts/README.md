@@ -48,6 +48,14 @@ relax their source, payload, signature or publication requirements.
 | Candidate failure retention | `candidate-evidence.py`, `test_release_safety.py`; bounded screened proposals, read-only failure handling and explicit action-time decisions under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Retained candidate reservation | `check-candidate-reservations.sh`; read-only exact observations for the eight retained drafts and each tag/burn ref, validated by `sbxr-release candidate-reservations`, collected before draft creation and publication; signing verifies the successful current-run record without expanding its token |
 
+`v3-recurring-evidence.sh submit` emits a fixed stderr warning before publishing
+terminal failure facts. Acceptance ends collection and triggers candidate transport
+teardown, so perform authorized, safely admitted product cleanup first when the
+original window permits. Otherwise submit honest incomplete/unknown cleanup and
+report the remaining resources. The warning does not gate failure reporting or
+change its facts, deadlines or teardown. See the
+[terminal failure ordering](../../docs/acceptance/http-subscription-live.md#terminal-failure-ends-candidate-authentication).
+
 `v3-packaged-live.sh` inventories the complete protected candidate footprint and
 proves its absence after public cleanup, including the owned mutation-lock boot
 unit and optional dedicated tunnel unit, their staged publication paths, and
