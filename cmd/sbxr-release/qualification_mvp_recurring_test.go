@@ -130,10 +130,7 @@ func mvpRecurringQualificationFixtureWithHandoff(t *testing.T, binary string, ht
 }
 
 func TestMVPRecurringQualificationAndReleasedReader(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, out)
-	}
+	binary := buildReleaseTestBinary(t)
 	boundary, manifest, evidence := mvpRecurringQualificationFixture(t, binary)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
 	out, err := runQualificationCommand(binary, document)

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,11 +16,7 @@ const initialNormalFacts = `{"archive_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const initialNormalDecision = `{"actions":[{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sequence":17,"tag":"v2.0.0","type":"build-release"},{"commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sequence":18,"tag":"v2.0.1","type":"build-release"}],"facts_sha256":"2e51e83e75a08169f2d6a424ab510f83954bab4e29b35efbfb84e48545f780a3","outcome":"accepted","schema":"sbxr-release-qualification-decision-v1","source_state":"initial-normal","stage":"candidate-preflight"}`
 
 func TestQualificationCommandEvaluatesInitialNormalCandidatePreflight(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 
 	output, err := runQualificationCommand(binary, initialNormalFacts)
 	if err != nil {
@@ -58,11 +53,7 @@ func TestQualificationCommandEvaluatesInitialNormalCandidatePreflight(t *testing
 }
 
 func TestQualificationCommandPreservesLaterNormalAndRescuePreflight(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 
 	later := candidateFacts("normal")
 	later.LatestTag = stringPointer("v2.0.0")
@@ -251,11 +242,7 @@ func qualificationBoundaryForCandidate(t *testing.T, binary string, preflightFac
 }
 
 func TestQualificationCommandBuildsOneCleanV3Candidate(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.0.0", 17
@@ -281,11 +268,7 @@ func TestQualificationCommandBuildsOneCleanV3Candidate(t *testing.T) {
 }
 
 func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	preflight := candidateFacts("v3")
 	preflight.Candidate.ATag, preflight.Candidate.ASequence = "", 0
 	preflight.Candidate.BTag, preflight.Candidate.BSequence = "v3.0.0", 18
@@ -416,11 +399,7 @@ func TestQualificationCommandGatesV3PackagedLiveEvidence(t *testing.T) {
 }
 
 func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 
 	built := []any{draftTarget("v2.0.0", 17), draftTarget("v2.0.1", 18)}
 	constructionFacts := qualificationDocument(t, map[string]any{
@@ -514,11 +493,7 @@ func TestQualificationCommandConstructsAndVerifiesCandidateDrafts(t *testing.T) 
 }
 
 func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 
 	constructionFacts := qualificationDocument(t, map[string]any{
 		"built_releases":     []any{draftTarget("v2.0.0", 17), draftTarget("v2.0.1", 18)},
@@ -615,11 +590,7 @@ func TestQualificationCommandConstructsQualificationManifest(t *testing.T) {
 }
 
 func TestQualificationCommandFinalizesCandidateFailures(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 
 	later := candidateFacts("normal")
 	later.LatestTag = stringPointer("v2.0.0")
@@ -753,11 +724,7 @@ func TestQualificationCommandFinalizesCandidateFailures(t *testing.T) {
 }
 
 func TestQualificationCommandFinalizesStableFailures(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 
 	_, manifestDocument := qualificationBoundaryForCandidate(t, binary, candidateFacts("normal"))
 	manifest := jsonObject(t, manifestDocument)
@@ -966,11 +933,7 @@ func stableQualifiedRecordFixture(t *testing.T, manifestDocument []byte, release
 }
 
 func TestQualificationCommandEvaluatesAcceptanceVPSAndConstructsRecords(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	command := exec.Command("go", "build", "-o", binary, ".")
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("build sbxr-release: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	later := candidateFacts("normal")
 	later.LatestTag = stringPointer("v2.0.0")
 	later.Releases = []observedRelease{qualifiedRelease(false)}

@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -142,10 +140,7 @@ func mvpQualificationFixtureWithReservations(t *testing.T, binary string, late, 
 }
 
 func TestMVPLiveQualificationAcceptsFiveNormalJourneys(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	boundary, manifest, evidence := mvpQualificationFixture(t, binary)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
 	output, err := runQualificationCommand(binary, document)

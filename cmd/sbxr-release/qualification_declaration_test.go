@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -111,11 +110,7 @@ func historyBaselineFromRequest(t *testing.T, request map[string]any) qualificat
 
 func buildQualificationDeclarationBinary(t *testing.T) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	return binary
+	return buildReleaseTestBinary(t)
 }
 
 func runQualificationDeclarationCommand(binary, document string) ([]byte, error) {

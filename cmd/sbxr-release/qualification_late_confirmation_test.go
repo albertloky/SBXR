@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,10 +22,7 @@ func lateConfirmationFixture(t *testing.T) map[string]any {
 }
 
 func TestLateConfirmationSupplementCLI(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	document := qualificationDocument(t, lateConfirmationFixture(t))
 	output, err := runQualificationCommand(binary, document)
 	if err != nil || !bytes.Contains(output, []byte(`"outcome":"accepted-supplement"`)) {

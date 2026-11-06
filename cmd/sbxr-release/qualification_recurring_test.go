@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +15,7 @@ func recurringSourceFixture() observedRelease {
 }
 
 func TestQualificationCommandRequiresCompleteRecurringEvidence(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 18, 2
@@ -392,10 +387,7 @@ func fixtureRecurringChecks(id string) []string {
 }
 
 func TestQualificationCommandBindsRecurringAttempt(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 18, 2
@@ -462,10 +454,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock remove-
 }
 
 func TestQualificationCommandAdmitsRecurringV3OnlyWithVersionedEvidence(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.0", 18

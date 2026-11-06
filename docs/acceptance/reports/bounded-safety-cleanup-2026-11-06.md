@@ -72,3 +72,14 @@ source-bound callers and shared scenario-specific reserves; verify current
 ownership and authentication before any separately approved live use. Failed,
 missing or uncertain evidence remains failed/unknown. Late replies cannot revive
 the attempt; no transport reconstruction or administrative fallback is included.
+
+## Subsequent CI result
+
+The repair reached main as `335769cc1b27694d10065fa88eccc09cdeeccd80`.
+[Verify 42217521869](https://github.com/albertloky/SBXR/actions/runs/42217521869)
+failed when the separate release-tool race package exhausted its cumulative
+ten-minute timeout. Root checks containing these cleanup regressions passed;
+arm64 completed the test step before later matrix cancellation. This is not a
+successful full CI result. The separately authorized
+[test-build investigation](release-test-build-reuse-2026-11-06.md) preserves the
+original failure and records the follow-up; live cleanup remains unverified.

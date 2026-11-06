@@ -40,10 +40,7 @@ func testMVPAssembler(t *testing.T, recurring, httpSubscription bool) {
 }
 
 func testMVPAssemblerWithHandoff(t *testing.T, recurring, httpSubscription, handoff bool, proxyProfile ...string) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	var boundary string
 	var manifest []byte
 	if recurring {

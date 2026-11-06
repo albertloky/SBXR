@@ -473,5 +473,89 @@ The [dated bounded-cleanup report](../../docs/acceptance/reports/bounded-safety-
 records the repair and limits. These local fixtures use inert menu executables
 and real process/filesystem mechanisms, not actual VPS/Karing/product cleanup.
 They establish no complete-cleanup duration, remote quiescence, current host/client
-readiness or successful five-journey qualification. T044 remains open until its
-new source is pushed and CI succeeds; prior c60efd0306 CI cannot close it.
+readiness or successful five-journey qualification. T044 remained open for push/CI at that checkpoint; the later failed CI outcome
+and separate repair scope are recorded below. Prior c60efd0306 CI cannot close it.
+
+## Separate CI timeout and test-tooling continuation — 2026-11-06
+
+The failure-cleanup change reached main as 335769cc1b27694d10065fa88eccc09cdeeccd80.
+[Verify 42217521869](https://github.com/albertloky/SBXR/actions/runs/42217521869)
+failed the amd64 release-tool package's default ten-minute race alarm at 600.106
+seconds. The active test had just entered its initial CLI build; the observed
+stack does not prove an individual long hang or implicate product cleanup. Root
+cleanup regressions passed normal/race; arm64's test step passed before archive
+cancellation, and assembly was skipped. T044 remains unresolved.
+
+The Owner authorized this separate bounded test-tooling repair. FR-014/SC-010 and
+T045–T050 preserve subprocess/reader coverage and independent fixture executables
+while eliminating equivalent repeated construction. Research.md separates the
+confirmed low prior CI margin and local setup cost from unproved total-runtime
+causality. This planning checkpoint preceded implementation and comparison;
+the current local results below supersede that pending state without claiming
+final repaired CI. T018 stays open. The
+[dated test-build report](../../docs/acceptance/reports/release-test-build-reuse-2026-11-06.md)
+records the diagnosis and preserved evidence.
+
+Installed Specify/Clarify/Plan/Tasks instructions were applied to the existing
+feature: active spec-template resolution, paths-only clarification prerequisite,
+non-overwriting setup-plan and setup-tasks template/input resolution. Clarify's
+ten categories required zero user questions; cache lifetime/isolation and unchanged
+build-context boundaries follow the agreed design, without a new product rule.
+The 16-item checklist, local unratified constitution and existing integration
+remain unchanged; no extension hooks exist. Artifacts were authored in place;
+there was no reinitialization or separate generated feature.
+
+### Test-build implementation and focused verification
+
+The shared test helper now caches successful immutable executable bytes and mode
+under a mutex, then materializes each requesting test's own executable. All 23
+equivalent construction sites use it, including the retained declaration delegate;
+existing real CLI/reader commands and distinct installer builds remain unchanged.
+The previous 51 routine fixture builds become one per package process. The new
+isolated regressions add one successful build and one intentional failed compiler
+invocation; the whole run therefore does not contain only one compiler invocation.
+
+The real-process cache regression failed before the repair with three builds
+where one was required. Both new tests then passed normally in 2.284 seconds and
+under race detection in 4.425 seconds. They cover independent paths/inodes,
+modification and deletion isolation, owner-directory cleanup, later copies after
+that cleanup, real CLI behavior and visible real compiler failure with no temporary
+leftovers. Evidence: .scratch/acceptance/bct/{red-final,green,green-race}.log.
+Concurrent first-use and a subsequent request after compiler failure were reviewed,
+not directly exercised; failure results are not cached.
+
+The identical focused race selection passed 16 top-level tests / 469 tests and
+subtests, with zero skips, in 79.548 seconds before and 63.024 seconds afterward
+(.scratch/acceptance/c5b/{before,after}-race.jsonl): 20.8% shorter locally with
+Go 1.26.6 on this Mac. This single comparison proves neither a sole Linux timeout
+cause nor final CI success. The unsplit full local race package then failed at
+its unchanged 600-second alarm, reporting 600.359 seconds. Before that alarm,
+108 top-level tests / 1,130 tests and subtests passed and the existing macOS
+controlling-terminal test was skipped. The active clean-install repair test had
+run for two seconds; no assertion failure or race warning preceded the alarm.
+This remains a failed package run.
+
+A separate bounded race batch passed the remaining 18 top-level / 371 tests and
+subtests in 45.658 seconds without skips (.scratch/acceptance/c5r/remaining-race.jsonl).
+Together with c5r/release-race.jsonl, the logs account for all 127 listed top-level
+tests: 126 passed and the one existing platform skip; 1,483 unique tests/subtests
+passed. Overlapping partial subtests are counted once. This establishes local
+coverage across invocations, not a successful unsplit Mac run or native CI.
+The package alarm left one owned temporary executable; the parent verified no
+fixture child remained and removed only that executable and its empty directories.
+The remainder temporary directory was empty and removed.
+
+Vet, changed-Go formatting, local documentation links and whitespace checks passed.
+Independent source/artifact review found no blocking scope or coverage mismatch.
+T046–T049 are complete with these explicit limits; T050/T044 need successful
+unchanged unsplit normal/race native CI, and T018 remains unverified.
+
+Installed Analyze and Converge were applied using their required prerequisite
+checks, with no extension hooks. The review covered 14 FRs, ten SCs, three stories
+and all 50 tasks, reusing established evidence for unchanged components. All
+requirements have mapped tasks; no new implementation gap, authority expansion
+or rule conflict was found. Two minor documentation mismatches (cache state and
+stale evidence status) were corrected in this subsequent authorized artifact
+closeout. Existing verification/live gaps already have tasks, so no duplicate
+convergence phase or whole-feature convergence claim was added. The 16-item
+checklist and unratified constitution remain unchanged.

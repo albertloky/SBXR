@@ -52,3 +52,16 @@ plus the affected root caller tests. Include refusal before launch, shared cutof
 and reserve exhaustion, unchanged original/pending evidence, and process cleanup.
 Run relevant broad checks and final-source CI after review. A menu success alone
 must not satisfy client/secret/transport or live qualification checks.
+
+## Release-tool build-reuse validation
+
+Retain pinned-toolchain before/after evidence under scoped .scratch/acceptance/
+run directories. Demonstrate repeated setup and executable-copy isolation
+at real process/filesystem boundaries, then rerun unchanged CLI/reader tests.
+Run focused normal acceptance, the same focused race comparison and full local
+release-tool race checks plus vet; reuse valid unchanged integration evidence.
+If the local unsplit run reaches its cumulative alarm, retain the failure and
+account for unfinished tests in a separate bounded race batch; combined coverage
+is not an unsplit pass. Final-source native CI retains its full unsplit normal/race
+suites. Preserve the existing timeout and race settings. Compare timing only within its recorded
+environment; require final-source CI before closing T050 or prior T044.

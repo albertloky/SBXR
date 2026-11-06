@@ -4,18 +4,13 @@ import (
 	"encoding/json"
 	"github.com/albertloky/SBXR/internal/softwarelifecycle"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestLateConfirmationReleasePath(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("%v %s", err, out)
-	}
+	binary := buildReleaseTestBinary(t)
 	boundary, manifest, _ := mvpQualificationFixtureFor(t, binary, true)
 	var m qualificationManifest
 	if !decodeCanonical(manifest, &m) {

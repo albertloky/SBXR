@@ -9,6 +9,9 @@ a fresh clone. Start new work with the [current guide](../README.md).
 
 ## Local audit repairs
 
+- [Release-tool test build reuse — 2026-11-06](release-test-build-reuse-2026-11-06.md)
+  — cumulative race-suite timeout investigation and repeated CLI build reduction; original failure preserved.
+
 - [Bounded supported cleanup preparation — 2026-11-06](bounded-safety-cleanup-2026-11-06.md)
   — offline cleanup-only clock/menu path preserves pending evidence and original limits; full live cleanup duration remains unproved.
 

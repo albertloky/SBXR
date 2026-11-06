@@ -186,3 +186,32 @@ on separate documentation files and incorporates final T043 evidence before
 T044. T040–T043 are complete from the local evidence recorded in review.md;
 T044 remains pending exact-source push/CI. T018 remains open. No live attempt, cleanup execution, new signing, remote release mutation,
 security change, deletion or publication is authorized by this offline work.
+
+Phase 11 CI checkpoint: commit 335769cc1b27694d10065fa88eccc09cdeeccd80 was
+pushed, but Verify 42217521869 failed at the amd64 release-tool race package's
+600-second alarm. The active test had just begun its CLI build; no individual
+ten-minute hang is established. T044 remains open until the repaired source's
+required CI succeeds. The separate authorized investigation follows below.
+
+## Phase 12: US3 — Equivalent release-tool test-build reuse
+
+Independent check: repeated fixture setup builds once per unchanged package-test
+process while independent executable copies retain every real CLI/reader check.
+No timeout, race coverage, assertions or release authority is relaxed.
+
+- [x] T045 [US3] Record the CI timeout, comparison/local-build evidence and bounded FR-014/SC-010 design in spec.md, plan.md and research.md; preserve the original failed outcome and T044/T018 limits.
+- [x] T046 [US3] Add a failing real-process/filesystem reuse/isolation/failure regression in cmd/sbxr-release/release_test_binary_test.go and retain red evidence under .scratch/acceptance/.
+- [x] T047 [US3] Implement synchronized immutable-byte construction and fresh per-test executables in cmd/sbxr-release/release_test_binary_test.go; adapt the equivalent qualification test callers, retaining the declaration helper and every downstream command/reader check.
+- [x] T048 [P] [US3] Record the bounded diagnosis/repair and timing limitations in docs/acceptance/reports/release-test-build-reuse-2026-11-06.md, its index and specs/001-project-review/review.md; preserve original CI observations.
+- [x] T049 [US3] Verify focused red/green and comparable timing, applicable local normal/race checks and complete release-tool test coverage, reusable integration evidence, vet and independent final-diff review without changing timeout/coverage; retain any unsplit package failure separately from bounded remainder results in review.md and the dated report.
+- [ ] T050 [US3] Commit/push the reviewed test-only repair on main and verify exact-source CI; record the source/run/outcome in review.md and the dated report before closing T044.
+
+Dependency: T045 -> T046 -> T047 -> T049 -> T050. T048 can proceed after T045
+on separate documentation files and incorporates T049 evidence before T050.
+T046/T047 are complete from the real-process red/green and reviewed caller
+evidence in review.md. T048/T049 are complete with all 127 listed local tests
+accounted for: 126 passed and one existing macOS skip. The unsplit race run failed
+at 600.359s; a separate 18-test remainder passed in 45.658s. Combined coverage
+is not an unsplit pass. T050/T044 require successful final-source native CI. T018
+remains unverified. No live test, signing, VPS/security change, deletion or publication
+is part of this test-tooling repair.

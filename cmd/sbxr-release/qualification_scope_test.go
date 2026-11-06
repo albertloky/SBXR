@@ -13,10 +13,7 @@ import (
 )
 
 func TestQualificationCommandRequiresExplicitSubscriptionScope(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.0", 18
@@ -172,10 +169,7 @@ func repairBaselineFixture(t *testing.T) observedRelease {
 
 func testFirstSubscriptionAttempt(t *testing.T, exception string, policy string) {
 	repair := policy != ""
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 83, 3
@@ -641,10 +635,7 @@ remove-certbot remove-writer remove-admission-race remove-directory-lock secret-
 }
 
 func TestQualificationCommandRequiresActualRecurringSubscriptionSources(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build %v %s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
 	facts.Candidate.BTag, facts.Candidate.BSequence, facts.Candidate.EvidenceVersion = "v3.1.0", 18, 3
@@ -719,10 +710,7 @@ func TestQualificationCommandRequiresActualRecurringSubscriptionSources(t *testi
 }
 
 func TestReleaseIndexCommandBindsDeclaredSubscriptionSources(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build %v %s", err, output)
-	}
+	binary := buildReleaseTestBinary(t)
 	directory := t.TempDir()
 	for _, name := range softwarelifecycle.LatestReleaseIndexedAssetNames() {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("fixture"), 0600); err != nil {

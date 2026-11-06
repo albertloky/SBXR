@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Prior repairs and q213 reservation CI verified; bounded failure-cleanup repair locally verified; repair push/CI pending; live criterion unverified
+**Status**: Failure-cleanup repair pushed; CI blocked by release-tool package timeout; test-build reuse implemented; local race coverage complete across batches with unsplit timeout retained; native CI pending; live criterion unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.
@@ -244,3 +244,35 @@ another action, a pending normal qualification action or sealing a pending draft
 the existing refusal remains. Cleanup
 cannot synthesize a response, continue setup, rotate identity, request details,
 retry mutations, recreate authentication or turn the failed journey into a pass.
+
+## Approved continuation: release-tool test setup reuse — 2026-11-06
+
+The Owner authorized a separate offline investigation and bounded test-tooling
+repair after Verify 42217521869 exhausted its package time budget. This serves
+existing regression coverage and reliable verification under US3; it changes no
+product behavior, qualification policy or operational authority.
+
+- **FR-014**: Equivalent release-tool test preparations MUST avoid redundant
+  compilation within the same unchanged package-test process while giving each
+  fixture an independent executable path and identical built bytes. Concurrent
+  preparation MUST be synchronized; one fixture's modification or deletion MUST
+  NOT affect another. Build and materialization failures MUST remain visible.
+  Existing real subprocess commands, facts, assertions and released-reader
+  compatibility checks MUST remain intact. Race coverage and the existing
+  package timeout MUST NOT be relaxed to obtain a pass.
+- **SC-010**: Relevant regressions demonstrate repeated equivalent preparation
+  without duplicate construction, private independent executable copies, preserved
+  bytes and visible failures. The same real CLI/reader checks pass afterward;
+  before/after timings identify their environment and limits. Final-source native
+  CI normal and race checks complete within their unchanged package bounds. Local
+  checks account for all intended tests while retaining each invocation's actual
+  outcome: a cumulative timeout remains failed even if unfinished tests pass in
+  separate bounded batches. Local build timing alone MUST NOT be presented as
+  proof of the CI cause, savings or final success.
+
+US3 acceptance: given equivalent build inputs, repeated fixtures use the same
+built bytes with independent file ownership/lifetime; given a modified or removed
+fixture executable, later fixtures remain unchanged. Different build inputs do
+not acquire authority to reuse these bytes. Existing subprocess coverage remains
+required. The original failed CI outcome, T044 and live T018 remain unresolved
+until their respective evidence is established.

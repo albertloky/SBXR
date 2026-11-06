@@ -131,3 +131,54 @@ partial outcomes are SC-009/T044 exact-source push/CI and SC-003/T018 live proof
 both already represented; no duplicate tasks or empty phase were added. The
 existing 16-item checklist and unratified constitution were unchanged, with no
 configured extension hooks. Review.md records exact results and skipped boundaries.
+
+## Release-tool test-build continuation mapping — 2026-11-06
+
+FR-014/SC-010 map to US3 and T045–T050; FR-005/006/007/009 and SC-002/004/005
+retain regression, evidence classification, preservation and accurate-reporting
+requirements. T044 remains blocked by failed CI and T018 by missing live proof.
+The original failure is preserved; no new completed Analyze/Converge or repair
+verification is claimed by this design mapping. T046–T050 require their own evidence.
+
+## Test-build Analyze / Converge checkpoint — 2026-11-06
+
+The installed stages assessed 14 FRs, ten SCs, three stories and 50 tasks, using
+current helper/caller source and established evidence for unchanged components.
+All 24 requirements/criteria have mapped tasks; traceability is 100%, not a claim
+of completed live acceptance. There are no unmapped tasks, new requirement
+ambiguities, duplications, critical conflicts or existing-rule contradictions.
+FR-014/SC-010 map to T045–T050. The five local constitution principles were checked
+as consolidations of existing rules; pending ratification adds no authority.
+
+Analyze identified two LOW documentation issues: data-model.md could imply a
+cached failure instead of success-only bytes/mode, and earlier review/research
+wording still marked implementation/comparison pending. Both were corrected in
+the subsequent authorized artifact closeout, after the read-only stage. The
+mutex, independent copies, unchanged command coverage and default race/600-second
+bounds match the agreed design. Concurrent first-use/retry-after-failure paths
+were reviewed rather than directly tested; no dedicated concurrency test was
+promised by this bounded repair.
+
+Converge retains two HIGH partial evidence outcomes: successful final-source native
+CI for SC-009/SC-010 (T050/T044) and live SC-003/US2-AC1 (T018). There is no new
+missing, contradicting or unrequested implementation work. These outcomes already
+have explicit tasks, so no duplicate phase was appended and the feature is not
+reported fully converged. T046/T047 close from real-boundary red/green and caller
+review; T048/T049 close with complete bounded local coverage and the explicit
+unsplit failure recorded below. T050/T044 and T018 remain open. The
+16 checklist markers and unratified constitution are unchanged; no hooks exist.
+
+The routine 51 equivalent builds now use one successful package-process build,
+while isolated regression processes intentionally add one successful build and
+one failed compiler invocation. Focused race timing improved 79.548 to 63.024
+seconds on this Mac (469 tests/subtests in both selections). This is local evidence,
+not a Linux CI prediction, complete-cause proof or live result.
+
+The full unsplit Mac race package failed at its unchanged 600-second alarm
+(600.359s), after 108 top-level passes and one existing platform skip. The separate
+18-test remainder passed in 45.658s. Combined logs account for all 127 listed
+top-level tests (126 passes, one skip) and 1,483 unique passing tests/subtests.
+No assertion failure or race warning preceded the alarm, but successful unsplit
+execution is unproved. The authorized validation clarification retains this
+failed result and requires unchanged unsplit native CI; it neither raises a
+timeout nor treats batched coverage as a package pass.

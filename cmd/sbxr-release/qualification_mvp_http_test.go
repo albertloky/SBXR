@@ -11,10 +11,7 @@ import (
 )
 
 func TestHTTPRecurringQualificationRequiresHTTPProofAndPreservesReleasedReader(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "sbxr-release")
-	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build %v %s", err, out)
-	}
+	binary := buildReleaseTestBinary(t)
 	boundary, manifest, evidence := mvpRecurringQualificationFixtureFor(t, binary, true)
 	document := recurringResultFixture(t, boundary, manifest, evidence)
 	out, err := runQualificationCommand(binary, document)

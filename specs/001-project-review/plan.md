@@ -203,3 +203,38 @@ bytes and protected runtime-file identity to existing ownership/hash expectation
 Run focused and relevant broad suites, independent review, and exact-source CI.
 No numeric full-cleanup duration or live readiness is established by this design.
 T018 stays open. Existing rules and the unratified constitution remain unchanged.
+
+## Release-tool test-build continuation — 2026-11-06
+
+Address the repeated fixture setup cost in cmd/sbxr-release test sources only.
+Add `buildReleaseTestBinary` and its regression in
+cmd/sbxr-release/release_test_binary_test.go. Synchronize one package-process
+construction of immutable CLI bytes, then materialize a fresh executable in each
+requesting test's temporary directory. The initial build directory may disappear
+without invalidating later copies. Do not share a writable executable or use a
+TestMain-owned external lifecycle. Surface build/copy failures instead of hiding
+them. Retain the existing go build arguments, environment and working directory.
+
+Replace the 23 equivalent build sites across the ten audited qualification test
+files; keep buildQualificationDeclarationBinary as a thin delegate. The static
+audit found 51 builds during the current fixture paths without CLI/source, build
+environment or working-directory mutation or parallel callers. This is a bounded
+reuse assumption, not a general compiler cache: distinct builds/flags and actual
+released-reader subprocesses remain unchanged. Preserve every downstream command,
+input, assertion and original fixture lifetime. Review synchronization correctness
+and retain race checking; current audited callers are sequential. No new concurrent
+caller or dedicated concurrent performance test is required by this repair.
+
+First demonstrate a regression for repeated construction, independent executable
+copies and failure visibility at real process/filesystem boundaries; then compare
+focused before/after results under the same pinned toolchain. Use focused normal
+acceptance, the same focused race comparison, a full local release-tool race run,
+vet and independent review. If the local unsplit run exhausts its cumulative
+budget, retain that failed result and complete unfinished checks in a separate
+bounded race batch without presenting combined coverage as an unsplit pass.
+Reuse valid unchanged repository integration evidence; full unsplit normal/race
+suites on both native architectures run in final-source CI as usual.
+Keep the existing race command and default 600-second
+package timeout unchanged. Do not infer Linux CI savings from local build timings.
+This continuation does not establish a sole timeout cause or fix until its checks
+pass; product, release rules, workflow permissions and all live limits stay intact.

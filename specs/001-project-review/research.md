@@ -160,3 +160,38 @@ cleanup from the product result code. Exact live duration and all surrounding
 client/secret/transport checks remain unproved; the implementation and bounded
 local checks are recorded in review.md. No new product-policy decision is required
 for this bounded design.
+
+## Release-tool CI package timeout — 2026-11-06
+
+Observed: Verify 42217521869 at 335769cc1b27694d10065fa88eccc09cdeeccd80
+exhausted the amd64 cmd/sbxr-release race package at 600.106 seconds. The active
+TestQualificationCommandBuildsOneCleanV3Candidate reported 0s and was in its initial
+go build. This establishes cumulative budget exhaustion, not an individual
+600-second build hang or the sole cause of total runtime. Parent c60efd0306 used
+589.816 seconds in that race package, only 10.184 seconds below the same limit.
+Normal amd64 time changed 376.368 -> 393.306 seconds. Arm64 race passed at 500.395
+seconds versus 509.589 previously (normal 299.895 versus 302.003); its later archive
+was cancelled and assembly skipped after the matrix failure. Evidence remains in
+.scratch/acceptance/c4g/ci-completed.json and amd64-job.log, plus c5e/ comparisons.
+
+The static audit identified 51 identical CLI builds at 23 sites across ten test
+files, without changed source/build environment/cwd or parallel callers. Six local
+Go 1.26.6 builds took 2.223 seconds initially, then 0.767, 0.780, 0.776, 0.798 and
+0.828 seconds (mean 0.790). Fifty such warm calls represent about 39.5 seconds of
+local setup cost, not measured whole-suite savings or a Linux CI prediction.
+See .scratch/acceptance/c5p/build-timings.json. The unchanged-source focused
+`-race -run '^TestQualificationCommand'` baseline passed 16 top-level tests in
+79.548 seconds (.scratch/acceptance/c5b/before-race.jsonl). The identical repaired
+selection passed the same 16 top-level / 469 total tests without skips in 63.024
+seconds (c5b/after-race.jsonl), 20.8% shorter in this single local comparison.
+This does not predict Linux CI savings. The later unsplit local race package
+failed at its unchanged 600-second alarm (600.359s). All intended local tests
+were accounted for across that run and the bounded remainder; review.md records
+counts and limits. An unsplit local pass and successful final-source native CI
+have not been established.
+
+Decision: reuse immutable built bytes only within this equivalent package-test
+context and give each fixture a fresh executable. Reject shared mutable paths,
+skipped subprocess/reader checks, a generic cross-context cache, increased alarms
+or reduced race coverage. No product-policy clarification is needed; test-tooling
+implementation choices remain bounded by the existing regression requirements.

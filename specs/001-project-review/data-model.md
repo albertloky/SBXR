@@ -33,3 +33,10 @@ handoffs contribute only their recorded waits; a pending handoff remains pending
 The caller also uses an explicit absolute cutoff, post-action verification reserve
 and protected candidate runtime deadline. These bound one supervised removal
 action; they do not create response, success, cleanup-completion or release authority.
+
+Release-tool test-build continuation: one process-local cache holds only successful
+immutable executable bytes and their mode for the audited unchanged build context.
+A build failure remains visible and leaves the cache empty; no error is cached.
+Each fixture owns a distinct temporary executable copy and lifetime.
+No product, qualification-wire or persistent schema changes; separate test processes
+and distinct build inputs do not inherit cached authority.
