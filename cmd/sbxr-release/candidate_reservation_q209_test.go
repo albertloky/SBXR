@@ -7,7 +7,7 @@ import (
 
 func TestQ209ExactReservation(t *testing.T) {
 	p := approvedCandidateReservations()
-	if len(p) != 11 || p[6].Tag != "v3.1.135" || p[6].Sequence != 209 || p[6].ReleaseID != 430383576 || p[6].SigningState != "signed-unqualified" || p[6].RunID != "41274423664" {
+	if len(p) != 12 || p[6].Tag != "v3.1.135" || p[6].Sequence != 209 || p[6].ReleaseID != 430383576 || p[6].SigningState != "signed-unqualified" || p[6].RunID != "41274423664" {
 		t.Fatal("wrong seventh identity")
 	}
 	if !checkCandidateReservations(reservationFixture(), nil) {
@@ -56,7 +56,7 @@ func TestQ209ExactReservation(t *testing.T) {
 func TestQ209ReservationCannotBeOmittedOrRelabeled(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.140", 214
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.141", 215
 	for name, mutate := range map[string]func(*qualificationFacts){
 		"old six only": func(f *qualificationFacts) { f.ReservedIdentities = f.ReservedIdentities[:6] },
 		"unsigned":     func(f *qualificationFacts) { f.ReservedIdentities[6].SigningState = "unsigned" },

@@ -76,3 +76,14 @@ current cleanup profile's row sums, distinct reserve meanings and handoff
 thresholds. Retain the six-case inert clock/runtime/runner rehearsal separately
 from maintained tests. No fixture result proves remote quiescence, Karing cleanup
 or live readiness. Final-source native CI is T056; T018 remains independent.
+
+## Build 214 retention — 2026-11-08
+
+Use the existing pinned-toolchain validation setup and .scratch/acceptance/q214res/.
+Prove q214 regressions fail against the eleven-record policy, then check the exact
+unknown-signing/absent-manifest binding, twelve-record set, preserved prior records,
+refusals, historical replay and next-sequence admission. Replay twelve matching
+drafts and twenty-four explicit absent refs after fresh read-only checks; run
+applicable retained-tooling checks and final-source CI. Earlier q212/q213 validation
+counts remain historical. Do not dispatch, sign, mutate remote releases or infer
+unsigned/live proof from cancellation.

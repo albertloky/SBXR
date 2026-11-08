@@ -50,3 +50,12 @@ draft, signed/runtime cutoffs and failed observations retain their existing byte
 and authority. Selected procedure rows describe allocations and remaining work;
 they are neither observations nor new qualification records. No product or signed
 wire schema changes, persistent sequence clock or automatic cleanup state machine.
+
+## Build 214 retention — 2026-11-08
+
+Append q214 through the unchanged reservation fields: exact source/run/release,
+index and four asset identities, signing_state `unknown`, absent manifest digest.
+The approved exact set becomes twelve, q203–214; eleven prior records stay intact.
+Cancellation and unknown signing are separate facts. No unsigned, signed, burned
+or qualified transition is inferred, and no wire schema changes. Earlier dated
+ten/eleven-record paragraphs retain their historical meaning.

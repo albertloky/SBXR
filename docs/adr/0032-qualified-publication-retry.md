@@ -375,3 +375,33 @@ rerun, burn, deletion, signing-authority or workflow-permission change follows.
 This decision does not authorize a new live attempt, VPS/client/security change,
 cleanup execution or publication. Prospective v3.1.140/214 still requires fresh
 global admission, final-source CI and separately approved complete qualification.
+
+
+## Retained q214 identity — 2026-11-08
+
+The Owner approved one ordinary cancellation of run 42370644704 and exact
+retention of v3.1.140/214 through the fixed reservation mechanism, including
+bounded code, tests, documentation, review, commit/push and CI. The run ended
+cancelled at attempt 1; the cancelled sign job has no steps and provides no
+formal unsigned proof. Retain signing authority as **unknown**, without a
+qualification-manifest digest. The failed cleanup-unqualified job's empty step
+list does not establish its cause or any completed disposition action.
+
+The record binds draft 437573394, source
+`3c3735dcd3ebca409ccdaba277a0d50deb0b9432`, run 42370644704, index SHA-256
+`acbe7179311bd52e2b83f9a063747a6a515c0047e754002a4bef59cd80f5fb69`
+and all four exact asset identities. See the
+[dated preservation report](../acceptance/reports/q214-retained-reservation-2026-11-08.md).
+
+The approved set becomes twelve exact reservations, q203–214; all eleven earlier
+records and historical signed evidence remain unchanged. Require matching drafts
+and twenty-four explicitly absent release/burn refs. Missing, changed, duplicated
+or unavailable observations refuse. The reserved tag, sequence and release ID
+cannot be reused or promoted, including through the current-candidate allowance.
+Cancellation alone neither establishes this policy nor frees its identity.
+
+Preserve the original draft/body/assets and evidence. No new signing, finalizer
+retry, burn, deletion, live attempt, VPS/client/security change, cleanup execution
+or publication follows. v3.1.141/215 is prospective only, subject to fresh global
+admission, final-source CI and separate qualification approval. The earlier
+prospective-214 statements retain their dated context.

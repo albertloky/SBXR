@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Prior repairs and bounded operator-budget implementation verified in native CI; T056 closed for ab8f060; live criterion T018 unverified
+**Status**: Prior repairs verified; build-214 reservation implemented after cancellation; local checks and fresh replay passed; exact-source CI pending; live criterion T018 unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.
@@ -295,3 +295,28 @@ secret/capture handling, result submission and transport verification. Selected
 caps are stopping allocations, not measured live-duration guarantees. Local
 regressions and composed inert fixtures must distinguish tested mechanisms from
 unavailable real SSH/Karing/remote-state proof. T018 remains open.
+
+## Build 214 retention — 2026-11-08
+
+The Owner separately approved one ordinary cancellation of run 42370644704 and
+retaining its exact draft through the existing fixed-reservation mechanism, with
+bounded code/tests/docs, review, commit/push and CI. This does not widen the
+original offline authorization or the earlier build-specific decisions.
+
+- **FR-015**: Retain v3.1.140/214, draft 437573394, source
+  `3c3735dcd3ebca409ccdaba277a0d50deb0b9432`, run 42370644704 attempt 1,
+  with its exact index and four asset bindings. Signing authority remains
+  `unknown`; no qualification-manifest digest or unsigned proof may be invented.
+  Preserve the preceding eleven reservations and all original evidence. Refuse
+  reuse/promotion of its tag, sequence or release ID, and missing, changed,
+  duplicated or unavailable observations or present release/burn refs.
+- **SC-011**: Record the actual terminal cancellation/signing evidence; relevant
+  regressions prove the exact twelve-record policy, preservation and refusal
+  boundaries, historical replay and fresh next-sequence admission. Fresh read-only
+  checks match all twelve drafts and twenty-four absent refs. Final-source checks
+  and CI pass without altering the retained draft/body/assets or failed outcomes.
+
+US3 acceptance: cancellation does not free build 214 or qualify its bytes. A fresh
+candidate must still pass global allocation/collision checks. Retention supplies
+no signing, burn, deletion, finalizer retry, new live attempt, VPS/client/security
+change, cleanup execution or publication authority. T018 remains open.

@@ -40,3 +40,30 @@ rules apply to the additional member. Previous ten record bytes remain unchanged
 Fresh next-sequence admission includes q213 but still depends on global history;
 v3.1.140/214 is prospective, not an allocated candidate. Adoption preserves the
 remote draft/body/assets/signature and failed outcome; it is not a metadata lock.
+
+## Build 214 retention — 2026-11-08
+
+The separately approved extension binds v3.1.140/214, release 437573394, source
+`3c3735dcd3ebca409ccdaba277a0d50deb0b9432`, run 42370644704 attempt 1.
+Signing state is `unknown`; omit qualification_manifest_sha256. Neither the
+cancelled sign job nor its empty step list supplies formal unsigned proof.
+The release-index SHA-256 is
+`acbe7179311bd52e2b83f9a063747a6a515c0047e754002a4bef59cd80f5fb69`.
+
+| Asset | ID | Bytes | SHA-256 |
+|---|---:|---:|---|
+| install.sh | 720694599 | 76781 | `3a9276acd48156aa72bec598c7cc73c7a2fb59ac5b20cc0f606b390e5a7ccf97` |
+| release-index.json | 720694593 | 609 | `acbe7179311bd52e2b83f9a063747a6a515c0047e754002a4bef59cd80f5fb69` |
+| sbxr-linux-amd64.tar.gz | 720694592 | 6236680 | `2744f7f9d2c5b5fcc79f061a5b0cff2e7d288a302a1847ee17ec50f2010d1923` |
+| sbxr-linux-arm64.tar.gz | 720694600 | 5335593 | `842b39c302535f6a07927e678a25f05ba028a47f13cddf12c51cf84ebe7cc9df` |
+
+The approved policy becomes twelve exact records, q203–214, with twenty-four
+explicitly absent release/burn refs. Eleven previous records and all refusal,
+current-candidate allowance and historical replay semantics remain unchanged.
+The earlier prospective-214 statements describe their dated preparation only;
+214 is now occupied and retained, not available for reuse. Prospective 215 still
+requires fresh global admission. Preserve draft/body/assets/evidence; cancellation
+is a separately approved run operation, not deletion, burn or qualification.
+The exact record is implemented; focused checks and fresh observation replay
+passed, as did full release-tool/root checks and vet with documented macOS skips.
+Exact-source CI remains pending at this checkpoint.

@@ -264,3 +264,22 @@ existing root recorder/menu/release-safety wrappers. Supplement with the actual
 hash-bound clock/runtime/runner inert composition and arithmetic rehearsal; it
 is retained local evidence, not a new maintained test or live proof. Reuse valid
 unchanged Go/Rust checks; final-source native CI remains required.
+
+## Build 214 retention — 2026-11-08
+
+Append only the approved q214 record to cmd/sbxr-release/candidate_reservations.go,
+using the existing unknown-signing state and no manifest digest. Change its strict
+count and .github/scripts/check-candidate-reservations.sh from eleven to twelve.
+Preserve all eleven prior records and historical replay. Current-candidate and
+collector fixtures must use an unreserved identity, prospectively v3.1.141/215,
+with independent tag/sequence/release-ID collision coverage; that fixture does
+not allocate a real candidate. No schema, product, gate or workflow change.
+
+First prove the missing q214 record through adjacent regressions, then validate
+exact pins, omitted/changed signing state or fabricated manifest, observed-draft
+and ref refusals, preserved prior records and next-sequence admission. Recheck
+the approved bytes read-only and replay twelve drafts/twenty-four absent refs.
+Run relevant focused/broad retained-tooling checks, review and final-source CI.
+Record cancellation and unknown signing separately from reservation adoption in
+ADR-0032, the indexed dated report and the existing feature artifacts. Keep all
+earlier dated counts/results intact; T018 and future live prerequisites remain.

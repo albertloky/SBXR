@@ -258,3 +258,25 @@ attempt 1. Fresh GitHub verification and the retained CI receipt close T056,
 superseding the pre-CI checkpoint above. The source/run evidence is recorded in
 review.md and the dated report. T018 is the only open task; offline CI does not
 prove live timing, cleanup duration or future host/client readiness.
+
+## Phase 14: US3 — Build 214 retention — 2026-11-08
+
+Independent check: the cancelled candidate remains preserved and unusable for
+reuse/promotion; unknown signing stays unknown and eleven prior records are intact.
+
+- [x] T057 [US3] Record the approved cancellation, terminal job/signing evidence and FR-015/SC-011 identity in spec.md, contracts/retained-candidate.md and review.md using .scratch/acceptance/q214res/ and the preserved asset evidence.
+- [x] T058 [US3] Add exact q214/unknown-signing and omission/relabel regressions in cmd/sbxr-release/candidate_reservation_q214_test.go; demonstrate the eleven-record policy cannot satisfy them and retain red evidence under .scratch/acceptance/q214res/.
+- [x] T059 [US3] Append only the exact q214 record and twelve-record validation in cmd/sbxr-release/candidate_reservations.go and .github/scripts/check-candidate-reservations.sh; preserve prior records and coherent adjacent current-candidate/collision fixtures.
+- [x] T060 [P] [US3] Document the approved scope and current count in docs/adr/0032-qualified-publication-retry.md, cmd/sbxr-release/README.md and the indexed docs/acceptance/reports/q214-retained-reservation-2026-11-08.md; reconcile existing feature artifacts without rewriting earlier outcomes.
+- [x] T061 [US3] Verify exact pins, prior-record preservation, focused/applicable broad release-tool checks, twelve-draft/twenty-four-ref observation replay and independent final review; record results and limitations in review.md and the dated report.
+- [ ] T062 [US3] Commit/push the reviewed reservation on main and verify exact-source CI; record source/run/results in review.md and the dated report.
+
+Dependency: T057 -> T058 -> T059 -> T061 -> T062. T060 can proceed on separate
+documentation after T057 and incorporates T061 evidence before T062. T058 is complete from the two expected pre-change failures in q214res/red.log.
+T059 is complete: the exact record/count and coherent callers are implemented;
+focused checks and fresh twelve-draft/twenty-four-ref replay passed. T060/T061
+are complete: documentation, independent review, full release-tool/root checks
+and vet passed with the existing macOS skips recorded in review.md. T062 awaits
+exact-source push/CI.
+Prior T056 stays complete; T018 remains open.
+This phase adds no new live/signing/deletion/burn/publication authority.

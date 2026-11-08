@@ -225,3 +225,40 @@ the report and retained receipt record its evidence. No requirement, task,
 assertion, timeout or authority changed. SC-003/US2-AC1/T018 remains open: CI
 supplies no live timing or cleanup/readiness proof. This documentation closeout
 does not rerun or claim a new full-project convergence stage.
+
+## Build 214 retention — 2026-11-08
+
+FR-015/SC-011 map to US3 and T057–T062, retaining FR-005/007/008/009 and
+SC-002/004/005 regression, preservation and reporting constraints. The explicit
+q214 approval supplies only the named cancellation and fixed reservation, not a
+general policy exception. FR-011/SC-007 and FR-012/SC-008 remain their earlier
+identity-specific decisions. Unknown signing and absent manifest are deliberate
+evidence limits, not missing inputs to fabricate.
+
+T057 records confirmed terminal evidence, T058 the two expected pre-change
+failures, and T059 the exact implementation with focused checks/fresh replay.
+T060/T061 are complete from the reconciled documentation, independent review and
+full local checks with recorded macOS skips. T062 awaits exact-source CI. The
+subsequent assessment below supersedes the initial planning status. T056 remains complete
+and T018 remains open. The requirements checklist and constitution are unchanged.
+
+### Build 214 Analyze / Converge assessment
+
+Required prerequisite checks passed for the installed read-only Analyze and
+current-code Converge stages. The bounded review checked 15 FRs, eleven SCs,
+three stories and 62 tasks, reusing prior evidence for unchanged work. All 26
+requirements/criteria have mapped tasks; no unmapped task, new requirement
+ambiguity, duplication, critical conflict or existing-rule contradiction was
+found. The five local constitution principles remain consolidations of existing
+rules, without new authority. No extension hooks or checklist changes exist.
+
+FR-015/SC-011 is implemented by the exact unknown-signing record, omitted manifest,
+strict twelve-record count, canonical draft/ref matching, no-reuse/current-tag
+refusals and coherent prospective-215 fixtures. The new regression binds all
+eleven earlier canonical records to their saved digest. Focused results and fresh
+observation replay support that bounded result; no unsigned or live proof follows.
+
+Converge: zero new missing, contradicting or unrequested implementation findings;
+two HIGH partial evidence outcomes remain—SC-011 exact-source CI (T062) and
+SC-003/US2-AC1 live proof (T018). These already have tasks, so no
+duplicate phase was appended. The feature is not reported fully converged.

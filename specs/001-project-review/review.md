@@ -648,3 +648,60 @@ The [dated report](../../docs/acceptance/reports/bounded-operator-budget-2026-11
 and `.scratch/acceptance/b6r/ci-completed.json` bind the exact result. This closes
 T056 and supersedes its earlier pending checkpoint. T018 remains open, together
 with all stated live duration, M3 timing and future readiness limitations.
+
+## Build 214 retention — 2026-11-08
+
+The Owner approved one ordinary cancellation of
+[run 42370644704](https://github.com/albertloky/SBXR/actions/runs/42370644704)
+and exact retention of v3.1.140/214. The request was accepted at 03:58:06 UTC
+without retry. The subsequent verified run outcome is completed/cancelled,
+attempt 1. Sign job 128408019970 is cancelled with an empty step list;
+cleanup-unqualified 128621544278 failed with an empty step list. Its cause is
+unproved. No signed manifest or formal unsigned proof exists in this evidence.
+
+FR-015/SC-011 and T057–T062 bind draft 437573394 and source
+`3c3735dcd3ebca409ccdaba277a0d50deb0b9432` with the exact assets in the
+[retention contract](contracts/retained-candidate.md#build-214-retention--2026-11-08).
+The [dated report](../../docs/acceptance/reports/q214-retained-reservation-2026-11-08.md)
+separates cancellation, unknown signing and reservation adoption. The earlier
+prospective-214 references are historical; 214 is unavailable for reuse.
+
+Specify/Clarify/Plan/Tasks were applied proportionately in the existing feature:
+active template and paths-only prerequisite resolved, setup-plan preserved the
+plan, and setup-tasks resolved the template/input documents. No new Owner question
+was needed; the explicit approval and terminal evidence resolve the scope. Files
+were authored in place, not regenerated. Checklist 16/16 and the unratified
+constitution stay unchanged; no extension hooks are configured.
+
+T057/T058 are complete. Both new q214 regressions failed against the eleven-record
+policy at 04:00:49 UTC: the twelfth record was missing and next-candidate preflight
+refused. Evidence: .scratch/acceptance/q214res/{red.log,red-result.json}; terminal
+run/jobs were independently retained in terminal-status.json at 03:58:33 UTC.
+T059 is now complete. Focused `Reservation|ReservedDraft` checks passed 487
+test/subtest results without skips (.scratch/acceptance/q214res/focused-result.json).
+Fresh GET-only observation replay at 04:03:46 UTC accepted all twelve matching
+drafts and twenty-four explicitly absent refs. The previous eleven canonical
+records and q214 draft matched; approvals remained empty and all seven artifacts
+were observed without a signed manifest. Asset metadata matched preserved copies
+independently hashed before cancellation; this replay did not redownload them.
+Evidence: q214res/current-observations/result.json. Independent code review found
+no blocker. T060/T061 are complete after final documentation reconciliation and
+local checks. The full release-tool package passed 1,529 test/subtest results in
+455.123s with the existing controlling-terminal test skipped on macOS. Root
+integration passed 289 with three existing Linux/real-SSH skips. `go vet ./...`,
+Go formatting, Markdown links and whitespace checks passed. Go used 1.26.6,
+umask 022 and the scoped q214res/t directory; its default timeout was unchanged.
+Receipts: q214res/{release-full,root-integration,vet}-result.json. No local race or
+unchanged Rust rerun is claimed; native CI will execute the full normal/race and
+Rust checks. T062 awaits exact-source push/CI. Prior T056 stays complete.
+T018 remains unverified: cancellation supplies no live pass, cleanup proof or
+current readiness. No new signing, burn, deletion or publication is authorized.
+
+Installed Analyze/Converge checked the bounded continuation against current source
+and all existing artifact mappings: 15 FRs, eleven SCs, three stories and 62 tasks.
+FR-015/SC-011 and all earlier criteria have tasks; no new ambiguity, unmapped
+work, rule conflict, missing implementation or unrequested behavior was found.
+The stages themselves were read-only; this later authorized transcription records
+the results. Full-check/CI evidence (T061/T062) and live proof (T018) are existing
+partial outcomes, so no duplicate tasks or whole-project convergence claim were
+added. Checklist markers, unratified constitution and authority remain unchanged.

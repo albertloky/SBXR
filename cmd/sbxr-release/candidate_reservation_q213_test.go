@@ -20,11 +20,11 @@ func TestQ213ExactSignedUnqualifiedReservation(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 11 || !reflect.DeepEqual(policy[10], expected) {
+	if len(policy) != 12 || !reflect.DeepEqual(policy[10], expected) {
 		t.Fatal("the exact signed, unqualified build 213 must be the eleventh reservation")
 	}
 	if !checkCandidateReservations(reservationFixture(), nil) {
-		t.Fatal("unchanged eleven-draft set refused")
+		t.Fatal("unchanged twelve-draft set refused")
 	}
 	for _, identity := range []struct {
 		tag       string
@@ -37,7 +37,7 @@ func TestQ213ExactSignedUnqualifiedReservation(t *testing.T) {
 			t.Fatal("build 213 identity may be reused")
 		}
 	}
-	if reservedCandidate("v3.1.140", 214, 8) {
+	if reservedCandidate("v3.1.141", 215, 8) {
 		t.Fatal("fresh candidate incorrectly reserved")
 	}
 	for name, change := range map[string]func(*reservationObservations){
@@ -75,7 +75,7 @@ func TestQ213ExactSignedUnqualifiedReservation(t *testing.T) {
 func TestQ213ReservationBindsNextCandidateWithoutOmissionOrRelabeling(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.140", 214
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.141", 215
 	facts.ReservedIdentities = approvedCandidateReservations()
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
 		t.Fatalf("fresh candidate with exact reservations: %v", err)
@@ -90,7 +90,7 @@ func TestQ213ReservationBindsNextCandidateWithoutOmissionOrRelabeling(t *testing
 		"run":            func(f *qualificationFacts) { f.ReservedIdentities[10].RunID = "42023983740" },
 		"tag reuse":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.139" },
 		"sequence reuse": func(f *qualificationFacts) { f.Candidate.BSequence = 213 },
-		"skip sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 215 },
+		"skip sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 216 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := facts

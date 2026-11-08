@@ -213,3 +213,18 @@ worst-case fit, and real HTTP/Karing/interrupted-state cleanup remains unmeasure
 Those are explicit readiness limits, not reasons to weaken existing checks or
 create a new blanket operational prohibition. No new Owner policy decision was
 needed for this bounded offline implementation.
+
+## Build 214 retention — 2026-11-08
+
+Decision: preserve the exact approved cancelled draft through the existing fixed
+reservation policy. The run ended cancelled at attempt 1; sign job 128408019970
+was cancelled with no steps, and cleanup-unqualified job 128621544278 failed with
+no steps. Its failure cause is unproved. No manifest or formal unsigned proof is
+established, so retain unknown signing without a fabricated digest. Existing
+q203 demonstrates that state without a new schema.
+
+Cancellation does not reserve/free the sequence, extend its old declaration or
+permit another attempt. Reject finalizer retry, forced cancellation, burn, deletion,
+reusing 214 or inheriting q213's signed state. The approved asset bytes and original
+proposal are retained evidence; fresh observations and final-source checks still
+precede adoption claims. The dated report records timestamps and limitations.

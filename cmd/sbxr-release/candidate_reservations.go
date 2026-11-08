@@ -23,7 +23,7 @@ type candidateReservation struct {
 	Tag                         string          `json:"tag"`
 }
 
-// Source-controlled Owner decisions of 2026-10-29, 2026-10-31, 2026-11-01, 2026-11-04, 2026-11-05 and 2026-11-06. Return fresh values so callers
+// Source-controlled Owner decisions of 2026-10-29, 2026-10-31, 2026-11-01, 2026-11-04, 2026-11-05, 2026-11-06 and 2026-11-08. Return fresh values so callers
 // cannot mutate the policy. Changing this record requires a separate review.
 func approvedCandidateReservations() []candidateReservation {
 	return []candidateReservation{{
@@ -146,6 +146,16 @@ func approvedCandidateReservations() []candidateReservation {
 			{ID: 713400881, Name: "sbxr-linux-amd64.tar.gz", Size: 6236661, Digest: "b6863602a4c4aeaaaa9e4015b0fd784cfba40a4051b007118d59970a302dc8d5"},
 			{ID: 713400886, Name: "sbxr-linux-arm64.tar.gz", Size: 5335640, Digest: "667326fc04d4554fcfcf5fb86d314e04bc4e14f6a307a0d9a20c975ef3e4c7aa"},
 		},
+	}, {
+		Tag: "v3.1.140", Sequence: 214, ReleaseID: 437573394,
+		Commit: "3c3735dcd3ebca409ccdaba277a0d50deb0b9432", RunID: "42370644704", SigningState: "unknown",
+		ReleaseIndexSHA256: "acbe7179311bd52e2b83f9a063747a6a515c0047e754002a4bef59cd80f5fb69",
+		Assets: []observedAsset{
+			{ID: 720694599, Name: "install.sh", Size: 76781, Digest: "3a9276acd48156aa72bec598c7cc73c7a2fb59ac5b20cc0f606b390e5a7ccf97"},
+			{ID: 720694593, Name: "release-index.json", Size: 609, Digest: "acbe7179311bd52e2b83f9a063747a6a515c0047e754002a4bef59cd80f5fb69"},
+			{ID: 720694592, Name: "sbxr-linux-amd64.tar.gz", Size: 6236680, Digest: "2744f7f9d2c5b5fcc79f061a5b0cff2e7d288a302a1847ee17ec50f2010d1923"},
+			{ID: 720694600, Name: "sbxr-linux-arm64.tar.gz", Size: 5335593, Digest: "842b39c302535f6a07927e678a25f05ba028a47f13cddf12c51cf84ebe7cc9df"},
+		},
 	}}
 }
 
@@ -214,8 +224,8 @@ type reservationObservations struct {
 
 func checkCandidateReservations(observed reservationObservations, allowed []string) bool {
 	policy := approvedCandidateReservations()
-	// The Owner-approved exception is exactly these eleven retained identities.
-	if len(policy) != 11 || observed.Releases == nil || len(observed.Refs) != len(policy) {
+	// The Owner-approved exception is exactly these twelve retained identities.
+	if len(policy) != 12 || observed.Releases == nil || len(observed.Refs) != len(policy) {
 		return false
 	}
 	for i, r := range policy {
