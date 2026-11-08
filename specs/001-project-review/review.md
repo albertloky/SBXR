@@ -705,3 +705,30 @@ The stages themselves were read-only; this later authorized transcription record
 the results. Full-check/CI evidence (T061/T062) and live proof (T018) are existing
 partial outcomes, so no duplicate tasks or whole-project convergence claim were
 added. Checklist markers, unratified constitution and authority remain unchanged.
+
+
+### Build 214 retention CI closeout
+
+Reservation implementation `d024fd08da1448a08505e3fae949deccdcf5da5a` reached main
+on the one permitted retry after the initial push was denied before execution.
+[Verify 42446018772](https://github.com/albertloky/SBXR/actions/runs/42446018772),
+attempt 1, completed successfully at 2026-11-08 04:45:32 UTC. Fresh GitHub checks
+confirmed the exact head and all four successful native/assembly jobs. Receipt:
+`.scratch/acceptance/q214res/ci-completed.json`; the earlier denial receipt remains.
+
+Both architectures passed full normal/race Go suites (ten package summaries each),
+vet, module verification, Rust formatting/Clippy, 698 product Rust tests with two
+ignored, twelve packaging-tool Rust tests and five Python packaging tests.
+Release-tool normal/race times were 326.637s/544.358s on amd64 and
+260.274s/465.960s on arm64, below the unchanged 600-second test limit. Non-verbose
+Go output does not expose individual skip counts. The ignored Rust tests are
+`blocked_output_child` (parent-invoked timeout fixture) and
+`measure_same_image_verification` (manual timing).
+
+Both native archives and both four-asset assemblies passed, including closed
+command dispatch and secret-marker scans; no workflow steps were skipped.
+This closes SC-011/T062 and supersedes their pending checkpoint. T018 stays open.
+The retained candidate source remains `3c3735dcd3ebca409ccdaba277a0d50deb0b9432`,
+separate from the reservation implementation. Cancellation, unknown signing,
+omitted manifest and the unproved cleanup-job failure cause are unchanged.
+No new live attempt, signing, burn, deletion or publication occurred.

@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-05
 
-**Status**: Prior repairs verified; build-214 reservation implemented after cancellation; local checks and fresh replay passed; exact-source CI pending; live criterion T018 unverified
+**Status**: Prior repairs and build-214 reservation verified in native CI; T062 closed for d024fd0; live criterion T018 unverified
 
 **Input**: Owner requested the full Spec Kit process to review and improve the entire
 existing SBXR project after the failed live run, including requirements and design.

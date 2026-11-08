@@ -53,7 +53,7 @@ a fresh clone. Start new work with the [current guide](../README.md).
 ## Release attempts and publication
 
 - [q214 cancellation and retained reservation — 2026-11-08](q214-retained-reservation-2026-11-08.md)
-  — cancelled run and exact unknown-signing reservation; focused checks/replay passed, broader validation and CI pending.
+  — cancelled run and exact unknown-signing reservation preserved; local checks, fresh replay and all four implementation CI jobs passed.
 
 - [q213 retained reservation — 2026-11-06](q213-retained-reservation-2026-11-06.md)
   — exact signed-unqualified draft preserved after explicit approval; original failure and evidence retained.

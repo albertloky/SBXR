@@ -2,9 +2,9 @@
 
 The Owner approved cancelling only run 42370644704 and preserving its exact
 unqualified draft through the existing fixed reservation policy. Cancellation
-has completed; the exact reservation is implemented and focused checks/fresh
-observation replay passed. Broader verification and CI remain pending. Build 214 cannot be reused or promoted. No new live attempt or
-publication is included.
+has completed; the exact reservation is on main and passed local checks, fresh
+observation replay and all four Verify jobs. Build 214 cannot be reused or
+promoted. No new live attempt or publication is included.
 
 ## Terminal outcome and signing evidence
 
@@ -82,3 +82,26 @@ No draft/body/asset/tag mutation, burn, deletion, new signing, live/VPS/client/
 security change, cleanup execution or publication belongs to this retention.
 The cancelled run and failed cleanup-unqualified result keep their original
 conclusions. This records neither host/client readiness nor cleanup completion.
+
+
+## Exact-source CI closeout
+
+Reservation implementation `d024fd08da1448a08505e3fae949deccdcf5da5a` reached main
+on the authorized retry; the first push was denied before execution.
+[Verify 42446018772](https://github.com/albertloky/SBXR/actions/runs/42446018772),
+attempt 1, passed all four native/assembly jobs, completing at 04:45:32 UTC.
+Fresh GitHub verification and q214res/ci-completed.json bind that exact result.
+This closes T062 and supersedes the pending-CI checkpoint above.
+
+Each architecture passed full normal/race Go suites, vet/module verification,
+Rust formatting/Clippy, 698 product Rust tests (two ignored), twelve packaging-tool
+Rust tests and five Python packaging tests. Release-tool normal/race durations
+were 326.637s/544.358s on amd64 and 260.274s/465.960s on arm64, below the unchanged
+600-second limit. Individual Go skip counts are unavailable in non-verbose logs;
+no workflow steps were skipped. Both native archives, four-asset assemblies,
+closed-dispatch checks and secret-marker scans passed.
+
+The original candidate source remains `3c3735dcd3ebca409ccdaba277a0d50deb0b9432`.
+Its cancellation, unknown signing, absent manifest and preserved draft/assets
+are not changed by reservation CI. T018's live criterion remains open. No new
+live attempt, signing, burn, deletion or publication was performed.
