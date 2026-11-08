@@ -283,3 +283,53 @@ Run relevant focused/broad retained-tooling checks, review and final-source CI.
 Record cancellation and unknown signing separately from reservation adoption in
 ADR-0032, the indexed dated report and the existing feature artifacts. Keep all
 earlier dated counts/results intact; T018 and future live prerequisites remain.
+
+## Offline no-reply containment — 2026-11-08
+
+Add one operator-only state-machine helper and adjacent tests. Its injected
+operation boundary must receive an absolute per-operation deadline, return
+independently verified observations and retain exclusive intent/outcome evidence.
+Use the existing 900/1200-second cleanup row allocations, replacing supported
+removal by stop-only service containment and secret deletion by retained-data
+verification. No product, workflow, signed clock or permission-policy change.
+Rehearse the composed order and failures with real bounded local subprocesses and
+filesystem snapshots; no SSH, systemctl, native client or live transport execution.
+Do not expose a native command line until the concrete native observers/callers
+are bound and reviewed. Missing native bindings remain an explicit launch blocker.
+
+## Concrete containment caller continuation — 2026-11-08
+
+Replace the unbound operation boundary with pinned subprocess callers. Every
+foreground caller has one enforced wall/monotonic deadline and independent
+remote supervision where needed; uncertain completion is never retried. Add a
+stop-only host payload with strict machine/authority/unit checks and separate
+retained-data verification. Bind outside/client/transport phases to their
+existing producers where compatible, keeping explicit retention validators
+separate from removal-absence validators. Native UI restoration remains an
+attended CUA operation with a finite acknowledgement deadline and independent
+readback; no CLI writes to Karing storage. Fixture transports and native files
+are explicitly injected, never substituted for a live result.
+
+
+Offline caller closure is now implemented and rehearsed (see the subsequent review
+entry). Before native admission, bind actual producer inputs without changing the
+original clocks: validate the prepared ownership review and prior process records;
+perform the bounded read-only host-scope freeze with candidate source unit pins;
+freeze exact outside/local inventories; supply fresh direct CUA readback and the
+real job's action-time disposal confirmation. The generated proposal lists every
+static runtime path and every actual-input field. Keep its `ready_for_live: false`
+until the existing admission workflow has independently verified the full closure.
+No native duration is inferred from the short fixture rehearsal.
+
+
+## Admission compatibility repair — 2026-11-08
+
+Promote the shared immutable host-baseline read into maintained repository code
+and bind the current prepared cleanup consumer to its exact bytes. Use the actual
+bounded SSH capture location; preserve captured data and previous source pins as
+historical evidence. Normalize only the established regular-file type addition
+when comparing legacy original metadata after transport restoration. Cover both
+positive compatibility and changed-path/source/hash/mode/type/inode refusals.
+Review the complete local containment patch, run root integration/static checks,
+commit/push main and verify exact-source CI. No VPS/client access, dispatch,
+signing, deletion or publication is part of this repair.

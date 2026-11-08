@@ -20,6 +20,14 @@ func TestMVPEvidenceAssemblyFixtures(t *testing.T) {
 	}
 }
 
+func TestMVPRetainedContainmentFixtures(t *testing.T) {
+	for _, path := range []string{".github/scripts/test_mvp_retained_containment.py", ".github/scripts/test_mvp_containment_host.py", ".github/scripts/test_mvp_containment_readbacks.py", ".github/scripts/test_mvp_containment_process.py", ".github/scripts/test_mvp_containment_freeze.py", ".github/scripts/test_mvp_host_baseline.py"} {
+		if output, err := exec.Command("python3", "-B", path).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", path, err, output)
+		}
+	}
+}
+
 func TestNativeKaringReceiptReadbacks(t *testing.T) {
 	for _, path := range []string{".github/scripts/test_native_receipts.py", ".github/scripts/test_native_settings.py", ".github/scripts/test_native_profiles.py", ".github/scripts/test_capture_native.py"} {
 		if output, err := exec.Command("python3", "-B", path).CombinedOutput(); err != nil {

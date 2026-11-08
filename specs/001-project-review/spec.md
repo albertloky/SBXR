@@ -320,3 +320,16 @@ US3 acceptance: cancellation does not free build 214 or qualify its bytes. A fre
 candidate must still pass global allocation/collision checks. Retention supplies
 no signing, burn, deletion, finalizer retry, new live attempt, VPS/client/security
 change, cleanup execution or publication authority. T018 remains open.
+
+## Approved offline continuation: no-reply containment — 2026-11-08
+
+Prepare the explicitly requested non-destructive fallback for a deferred deletion
+confirmation. A missing/declined reply supplies no deletion authority or clock
+credit. The fallback stops only freshly verified test-owned serving resources,
+preserves test data and prior failure evidence, restores original client use, and
+requires independent closed-port/process, retained-data and transport-restoration
+proof. It reports failed qualification with retained data, never completed removal.
+Unknown ownership, stale identity, a prior uncertain action or insufficient full
+budget must refuse effects. No automatic destructive fallback, retry, timestamp
+reset, extra attempt or live validation follows from the offline rehearsal.
+Transport's automatic key disposal still requires its actual action-time approval.

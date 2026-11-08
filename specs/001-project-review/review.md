@@ -732,3 +732,105 @@ The retained candidate source remains `3c3735dcd3ebca409ccdaba277a0d50deb0b9432`
 separate from the reservation implementation. Cancellation, unknown signing,
 omitted manifest and the unproved cleanup-job failure cause are unchanged.
 No new live attempt, signing, burn, deletion or publication occurred.
+
+## Offline no-reply containment — 2026-11-08
+
+T063–T065 implement and rehearse the requested offline-only operator sequence;
+they do not close native admission or T018. The installed speckit-implement
+workflow's prerequisites and 16/16 requirements checklist were checked, with no
+extension hooks. Existing specification/plan/tasks were updated for this bounded
+continuation; the unratified constitution and project rules remain unchanged.
+
+The initial test failed because the new helper did not exist. Final verification
+passed 28 adjacent cases, including real local fixture-process termination, the
+existing operator runner's real timeout and no replay, plus 17 unchanged operator
+regressions. The focused Go integration wrapper passed using installed Go 1.26.6
+and network-disabled dependencies; no GitHub CI or live check was run. Diff review
+corrected 40-character Git-source handling, retained failed observations, refused
+a late tightened cutoff, distinguished requested retention from proved retention,
+and pinned/fsynced the exclusive evidence directory before effects.
+
+Artifacts: .scratch/acceptance/q215-full-20261108-134927/readiness/containment-*;
+new temporary fixtures under .scratch/acceptance/nrc/t were empty after testing.
+Selected 900/1200-second sequence allocations and proposed 1170/1470-second
+confirmation-inclusive totals are not measured VPS/Karing timings. The helper
+has no native CLI, host/client/transport adapters or live caller binding. Those
+remain the practical next integration step; callback timeouts must be independently
+enforced and actual observations must be bound to the signed candidate. No
+dispatch, signing, deletion, live-system access or publication occurred in this
+continuation. Automatic transport-key disposal still needs action-time confirmation.
+
+
+## Concrete caller rehearsal — 2026-11-08
+
+T066–T068 complete the offline continuation using the installed Spec Kit implement
+workflow and existing specification; these focused artifact updates are manual.
+Nine phase entries now bind 66 source dependencies, real local supervision,
+strict host payloads, prepared outside/failure producers and retained-native/
+transport readbacks. A separate proposed binding file leaves actual run and
+observation inputs absent. No original native-input binding or old evidence was
+rewritten. The CLI still refuses a missing actual producer-bound scope.
+
+The native retention fixture first reproduced rejection of the deliberately
+retained candidate as an original-profile change. It now verifies original profiles
+separately and pins all retained candidate bytes. Caller review also caught reused
+verification labels, a separate transport import during failure submission, and an
+unloaded fragment falsely qualifying as service absence; each is corrected. Preservation now also covers archive membership and directory/symlink metadata. The
+Go wrapper initially failed on the changed refusal-message assertion; that check
+was updated to the actual missing-scope refusal and the failed output was retained.
+
+Final checks: 68 maintained Python cases passed through the focused Go wrapper
+(2.832 seconds, Go 1.26.6, network disabled), plus one private composition of the
+actual prepared outside caller, host payload, native file readbacks and coordinator
+(1.206 seconds). Real local subprocess timeout, signal forwarding and no replay
+were exercised. Public fixtures were removed; the run temporary directory is empty.
+The 17 unchanged supervisor regressions from the prior checkpoint remain applicable.
+These results do not cover Linux systemd, SSH loss, native CUA restoration or live
+failure submission. No GitHub CI was run for this uncommitted work.
+
+At 15:24 HKT, the original 17:49:27 dispatch, 18:49:27 testing and 19:19:27 cleanup
+cutoffs remained open. Admission was still pending, not established: readiness was
+stale, the new helper closure had not been incorporated into final admission, and
+actual live-job disposal confirmation remained required. Selected caps remain
+900/1200 seconds, or 1170/1470 including the proposed review/reply coordination;
+transport observation is 1350 seconds plus 450 reserve. No measured native timing
+or guaranteed completion follows. Manual M3's separate handoff still cannot fit.
+
+Evidence: `.scratch/acceptance/q215-full-20261108-134927/readiness/containment-bound-*`,
+`containment-bindings.proposed*.json`, and `containment-composed-final-v2.log`.
+Source main stays 78e26e7ae5c4d23335ffecf79f02a1da5c0453a8. No live access,
+dispatch, signing, product/data deletion or publication occurred. T018 remains open.
+
+
+## Admission compatibility repair — 2026-11-08
+
+The later fresh admission review refused before dispatch. It found two integration
+mismatches not covered by the earlier 68-case suite: the valid host baseline was
+captured under `live/`, but the consumer required `readiness/`; original file
+metadata omitted `kind`, while the newer transport observation added it. Separate
+red logs preserve both failures. Neither failure was a VPS test outcome.
+
+The canonical `mvp-host-baseline.py` reader now binds the actual producer location
+and retains all source/host, byte, required-path and inspection-result checks. The
+current prepared safety verifier delegates to its pinned bytes; its old source is
+preserved privately. The actual 154-path retained baseline now passes that reader
+unchanged. The transport comparator adds only `kind: regular` to the older original
+regular-file record. Regression cases retain strict content, permission, size and
+CA inode checks, and the existing hosts inode exception. No historical evidence
+was moved or rewritten. The added 6 baseline and 2 metadata regressions pass.
+
+The prior prepared operator bundle remains bound to source 78e26e7 and its original
+window; a repository commit does not silently rebind that bundle. Before any later
+live admission, use the reviewed committed source, regenerate the caller bindings
+and complete actual readiness/cleanup closure. New source CI is still pending at
+this pre-commit checkpoint. No live access or effect occurred during the repair.
+
+
+Repair validation before commit: all 76 focused containment/baseline cases are
+included in `go test -count=1 .`, which passed in 122.527 seconds on macOS with
+network-disabled cached Go 1.26.6 dependencies. `go vet .`, Python parsing and
+`git diff --check` passed. The private concrete-caller composition passed in
+1.017 seconds; the actual baseline-consumer replay retained identical bytes.
+The full change was reviewed for affected caller imports, fixed identities,
+source pins, no-replay journals, absolute budgets, refusal paths and preserved
+records. This is local/offline verification, not native VPS qualification.

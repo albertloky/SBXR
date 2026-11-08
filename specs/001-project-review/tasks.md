@@ -289,3 +289,30 @@ attempt 1. The full native normal/race suites and assembly checks passed without
 changing their timeout or coverage. The report, review and retained receipt record
 the exact evidence. This closes T062 and supersedes the pre-CI checkpoint above.
 T018 remains open; no live proof or future attempt follows from reservation CI.
+
+## Phase 15: US3 — Offline no-reply containment
+
+- [x] T063 [US3] Implement the fixed containment sequence, no-replay intents, exact identity/ownership and retained-data checks, and absolute row budgets without destructive/native CLI effects.
+- [x] T064 [US3] Rehearse success, partial install, changed ownership, deadlines, missing replies, uncertain effects and retained evidence through adjacent tests using bounded real fixture subprocesses.
+- [x] T065 [US1] Record the exact actions, timing, practical next step and native-integration/confirmation limits; keep T018 open and do not dispatch.
+
+These tasks authorize offline preparation only. A fixture success does not bind
+actual live ownership, grant deletion approval or complete native caller admission.
+
+## Phase 16: US3 — Concrete containment callers
+
+- [x] T066 [US3] Bind the fixed sequence to supervised concrete host, outside, native-retention and transport-observation callers without invoking live systems.
+- [x] T067 [US3] Rehearse actual caller composition, interruption, unchanged deadlines and negative verification with explicit fixture transports/files.
+- [x] T068 [US1] Record current-window viability, complete bindings and remaining live prerequisites without dispatch or deletion.
+
+Phase 16 offline closeout: nine concrete phase callers and source pins are prepared;
+68 maintained regressions and one private prepared-caller composition pass. Actual
+run/failure/ownership/UI inputs are intentionally absent. This closes offline
+T066–T068, not native admission or T018. Current changes remain local and uncommitted.
+
+
+## Phase 17: US3 — Admission preservation compatibility
+
+- [x] T069 [US3] Reproduce and fix actual host-baseline location and legacy metadata compatibility without moving preserved evidence or weakening identity/integrity checks.
+- [x] T070 [US3] Review affected consumers and the complete local containment changes; pass regression and applicable repository checks.
+- [ ] T071 [US3] Commit and push reviewed work to main, verify exact-source CI and report unchanged-window limits without dispatch.

@@ -261,3 +261,68 @@ remain required under the approved scope. A missing capability or infeasible
 remaining budget stops admission. Unknown live duration alone is not converted
 into either a guarantee or permission for a new test. No successful simulation,
 current host readiness or live qualification is asserted by this document.
+
+## Offline no-reply containment rehearsal
+
+The stop-only coordinator, `mvp-retained-containment.py`, now has concrete
+process, host, native readback and transport-comparison adapters beside it in
+`.github/scripts/mvp-containment-*.py`. The binding factory freezes all nine
+phase callers and their source dependencies without executing them. Its output
+is explicitly **not ready for live use**: an actual signed run, immutable failure,
+request/clock, authenticated ownership review, host scope, outside process IDs,
+original baselines and fresh CUA observations still have to be bound. A file
+claiming confirmation does not itself grant permission.
+
+The sequence preserves original cutoffs and failure identity, records exclusive
+intents and refuses replay. The host payload checks actual machine/boot/run and
+manifest anchors, exact authority and executable bytes, fragment/drop-in pins,
+process/cgroup ownership, activation dependencies and absence of stop hooks.
+Its only service effects are `systemctl disable --now` for the proved present
+`sbxr-subscription.service` and `sing-box.service`. An absent unit must also have
+no unloaded fragment or drop-in. Changed or unknown ownership refuses.
+
+The process adapter runs checked source bytes through the existing bounded
+operator supervisor and forwards interruption signals. The native entry uses the
+prepared SSH transport's independent remote watchdog and the earlier of the
+original request, runtime and signed deadlines. An uncertain stop is never
+replayed or recorded as success. Losing SSH does not prove a systemd job stopped.
+Subsequent checks require inactive/disabled services, empty candidate cgroups,
+closed ports, preserved SSH, unchanged unrelated state and unchanged retained
+files. Karing restoration is a direct CUA work item, followed by canonical file
+readbacks; no CLI app-state mutation or profile deletion is offered.
+
+The 900/1200-second cleanup allocations are retained: the 400-second product row
+becomes stop-only containment; the 90-second disposal row becomes retained-data
+and original-client verification. Proposed pre-review 180 seconds, response wait
+60 seconds and coordination 30 seconds give 1170/1470 seconds in total. These
+are enforced stop allocations, **not measured native completion times**. M3's
+separate 300-second manual handoff plus 30 seconds recording still lacks a strict
+fit; direct CUA must be ready and every next operation must fit its whole cap.
+
+The existing failure finalizer records failure with **incomplete cleanup** and
+submits only once. This may trigger the existing workflow's automatic transport
+teardown; it therefore requires the real live-job action-time confirmation before
+that job starts. The separate read-only transport observation uses 1350 seconds
+(including supervision/SSH overhead) plus a 450-second reserve within the original
+final cutoff. It verifies original trust/hosts/routing restoration and unchanged
+retained installation; it does not itself execute teardown. Keeping temporary
+trust or routing active is not a retention option.
+
+Offline tests exercise real local processes, timeout/interruption, public fixture
+files, actual host payload logic and native readback code. They do not exercise
+Linux systemd, SSH loss, the live failure-finalization boundary or CUA restoration.
+No fixture proves those timings. Success of this fallback means **contained with
+retained data**, never completed cleanup or qualification. Packages, account,
+configuration, disposable credentials, profiles and captures remain protected and
+must be reported for later specifically approved removal. Do not admit a run
+without closure of the actual callers, current readiness and full remaining budget.
+
+
+The canonical `mvp-host-baseline.py` reader uses the bounded SSH producer's exact
+`live/host-baseline.operator.stdout` location. It preserves source/host, byte,
+required-path and successful-inspection checks. Do not move original evidence to
+satisfy an outdated consumer path. The transport comparison accepts the original
+regular-file metadata format, whose digest establishes its type, and the explicit
+`kind: regular` field produced by newer snapshots. Other recorded fields remain
+exact; only the existing hosts-file inode exception applies. Changed file type,
+permissions, digest, size or CA-bundle inode still refuses.
