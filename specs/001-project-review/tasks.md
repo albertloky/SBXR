@@ -308,11 +308,16 @@ actual live ownership, grant deletion approval or complete native caller admissi
 Phase 16 offline closeout: nine concrete phase callers and source pins are prepared;
 68 maintained regressions and one private prepared-caller composition pass. Actual
 run/failure/ownership/UI inputs are intentionally absent. This closes offline
-T066–T068, not native admission or T018. Current changes remain local and uncommitted.
+T066–T068, not native admission or T018. At that checkpoint the changes were local;
+the Phase 17 closeout below records their subsequent commit, push and CI.
 
 
 ## Phase 17: US3 — Admission preservation compatibility
 
 - [x] T069 [US3] Reproduce and fix actual host-baseline location and legacy metadata compatibility without moving preserved evidence or weakening identity/integrity checks.
 - [x] T070 [US3] Review affected consumers and the complete local containment changes; pass regression and applicable repository checks.
-- [ ] T071 [US3] Commit and push reviewed work to main, verify exact-source CI and report unchanged-window limits without dispatch.
+- [x] T071 [US3] Commit and push reviewed work to main, verify exact-source CI and report unchanged-window limits without dispatch.
+
+Phase 17 closeout: implementation commit 08fdb27 and all four jobs in Verify run
+42460297957 passed. Original window cutoffs and live prerequisites remain unchanged;
+T018 stays open. See review.md for the exact source and evidence.

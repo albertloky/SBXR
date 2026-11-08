@@ -834,3 +834,25 @@ network-disabled cached Go 1.26.6 dependencies. `go vet .`, Python parsing and
 The full change was reviewed for affected caller imports, fixed identities,
 source pins, no-replay journals, absolute budgets, refusal paths and preserved
 records. This is local/offline verification, not native VPS qualification.
+
+
+## Admission repair CI closeout — 2026-11-08
+
+The reviewed containment work and both admission fixes were committed and pushed
+to GitHub main as `08fdb27c4dd48ffbfec8cddbdfd7a9d8dae833e6`. All four jobs in
+[Verify run 42460297957](https://github.com/albertloky/SBXR/actions/runs/42460297957)
+passed on that exact source: native and assembled installer/updater checks on
+amd64 and arm64. Native jobs include Rust formatting, Clippy and tests, packaging
+tests, retained Go tests and race tests, vet and module verification. T071 is
+complete; the preceding local-only/pending-CI statements are dated checkpoints.
+
+The installed implementation skill's post-execution hook check found no
+`.specify/extensions.yml`; no hook was skipped. The unratified constitution,
+project rules and T018 remain unchanged.
+
+This documentation closeout does not qualify build 215 or rebind the prepared
+operator bundle from 78e26e7. Fresh source/caller binding, readiness and cleanup
+closure, adequate remaining budgets and the actual live-job disposal confirmation
+are still required. The original 17:49:27 dispatch, 18:49:27 signed/product-finish
+and 19:19:27 cleanup cutoffs (Hong Kong time, 2026-11-08) remain fixed.
+No dispatch, live access, deletion, signing or publication occurred in this repair.
