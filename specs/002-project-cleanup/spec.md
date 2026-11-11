@@ -2,7 +2,7 @@
 
 **Feature Branch**: `main`
 **Created**: 2026-11-11
-**Status**: Completed maintenance pass; protected-boundary refactors intentionally deferred
+**Status**: Cleanup pushed; CI teardown-fixture repair in progress
 **Input**: User description: "use spec kit to cleanup the whole sbxr project"
 
 ## User Scenarios & Testing
@@ -70,6 +70,8 @@ digest comparisons pass before and after each replacement.
 - **FR-007**: Replace confirmed redundant pure output transformations with established equivalents while preserving exact rendered bytes and all validation/error contracts.
 - **FR-008**: Prove source simplifications using existing independent fixtures and applicable offline checks before and after changes.
 
+- **FR-009**: Fixture teardown MUST join its own serving work and close its clients without assuming a released network address remains unallocated; repair CI failures without changing product behavior or weakening owned-resource checks.
+
 ## Success Criteria
 
 ### Measurable Outcomes
@@ -80,6 +82,8 @@ digest comparisons pass before and after each replacement.
 - **SC-004**: Every delivered change has a stated reason and verification result; deferred work is clearly identified.
 - **SC-005**: Two identified redundant output implementations are removed with unchanged independent fixture and digest results.
 - **SC-006**: Applicable focused and broad offline source checks pass, with platform omissions stated.
+
+- **SC-007**: A deterministic occupied-address regression fails before the repair and passes after; focused local checks and exact-source CI pass.
 
 ## Assumptions
 

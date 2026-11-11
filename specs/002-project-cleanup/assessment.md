@@ -131,3 +131,33 @@ The qualification-owned feature and original untracked `.agents/` / `.specify/`
 remain unchanged. No current authorization blocker remains for this completed
 maintenance scope; optional historical-document splitting and security-boundary
 refactors are intentionally not part of these behavior-preserving changes.
+
+
+## CI fixture follow-up
+
+The two cleanup commits were subsequently pushed to GitHub main without force.
+Verify run [43000171352](https://github.com/albertloky/SBXR/actions/runs/43000171352)
+failed in the amd64 composed subscription fixture at its post-join port-rebind
+assertion. The fixture and serving implementation were unchanged by both cleanup
+commits. The log discarded the bind error, so the exact cause of that CI bind
+failure is unresolved; competing address allocation is a supported hypothesis,
+not an observed identification of the competing socket.
+
+The assertion checks global address availability after ownership has ended.
+A separate real-socket experiment closes and joins the original listener owner,
+rebinds the same address in a replacement owner, and observes AddrInUse from the
+old assertion. The maintained regression deterministically injects an occupied
+saved address while stopping the real serving thread; it failed at the original
+assertion before repair. It now verifies that the old client closes and the
+unrelated listener remains usable. Cancellation, join, and Code::Stopped checks
+remain. No product implementation, timeout, dependency or release logic changed.
+
+Local repair checks: 47 composed subscription tests pass, including the new
+regression and the originally failing case; 27 runtime-handoff and 15 serving
+integration tests pass. Strict all-target Clippy, formatting and diff checks pass.
+Spec Kit prerequisites resolve feature 002 without changing the feature-001
+selector; the 16-item checklist remains satisfied. Nine requirements, seven success
+criteria and 18 tasks cover the continuation. Raw CI evidence, the red regression,
+socket experiment and green checks are retained under `.scratch/acceptance/cf11/`.
+Native CI verification is the remaining T018 closeout gate; its result will be
+recorded in the run receipt and completion response. No live validation is claimed.

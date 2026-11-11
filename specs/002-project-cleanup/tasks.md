@@ -62,3 +62,13 @@ by two existing integration tests and restored. Full product suite: 690 passed, 
 existing ignored entries, zero failures. Packaging: 12 passed. Strict all-target
 Clippy, formatting, link checks and whitespace pass. Source commit: `799e236`.
 See [assessment.md](assessment.md) for precise limits and preserved areas.
+
+## Phase 7: CI fixture repair
+
+- [x] T015 Preserve failed job 130454055008 evidence in .scratch/acceptance/cf11/ and inspect src/proxyinstallation/subscription_tests.rs teardown callers and unchanged serving implementation.
+- [x] T016 Add an adjacent real-service/socket regression in src/proxyinstallation/subscription_tests.rs and record the original assertion failure in .scratch/acceptance/cf11/red.log.
+- [x] T017 Remove the invalid rebind assertion in src/proxyinstallation/subscription_tests.rs while retaining cancellation/join/code checks; pass regression, full affected module, serving/handoff tests, Clippy and formatting.
+- [ ] T018 Record evidence and uncertainty in specs/002-project-cleanup/assessment.md, commit/push the bounded repair and verify exact-source native CI.
+
+Dependencies: T015 -> T016 -> T017 -> T018. FR-009/SC-007 map to T015–T018.
+The failed run remains a failed run; this phase adds no live or publication authority.

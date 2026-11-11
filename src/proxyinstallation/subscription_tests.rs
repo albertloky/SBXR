@@ -286,8 +286,9 @@ impl Backend {
     fn stop(&mut self) {
         if let Some(active) = self.active.take() {
             active.stop.cancel();
+            // The joined Serve owns listener/worker cleanup. Its released address
+            // can already belong to another test; rebinding cannot prove ownership.
             assert_eq!(active.join.join().unwrap(), Code::Stopped);
-            assert!(TcpListener::bind(active.address).is_ok());
         }
     }
     fn request(&self, token: &str) -> Vec<u8> {
@@ -451,6 +452,53 @@ fn execute<H: SubscriptionHost>(
     assert!(review.prepared.is_some(), "{action}: {:?}", review.refusal);
     m.execute(review.prepared.unwrap(), Confirmation::Approved)
 }
+#[test]
+fn backend_stop_joins_owned_server_without_claiming_saved_address() {
+    let root = Root::new();
+    let archive = Arc::new(crate::release_acquisition::fixture_archive());
+    root.setup(&archive);
+    let proof = archive
+        .bind_current(
+            archive.executable(),
+            archive.executable(),
+            &crate::artifact_trust::SelectionBudget::new(),
+        )
+        .unwrap();
+    let mut m = module(&root, &proof, archive);
+    assert_eq!(
+        execute(&mut m, Action::EnableSubscription).outcome,
+        Outcome::SubscriptionEnabled
+    );
+    let backend = m.host_mut().backend_mut();
+    let active = backend.active.as_mut().unwrap();
+    let mut client = TcpStream::connect(active.address).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+
+    // Model a saved address being occupied by another owner after shutdown.
+    // Retain that listener so this negative case has no allocator race itself.
+    let unrelated = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    active.address = unrelated.local_addr().unwrap();
+    backend.stop();
+    assert!(backend.active.is_none());
+    let mut response = Vec::new();
+    match client.read_to_end(&mut response) {
+        Ok(_) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) => {}
+        Err(error) => panic!("owned connection remained open after stop: {error}"),
+    }
+    let new_client = TcpStream::connect(unrelated.local_addr().unwrap()).unwrap();
+    assert_eq!(
+        unrelated.accept().unwrap().1,
+        new_client.local_addr().unwrap()
+    );
+}
+
 #[test]
 fn enable_rotate_and_runtime_repair_are_real_owner_and_serving_journeys() {
     let root = Root::new();

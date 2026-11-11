@@ -68,3 +68,20 @@ server-configuration fixtures and digest assertions cover the public output boun
 
 No security-boundary deduplication is included. Repeated admission, descriptor,
 transport and recovery checks stay local because their authority/context differs.
+
+## CI teardown repair
+
+Verify 43000171352 failed in an unchanged shared fixture, Backend::stop, after the
+real serving thread joined with Code::Stopped. Its next assertion attempted to
+rebind a now-unowned address. The helper serves all composed subscription tests
+and is called explicitly for StopServing/DisableServing, replacement startup, and
+Drop. Preserve cancellation, join/error/Code checks, and fixture cleanup; remove
+only the invalid global port-availability assertion. Add an adjacent deterministic
+real-service/socket test with an occupied saved address, old-client closure, and
+unrelated-listener preservation. This is test-only; no product code change.
+
+The CI log discarded the bind errno. A competing allocation is consistent with
+the failure, not proven as its exact cause. The new regression establishes the
+pre-existing false-failure condition. Inspect the unchanged production listener
+drop and worker joins and run the whole affected fixture module plus serving and
+handoff tests, strict Clippy/formatting, then the full native CI workflow.
