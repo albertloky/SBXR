@@ -1,5 +1,6 @@
 //! Pure client codecs; no credential generation, serving, authority or disclosure approval.
 //! Go reference: internal/proxyinstallation/adapter/singbox/{subscription,singbox,vmess}.go.
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -95,7 +96,7 @@ impl ConnectionFacts {
             ]);
             let bytes = serde_json::to_vec(&node).map_err(|_| ArtifactError)?;
             artifact.push_str("vmess://");
-            artifact.push_str(&base64_standard(&bytes));
+            STANDARD.encode_string(&bytes, &mut artifact);
             artifact.push('\n');
         }
         if artifact.len() > MAX_SUBSCRIPTION_BYTES {
@@ -304,32 +305,10 @@ fn percent_escape(value: &str) -> String {
     encoded
 }
 
-// Encoding only, not a cryptographic primitive. Go-generated fixtures cover padding.
-fn base64_standard(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let a = chunk[0];
-        let b = chunk.get(1).copied().unwrap_or(0);
-        let c = chunk.get(2).copied().unwrap_or(0);
-        encoded.push(ALPHABET[(a >> 2) as usize] as char);
-        encoded.push(ALPHABET[((a & 3) << 4 | b >> 4) as usize] as char);
-        encoded.push(if chunk.len() > 1 {
-            ALPHABET[((b & 15) << 2 | c >> 6) as usize] as char
-        } else {
-            '='
-        });
-        encoded.push(if chunk.len() > 2 {
-            ALPHABET[(c & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    encoded
-}
-
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+
     #[test]
     fn standard_base64_uses_rfc4648_padding_and_alphabet() {
         for (bytes, encoded) in [
@@ -342,7 +321,9 @@ mod tests {
             (b"foobar", "Zm9vYmFy"),
             (&[251, 255], "+/8="),
         ] {
-            assert_eq!(super::base64_standard(bytes), encoded);
+            let mut artifact = String::from("vmess://");
+            super::STANDARD.encode_string(bytes, &mut artifact);
+            assert_eq!(artifact, format!("vmess://{encoded}"));
         }
     }
 }

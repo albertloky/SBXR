@@ -3,9 +3,10 @@
 //! Rendering grants no installation, disclosure or removal authority. The host
 //! must still validate the pinned package and fresh protected prerequisite files.
 
-use crate::{configuration::STANDARD, subscription_artifact::valid_vmess_hostname};
+use crate::{
+    configuration::STANDARD, records::sha256_hex, subscription_artifact::valid_vmess_hostname,
+};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,7 +212,7 @@ impl ServerConfiguration {
         &self.0
     }
     pub fn sha256_hex(&self) -> String {
-        digest(&self.0)
+        sha256_hex(&self.0)
     }
 
     fn encode(value: Value) -> Result<Self, ConfigurationError> {
@@ -329,7 +330,7 @@ impl TunnelBinding {
         vec![
             format!(
                 "{TUNNEL_UNIT_PATH} root:root 0644 one-link sha256:{}",
-                digest(tunnel_unit().as_bytes())
+                sha256_hex(tunnel_unit().as_bytes())
             ),
             format!("{TUNNEL_UNIT_PATH}.sbxr-next root-owned synchronized no-replace publication"),
             format!("{TUNNEL_WANTS_PATH} root-owned symlink {TUNNEL_WANTS_TARGET}"),
@@ -380,9 +381,6 @@ fn lower_hex(b: u8) -> bool {
 }
 fn valid_digest(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(lower_hex)
-}
-fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn split_destination(value: &str) -> Result<(&str, u16), ConfigurationError> {
