@@ -1,5 +1,8 @@
 # Dependency research
 
+- [Karing 1.2.26/2923 preservation compatibility](karing-1.2.26-preservation.md):
+  exact additional app pair, unchanged strict preservation contract and read-only evidence.
+
 - [bpftrace 0.23.0 provenance and no-mount build assessment](bpftrace-0.23-no-mount.md):
   data-only vendor artifact inspection and missing local development prerequisites.
 

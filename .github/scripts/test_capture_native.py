@@ -33,6 +33,9 @@ def record(path):
 
 
 class NativeCaptureTests(unittest.TestCase):
+    app_version = "1.2.25"
+    app_build = "2802"
+
     def setUp(self):
         self.case = FIXTURES.NativeReadbackTests()
         self.case.setUp()
@@ -51,8 +54,8 @@ class NativeCaptureTests(unittest.TestCase):
                          "routing": {"mode": "unchanged"}, "tun": {"enabled": True}}
         self.write("karing_setting.json", self.settings)
         self.case.write("Info.plist", plistlib.dumps({"CFBundleIdentifier": "com.nebula.karing",
-                        "CFBundleExecutable": "Karing", "CFBundleShortVersionString": "1.2.25",
-                        "CFBundleVersion": "2802"}))
+                        "CFBundleExecutable": "Karing", "CFBundleShortVersionString": self.app_version,
+                        "CFBundleVersion": self.app_build}))
         self.case.write("Karing", b"PUBLIC FIXTURE APP\n")
         (self.root / "Info.plist").chmod(0o644)
         (self.root / "Karing").chmod(0o755)
@@ -341,6 +344,11 @@ raise SystemExit(c.main([sys.argv[2],'--inputs',str(inputs),'--phase',sys.argv[4
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn(self.case.url, result.stdout + result.stderr)
         self.assertFalse((self.root / "m2-native-store.private").exists())
+
+
+class NativeCapture2923Tests(NativeCaptureTests):
+    app_version = "1.2.26"
+    app_build = "2923"
 
 
 if __name__ == "__main__":

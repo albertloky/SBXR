@@ -192,10 +192,11 @@ def settings_binding():
     info = plistlib.loads(info_raw)
     require(isinstance(info, dict) and info.get('CFBundleIdentifier') == 'com.nebula.karing' and
             info.get('CFBundleExecutable') == 'Karing' and
-            info.get('CFBundleShortVersionString') == '1.2.25' and
-            info.get('CFBundleVersion') == '2802', 'Unsupported Karing identity for settings v2')
+            (info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')) in
+            (('1.2.25', '2802'), ('1.2.26', '2923')),
+            'Unsupported Karing identity for settings v2')
     return {'schema': 'sbxr-karing-settings-binding-v2', 'policy': SETTINGS_POLICY,
-            'app': {'version': '1.2.25', 'build': '2802',
+            'app': {'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],
                     'executable_sha256': hashlib.sha256(executable).hexdigest(),
                     'info_plist_sha256': hashlib.sha256(info_raw).hexdigest()},
             'helper_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}

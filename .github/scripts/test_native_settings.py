@@ -31,6 +31,9 @@ def record(path):
 
 
 class NativeSettingsFixture(unittest.TestCase):
+    app_version = "1.2.25"
+    app_build = "2802"
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -63,7 +66,7 @@ class NativeSettingsFixture(unittest.TestCase):
         self.write(self.native, canonical(self.settings))
         self.write(self.info, plistlib.dumps({
             "CFBundleIdentifier": "com.nebula.karing", "CFBundleExecutable": "Karing",
-            "CFBundleShortVersionString": "1.2.25", "CFBundleVersion": "2802",
+            "CFBundleShortVersionString": self.app_version, "CFBundleVersion": self.app_build,
         }), 0o644)
         self.write(self.executable, b"PUBLIC SYNTHETIC APP EXECUTABLE\n", 0o755)
         for name, value in (("NATIVE_APP_INFO", self.info), ("NATIVE_APP_EXECUTABLE", self.executable),
@@ -129,6 +132,31 @@ class NativeAppIdentityTests(NativeSettingsFixture):
                 self.write(self.info, plistlib.dumps(info), 0o644)
                 with self.assertRaisesRegex(ValueError, 'Unsupported Karing identity'):
                     RECEIPTS.settings_binding()
+
+    def test_only_reviewed_version_build_pairs_are_admitted(self):
+        original = plistlib.loads(self.info.read_bytes())
+        for version, build in [('1.2.25', '2802'), ('1.2.26', '2923')]:
+            with self.subTest(version=version, build=build):
+                self.write(self.info, plistlib.dumps(dict(original,
+                    CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
+                binding = RECEIPTS.settings_binding()
+                self.assertEqual((binding['app']['version'], binding['app']['build']), (version, build))
+        for version, build in [('1.2.25', '2923'), ('1.2.26', '2802'),
+                               ('1.2.26', '2924'), ('1.2.27', '2923'), ('', ''), ('1.2.26', 2923)]:
+            with self.subTest(version=version, build=build):
+                self.write(self.info, plistlib.dumps(dict(original,
+                    CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
+                with self.assertRaisesRegex(ValueError, 'Unsupported Karing identity'):
+                    RECEIPTS.settings_binding()
+
+    def test_upgrade_to_another_supported_pair_requires_a_new_baseline(self):
+        binding = RECEIPTS.settings_binding()
+        info = plistlib.loads(self.info.read_bytes())
+        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2923')
+        self.write(self.info, plistlib.dumps(info), 0o644)
+        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2923')
+        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
+            RECEIPTS.settings_readback(binding)
 
 
 class NativeSettingsV2Tests(NativeSettingsFixture):
@@ -285,7 +313,7 @@ class NativeSettingsV2Tests(NativeSettingsFixture):
     def test_binding_rejects_wrong_version_build_and_modified_app(self):
         original = self.info.read_bytes()
         for key, value in [('CFBundleIdentifier', 'other.app'), ('CFBundleExecutable', 'other'),
-                           ('CFBundleShortVersionString', '1.2.26'), ('CFBundleVersion', '2803')]:
+                           ('CFBundleShortVersionString', '1.2.99'), ('CFBundleVersion', '2803')]:
             with self.subTest(field=key):
                 info = plistlib.loads(original)
                 info[key] = value
@@ -301,7 +329,7 @@ class NativeSettingsV2Tests(NativeSettingsFixture):
         current = RECEIPTS.settings_readback(self.binding)
         for mutation in [lambda value: value.update(policy='caller-selected-policy'),
                          lambda value: value.update(excluded_paths=['/dns']),
-                         lambda value: value['app'].update(version='1.2.26'),
+                         lambda value: value['app'].update(version='1.2.99'),
                          lambda value: value.update(helper_sha256='0' * 64)]:
             with self.subTest(mutation=mutation):
                 binding = copy.deepcopy(self.binding)
@@ -596,6 +624,11 @@ print(json.dumps({'phase': phase, 'journey': journey, 'python': list(sys.version
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn('ValueError', refused.stderr)
         self.assertEqual(observed_versions, [list(sys.version_info[:3])] * 9)
+
+
+class NativeSettings2923Tests(NativeSettingsV2Tests):
+    app_version = "1.2.26"
+    app_build = "2923"
 
 
 if __name__ == '__main__':
