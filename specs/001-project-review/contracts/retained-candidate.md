@@ -67,3 +67,22 @@ is a separately approved run operation, not deletion, burn or qualification.
 The exact record is implemented; focused checks and fresh observation replay
 passed, as did full release-tool/root checks and vet with documented macOS skips.
 Exact-source CI remains pending at this checkpoint.
+
+## Build 215 retention — 2026-11-11
+
+The approved thirteenth record preserves signed-unqualified v3.1.141/215,
+release 438186606, source `84af948bc2a1d92607aa2e6b902512b648133c43`,
+run 42470439088. Its authenticated manifest SHA-256 is
+`8a9a38a86f2e12b92689c715021d02b51b7aab402a2735b3329231c1cad6f332`.
+
+| Asset | ID | Bytes | SHA-256 |
+|---|---:|---:|---|
+| install.sh | 723667643 | 76781 | `ab42ff6477a5fd205580341837e5a1d07db7fd76c8e57052778ada51f49f9f66` |
+| release-index.json | 723667644 | 609 | `07d718204039c8026b42157097aca1c8bf9c3ee537d6c3a4b25bf098c5e33d0b` |
+| sbxr-linux-amd64.tar.gz | 723667639 | 6236654 | `382567563476de20bf3e48ce8a0038aeb191675fb5e4625585f546e973697ab7` |
+| sbxr-linux-arm64.tar.gz | 723667642 | 5335609 | `1d59594041a9459355a8317a588b9dfa61e8614b886a3a98d4f07c44e8968fd2` |
+
+All thirteen exact records and twenty-six absent release/burn refs are required.
+Previous twelve records remain unchanged; all existing refusal and historical
+replay rules apply. Prospective 216 needs fresh global admission. This extension
+authorizes no draft mutation, burn, deletion, signing, live operation or publication.

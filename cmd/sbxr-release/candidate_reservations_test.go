@@ -26,12 +26,12 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 			"missing draft":  func(o *reservationObservations) { o.Releases = []reservationRelease{} },
 			"duplicate page": func(o *reservationObservations) { o.Releases = append(o.Releases, o.Releases[index]) },
 			"other pending draft": func(o *reservationObservations) {
-				o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.141", Draft: true})
+				o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.142", Draft: true})
 			},
 			"published":        func(o *reservationObservations) { o.Releases[index].Draft = false },
 			"immutable":        func(o *reservationObservations) { o.Releases[index].Immutable = true },
 			"prerelease":       func(o *reservationObservations) { o.Releases[index].Prerelease = true },
-			"retagged":         func(o *reservationObservations) { o.Releases[index].Tag = "v3.1.141" },
+			"retagged":         func(o *reservationObservations) { o.Releases[index].Tag = "v3.1.142" },
 			"replacement id":   func(o *reservationObservations) { o.Releases[index].ID++ },
 			"changed commit":   func(o *reservationObservations) { o.Releases[index].Commit = strings.Repeat("a", 40) },
 			"changed body":     func(o *reservationObservations) { o.Releases[index].Body = "Qualified" },
@@ -57,15 +57,15 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 	if !checkCandidateReservations(o, nil) {
 		t.Fatal("unchanged retained draft refused")
 	}
-	o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.141", Draft: true})
-	if !checkCandidateReservations(o, []string{"v3.1.141"}) {
+	o.Releases = append(o.Releases, reservationRelease{ID: 8, Tag: "v3.1.142", Draft: true})
+	if !checkCandidateReservations(o, []string{"v3.1.142"}) {
 		t.Fatal("current candidate draft refused")
 	}
-	if checkCandidateReservations(o, []string{"v3.1.129", "v3.1.141"}) {
+	if checkCandidateReservations(o, []string{"v3.1.129", "v3.1.142"}) {
 		t.Fatal("reserved tag allowlist accepted")
 	}
 	o.Releases[0].Draft = false
-	if checkCandidateReservations(o, []string{"v3.1.141"}) {
+	if checkCandidateReservations(o, []string{"v3.1.142"}) {
 		t.Fatal("current candidate hid old draft promotion")
 	}
 }
@@ -73,7 +73,7 @@ func TestCandidateReservationRefusesMissingChangedAndConcurrentAuthority(t *test
 func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.141", 215
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.142", 216
 	facts.ReservedIdentities = approvedCandidateReservations()
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 		},
 		"reserved tag":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.129" },
 		"reserved sequence": func(f *qualificationFacts) { f.Candidate.BSequence = 203 },
-		"skipped sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 216 },
+		"skipped sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 217 },
 		"published collision": func(f *qualificationFacts) {
 			r := qualifiedRelease(false)
 			r.Sequence = uint64Pointer(203)
@@ -108,7 +108,7 @@ func TestCandidateReservationBindsSequenceAndPreservesHistoricalReplay(t *testin
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err == nil {
 		t.Fatal("legacy facts reused reserved sequence")
 	}
-	facts.Candidate.BSequence = 215
+	facts.Candidate.BSequence = 216
 	release := qualifiedRelease(false)
 	release.Sequence = uint64Pointer(204)
 	release.Index.Sequence = 204
@@ -158,8 +158,8 @@ args=sys.argv[1:]
 if args==['api','repos/albertloky/SBXR/releases?per_page=100','--paginate','--slurp']:
  if os.environ['CASE']=='unavailable':sys.exit(1)
  print(os.environ['PAGES']);sys.exit(0)
-if args[:2]==['api','--include'] and args[2] in ['repos/albertloky/SBXR/git/ref/tags/'+t for t in ['v3.1.129','v3.1.130','v3.1.131','v3.1.132','v3.1.133','v3.1.134','v3.1.135','v3.1.136','v3.1.137','v3.1.138','v3.1.139','v3.1.140','release-burned/v3.1.129','release-burned/v3.1.130','release-burned/v3.1.131','release-burned/v3.1.132','release-burned/v3.1.133','release-burned/v3.1.134','release-burned/v3.1.135','release-burned/v3.1.136','release-burned/v3.1.137','release-burned/v3.1.138','release-burned/v3.1.139','release-burned/v3.1.140']]:
- code=403 if (os.environ['CASE']=='twelfth-ref-unavailable' and args[2].endswith('v3.1.140')) or os.environ['CASE']=='ref-unavailable' or (os.environ['CASE']=='eleventh-ref-unavailable' and args[2].endswith('v3.1.139')) or (os.environ['CASE']=='tenth-ref-unavailable' and args[2].endswith('v3.1.138')) or (os.environ['CASE']=='ninth-ref-unavailable' and args[2].endswith('v3.1.137')) or (os.environ['CASE']=='eighth-ref-unavailable' and args[2].endswith('v3.1.136')) or (os.environ['CASE']=='seventh-ref-unavailable' and args[2].endswith('v3.1.135')) or (os.environ['CASE']=='sixth-ref-unavailable' and args[2].endswith('v3.1.134')) or (os.environ['CASE']=='fifth-ref-unavailable' and args[2].endswith('v3.1.133')) or (os.environ['CASE']=='fourth-ref-unavailable' and args[2].endswith('v3.1.132')) or (os.environ['CASE']=='third-ref-unavailable' and args[2].endswith('v3.1.131')) or (os.environ['CASE']=='second-ref-unavailable' and args[2].endswith('v3.1.130')) else (200 if (os.environ['CASE']=='twelfth-tag-present' and args[2]=='repos/albertloky/SBXR/git/ref/tags/v3.1.140') or (os.environ['CASE']=='twelfth-burn-present' and args[2].endswith('release-burned/v3.1.140')) or (os.environ['CASE']=='eleventh-tag-present' and args[2]=='repos/albertloky/SBXR/git/ref/tags/v3.1.139') or (os.environ['CASE']=='eleventh-burn-present' and args[2].endswith('release-burned/v3.1.139')) or (os.environ['CASE']=='tenth-burn-present' and args[2].endswith('release-burned/v3.1.138')) or (os.environ['CASE']=='ninth-burn-present' and args[2].endswith('release-burned/v3.1.137')) or (os.environ['CASE']=='eighth-burn-present' and args[2].endswith('release-burned/v3.1.136')) or (os.environ['CASE']=='seventh-burn-present' and args[2].endswith('release-burned/v3.1.135')) or (os.environ['CASE']=='sixth-burn-present' and args[2].endswith('release-burned/v3.1.134')) or (os.environ['CASE']=='fifth-burn-present' and args[2].endswith('release-burned/v3.1.133')) or (os.environ['CASE']=='fourth-burn-present' and args[2].endswith('release-burned/v3.1.132')) or (os.environ['CASE']=='third-burn-present' and args[2].endswith('release-burned/v3.1.131')) or os.environ['CASE']=='second-burn-present' and args[2].endswith('release-burned/v3.1.130') else 404)
+if args[:2]==['api','--include'] and args[2] in ['repos/albertloky/SBXR/git/ref/tags/'+t for t in ['v3.1.129','v3.1.130','v3.1.131','v3.1.132','v3.1.133','v3.1.134','v3.1.135','v3.1.136','v3.1.137','v3.1.138','v3.1.139','v3.1.140','v3.1.141','release-burned/v3.1.129','release-burned/v3.1.130','release-burned/v3.1.131','release-burned/v3.1.132','release-burned/v3.1.133','release-burned/v3.1.134','release-burned/v3.1.135','release-burned/v3.1.136','release-burned/v3.1.137','release-burned/v3.1.138','release-burned/v3.1.139','release-burned/v3.1.140','release-burned/v3.1.141']]:
+ code=403 if (os.environ['CASE']=='thirteenth-ref-unavailable' and args[2].endswith('v3.1.141')) or (os.environ['CASE']=='twelfth-ref-unavailable' and args[2].endswith('v3.1.140')) or os.environ['CASE']=='ref-unavailable' or (os.environ['CASE']=='eleventh-ref-unavailable' and args[2].endswith('v3.1.139')) or (os.environ['CASE']=='tenth-ref-unavailable' and args[2].endswith('v3.1.138')) or (os.environ['CASE']=='ninth-ref-unavailable' and args[2].endswith('v3.1.137')) or (os.environ['CASE']=='eighth-ref-unavailable' and args[2].endswith('v3.1.136')) or (os.environ['CASE']=='seventh-ref-unavailable' and args[2].endswith('v3.1.135')) or (os.environ['CASE']=='sixth-ref-unavailable' and args[2].endswith('v3.1.134')) or (os.environ['CASE']=='fifth-ref-unavailable' and args[2].endswith('v3.1.133')) or (os.environ['CASE']=='fourth-ref-unavailable' and args[2].endswith('v3.1.132')) or (os.environ['CASE']=='third-ref-unavailable' and args[2].endswith('v3.1.131')) or (os.environ['CASE']=='second-ref-unavailable' and args[2].endswith('v3.1.130')) else (200 if (os.environ['CASE']=='thirteenth-tag-present' and args[2]=='repos/albertloky/SBXR/git/ref/tags/v3.1.141') or (os.environ['CASE']=='thirteenth-burn-present' and args[2].endswith('release-burned/v3.1.141')) or (os.environ['CASE']=='twelfth-tag-present' and args[2]=='repos/albertloky/SBXR/git/ref/tags/v3.1.140') or (os.environ['CASE']=='twelfth-burn-present' and args[2].endswith('release-burned/v3.1.140')) or (os.environ['CASE']=='eleventh-tag-present' and args[2]=='repos/albertloky/SBXR/git/ref/tags/v3.1.139') or (os.environ['CASE']=='eleventh-burn-present' and args[2].endswith('release-burned/v3.1.139')) or (os.environ['CASE']=='tenth-burn-present' and args[2].endswith('release-burned/v3.1.138')) or (os.environ['CASE']=='ninth-burn-present' and args[2].endswith('release-burned/v3.1.137')) or (os.environ['CASE']=='eighth-burn-present' and args[2].endswith('release-burned/v3.1.136')) or (os.environ['CASE']=='seventh-burn-present' and args[2].endswith('release-burned/v3.1.135')) or (os.environ['CASE']=='sixth-burn-present' and args[2].endswith('release-burned/v3.1.134')) or (os.environ['CASE']=='fifth-burn-present' and args[2].endswith('release-burned/v3.1.133')) or (os.environ['CASE']=='fourth-burn-present' and args[2].endswith('release-burned/v3.1.132')) or (os.environ['CASE']=='third-burn-present' and args[2].endswith('release-burned/v3.1.131')) or os.environ['CASE']=='second-burn-present' and args[2].endswith('release-burned/v3.1.130') else 404)
  print('HTTP/2.0 '+str(code)+' Fixture\nContent-Type: application/json\n\n{}');sys.exit(0 if code==200 else 1)
 sys.exit(99)
 `
@@ -177,14 +177,16 @@ sys.exit(99)
 		}
 		releases = append(releases, map[string]any{"id": reservation.ReleaseID, "tag_name": reservation.Tag, "target_commitish": reservation.Commit, "draft": true, "prerelease": false, "immutable": false, "body": "Qualification pending.", "assets": assets})
 	}
-	for _, name := range []string{"retained", "published-without-digest", "current-candidate", "unexpected-candidate", "missing", "malformed", "unavailable", "ref-unavailable", "second-ref-unavailable", "second-burn-present", "second-missing", "third-missing", "third-ref-unavailable", "third-burn-present", "fourth-missing", "fourth-ref-unavailable", "fourth-burn-present", "twelfth-missing", "twelfth-ref-unavailable", "twelfth-tag-present", "twelfth-burn-present", "eleventh-missing", "eleventh-ref-unavailable", "eleventh-tag-present", "eleventh-burn-present", "reserved-current-candidate", "tenth-missing", "tenth-ref-unavailable", "tenth-burn-present", "ninth-missing", "ninth-ref-unavailable", "ninth-burn-present", "eighth-missing", "eighth-ref-unavailable", "eighth-burn-present", "seventh-missing", "seventh-ref-unavailable", "seventh-burn-present", "sixth-missing", "fifth-missing", "sixth-ref-unavailable", "fifth-ref-unavailable", "sixth-burn-present", "fifth-burn-present", "duplicate-page"} {
+	for _, name := range []string{"retained", "published-without-digest", "current-candidate", "unexpected-candidate", "missing", "malformed", "unavailable", "ref-unavailable", "second-ref-unavailable", "second-burn-present", "second-missing", "third-missing", "third-ref-unavailable", "third-burn-present", "fourth-missing", "fourth-ref-unavailable", "fourth-burn-present", "thirteenth-missing", "thirteenth-ref-unavailable", "thirteenth-tag-present", "thirteenth-burn-present", "twelfth-missing", "twelfth-ref-unavailable", "twelfth-tag-present", "twelfth-burn-present", "eleventh-missing", "eleventh-ref-unavailable", "eleventh-tag-present", "eleventh-burn-present", "reserved-current-candidate", "tenth-missing", "tenth-ref-unavailable", "tenth-burn-present", "ninth-missing", "ninth-ref-unavailable", "ninth-burn-present", "eighth-missing", "eighth-ref-unavailable", "eighth-burn-present", "seventh-missing", "seventh-ref-unavailable", "seventh-burn-present", "sixth-missing", "fifth-missing", "sixth-ref-unavailable", "fifth-ref-unavailable", "sixth-burn-present", "fifth-burn-present", "duplicate-page"} {
 		t.Run(name, func(t *testing.T) {
 			pages := any([]any{releases})
 			switch name {
 			case "published-without-digest", "current-candidate", "unexpected-candidate":
-				other := map[string]any{"id": 8, "tag_name": "v3.1.141", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
+				other := map[string]any{"id": 8, "tag_name": "v3.1.142", "target_commitish": r.Commit, "draft": name != "published-without-digest", "prerelease": false, "immutable": name == "published-without-digest", "body": nil, "assets": []any{map[string]any{"digest": nil}}}
 				pages = []any{append(append([]any{}, releases...), other)}
 
+			case "thirteenth-missing":
+				pages = []any{releases[:12]}
 			case "twelfth-missing":
 				pages = []any{releases[:11]}
 			case "eleventh-missing":
@@ -217,7 +219,7 @@ sys.exit(99)
 			raw, _ := json.Marshal(pages)
 			args := []string{filepath.Join(scripts, "check-candidate-reservations.sh")}
 			if name == "current-candidate" {
-				args = append(args, `["v3.1.141"]`)
+				args = append(args, `["v3.1.142"]`)
 			} else if name == "reserved-current-candidate" {
 				args = append(args, `["v3.1.140"]`)
 			}
@@ -257,7 +259,7 @@ func TestReservedDraftAllowsFreshCompleteQualificationAndPublication(t *testing.
 	if !decodeCanonical([]byte(boundary), &bf) || !decodeCanonical(bf.DraftVerificationFacts, &vf) || !decodeCanonical(vf.ConstructionFacts, &cf) || !decodeCanonical(cf.PreflightFacts, &pre) || !decodeCanonical(manifest, &m) {
 		t.Fatal("reservation chain decode")
 	}
-	if pre.Candidate.BSequence != 215 || len(pre.ReservedIdentities) != 12 || pre.ReservedIdentities[0].SigningState != "unknown" || pre.ReservedIdentities[1].SigningState != "signed-unqualified" {
+	if pre.Candidate.BSequence != 216 || len(pre.ReservedIdentities) != 13 || pre.ReservedIdentities[0].SigningState != "unknown" || pre.ReservedIdentities[1].SigningState != "signed-unqualified" {
 		t.Fatal("reservation not bound to fresh sequence")
 	}
 	for _, reserved := range approvedCandidateReservations() {
@@ -275,7 +277,7 @@ func TestReservedDraftAllowsFreshCompleteQualificationAndPublication(t *testing.
 func TestSecondReservationCannotBeOmittedRelabeledOrReused(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.141", 215
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.142", 216
 	for name, mutate := range map[string]func(*qualificationFacts){
 		"old policy only": func(f *qualificationFacts) { f.ReservedIdentities = f.ReservedIdentities[:1] },
 		"signing unknown": func(f *qualificationFacts) { f.ReservedIdentities[1].SigningState = "unknown" },

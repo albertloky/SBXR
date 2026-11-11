@@ -1,5 +1,8 @@
 # Dated acceptance reports
 
+- [Build 215 cancellation and reservation — 2026-11-11](q215-retained-reservation-2026-11-11.md)
+  — signed-unqualified draft preserved; prospective build 216 awaits fresh live readiness and approval.
+
 These reports describe their named revision, run and date, not current host
 state or permission to repeat a procedure. Some were originally local and are
 now tracked for navigation; that does not add them to the original qualified
