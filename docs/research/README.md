@@ -1,5 +1,8 @@
 # Dependency research
 
+- [Karing 1.2.26/2927 preservation compatibility](karing-2927-preservation.md):
+  exact build admission, unchanged strict checks and fresh-baseline requirement.
+
 - [Karing 1.2.26/2923 preservation compatibility](karing-1.2.26-preservation.md):
   exact additional app pair, unchanged strict preservation contract and read-only evidence.
 

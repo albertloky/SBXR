@@ -58,6 +58,7 @@ class NativeSettingsFixture(unittest.TestCase):
                 "list": [{"domain": "example.com", "server": "direct"}],
             },
             "routing": {"mode": "rule", "rules": ["direct"]},
+            "tls": {"enable_insecure": False},
             "tun": {"enabled": True}, "selector": {"group": "Original", "node": "Original node"},
             "unknown_future_setting": {"enabled": True, "value": "strict"},
         }
@@ -135,14 +136,15 @@ class NativeAppIdentityTests(NativeSettingsFixture):
 
     def test_only_reviewed_version_build_pairs_are_admitted(self):
         original = plistlib.loads(self.info.read_bytes())
-        for version, build in [('1.2.25', '2802'), ('1.2.26', '2923')]:
+        for version, build in [('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927')]:
             with self.subTest(version=version, build=build):
                 self.write(self.info, plistlib.dumps(dict(original,
                     CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
                 binding = RECEIPTS.settings_binding()
                 self.assertEqual((binding['app']['version'], binding['app']['build']), (version, build))
         for version, build in [('1.2.25', '2923'), ('1.2.26', '2802'),
-                               ('1.2.26', '2924'), ('1.2.27', '2923'), ('', ''), ('1.2.26', 2923)]:
+                               ('1.2.26', '2924'), ('1.2.27', '2923'), ('1.2.25', '2927'),
+                               ('1.2.27', '2927'), ('1.2.26', '2928'), ('', ''), ('1.2.26', 2927)]:
             with self.subTest(version=version, build=build):
                 self.write(self.info, plistlib.dumps(dict(original,
                     CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
@@ -155,6 +157,17 @@ class NativeAppIdentityTests(NativeSettingsFixture):
         info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2923')
         self.write(self.info, plistlib.dumps(info), 0o644)
         self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2923')
+        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
+            RECEIPTS.settings_readback(binding)
+
+    def test_2923_to_2927_upgrade_invalidates_bound_settings(self):
+        info = plistlib.loads(self.info.read_bytes())
+        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2923')
+        self.write(self.info, plistlib.dumps(info), 0o644)
+        binding = RECEIPTS.settings_binding()
+        info['CFBundleVersion'] = '2927'
+        self.write(self.info, plistlib.dumps(info), 0o644)
+        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2927')
         with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
             RECEIPTS.settings_readback(binding)
 
@@ -227,7 +240,7 @@ class NativeSettingsV2Tests(NativeSettingsFixture):
             (('window', 'width'), 1001), (('window', 'height'), 721),
             (('window', 'widget'), 'other'), (('window', 'new_window_field'), True),
             (('routing', 'mode'), 'global'), (('routing', 'rules'), ['proxy']),
-            (('tun', 'enabled'), False), (('selector', 'group'), 'Other'),
+            (('tls', 'enable_insecure'), True), (('tun', 'enabled'), False), (('selector', 'group'), 'Other'),
             (('selector', 'node'), 'Other node'), (('unknown_future_setting', 'value'), 'changed'),
             (('unknown_future_setting', 'enabled'), 1), (('new_top_level_field',), 'unexpected'),
         ]
@@ -629,6 +642,11 @@ print(json.dumps({'phase': phase, 'journey': journey, 'python': list(sys.version
 class NativeSettings2923Tests(NativeSettingsV2Tests):
     app_version = "1.2.26"
     app_build = "2923"
+
+
+class NativeSettings2927Tests(NativeSettingsV2Tests):
+    app_version = "1.2.26"
+    app_build = "2927"
 
 
 if __name__ == '__main__':

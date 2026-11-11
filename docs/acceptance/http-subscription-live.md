@@ -445,9 +445,10 @@ itself establish that a new live run is ready.
 
 The Owner approved this prospective correction on 2026-10-19. New preparations
 may explicitly bind `sbxr-karing-settings-preservation-v2` for Karing 1.2.25/2802
-or the reviewed 1.2.26/2923 pair. The [compatibility review](../research/karing-1.2.26-preservation.md)
-retains the same comparison rules; other versions and mixed version/build pairs
-refuse. Each baseline binds the actual version, build, executable, Info.plist and
+or the reviewed 1.2.26/2923 and 1.2.26/2927 pairs. The compatibility reviews for
+[2923](../research/karing-1.2.26-preservation.md) and
+[2927](../research/karing-2927-preservation.md) retain the same comparison rules;
+other versions and mixed version/build pairs refuse. Each baseline binds the actual version, build, executable, Info.plist and
 helper bytes. An app upgrade, even to another supported pair, requires fresh
 preparation; it cannot reuse the old baseline. The policy permits differences only
 at `/window/x`, `/window/y`, and
