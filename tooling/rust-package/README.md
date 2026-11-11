@@ -193,8 +193,19 @@ a product member. Native output is built once per architecture; both assembly
 runners reuse the same archives before the existing exact-byte comparison.
 
 [Linux validation](linux-validation.md) lists prepared-environment requirements
-and commands. `setup-ci.sh` is a future GitHub-runner provisioning definition;
-it is not part of local validation and was not executed on this Mac. The workflow
+and commands. `setup-ci.sh` provisions GitHub runners; local command-fixture tests
+replace every provisioning tool with an inert stub and perform no installation.
+On Ubuntu 24.04 amd64, its two APT commands use the checked-in official Ubuntu
+HTTPS sources and existing Ubuntu archive keyring. This avoids the runner's Azure
+mirror list without changing system source files, DNS, keys or signature checks.
+Arm64 retains its runner sources. Both architectures stop on any index-refresh
+error before installation, including transient errors; no stale-index fallback
+or automatic retry is added. The command-scoped options follow
+[APT configuration](https://manpages.ubuntu.com/manpages/noble/man5/apt.conf.5.html),
+[Signed-By](https://manpages.ubuntu.com/manpages/noble/man5/sources.list.5.html)
+and [update error handling](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html).
+This shared helper applies to Verify and candidate builds; it does not dispatch
+qualification or change the acceptance VPS. The workflow
 changes preserve Go reference/policy tests, race/vet/module verification,
 signatures, qualification/cleanup, exact bytes and manual stable publication.
 Repository-only Go qualification code is retained; no Go executable is shipped.
