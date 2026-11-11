@@ -8,6 +8,7 @@
 | Set up optional VMess Tunnel | [VMess setup guide](setup-vmess-tunnel.md) | Your own domain/tunnel, protected token, dedicated connector and honest connection checks |
 | Continue isolated Rust rewrite | [Rust increment and handoff](rust-rewrite.md), [current acceptance matrix](rust-acceptance.md) | Implemented slices, intentional exclusions and separate qualification |
 | Change implementation | [Agent code map](agents/code-map.md) | Entry points, owning modules and focused checks |
+| Find specified project work | [Work specifications](../specs/README.md) | Scope, plans, task progress and recorded checks; not conversation transcripts |
 | Understand domain language | [CONTEXT.md](../CONTEXT.md) | One shared glossary, not a second specification |
 | Find an architectural or policy decision | [ADR index](adr/README.md) | Decisions grouped by scope and product era |
 | Plan current live qualification | [Acceptance guide](acceptance/README.md) | Current MVP procedure and bounded prerequisites |
@@ -39,16 +40,21 @@ for transparent retry.
 ## Repository layout
 
 ```text
-cmd/sbxr/                       executable startup and private-role dispatch
-cmd/sbxr-release/               repository-only packaging and qualification
-internal/proxyinstallation/    proxy journey, private serving module, adapters
-internal/softwarelifecycle/    installed software and release/update lifecycle
+src/                           Rust product, native host adapters and adjacent unit tests
+tests/                         Rust integration tests and reusable fixtures
+examples/                      Rust evidence/acquisition example
+tooling/rust-package/           separate Rust package/bootstrap crate and local checks
+cmd/sbxr/                       retained Go product startup and private-role dispatch
+cmd/sbxr-release/               retained Go release/qualification tooling
+internal/proxyinstallation/    Go proxy reference, private serving module and adapters
+internal/softwarelifecycle/    Go installed-software and lifecycle reference
 .github/scripts/               release/operator helpers and adjacent tests
 .github/workflows/             native verification, candidate, stable publication
 docs/agents/                   task-triggered working instructions
 docs/adr/                      scoped decisions (see its index first)
 docs/acceptance/                current and fixed-path procedures/decisions
 docs/acceptance/reports/        dated release, repair and investigation reports
+specs/                         scoped work specifications, plans, tasks and assessments
 .scratch/                      ignored private evidence, drafts and backups
 ```
 
@@ -56,9 +62,10 @@ Go tests stay beside their code. Repository-root Go tests intentionally exercise
 cross-module, script and workflow contracts; do not move them just to shorten
 the root listing. See [artifact locations](agents/files-and-artifacts.md).
 
-For low-noise implementation searches, begin in `cmd/`, `internal/`, or
-`.github/` using the code map. Use `git grep` for committed material, or ordinary
-`rg` for the working tree; avoid unrestricted searches through `.scratch/`.
+For low-noise implementation searches, begin in `src/` and `tests/` for Rust,
+`tooling/rust-package/` for Rust packaging, or `cmd/`, `internal/`, and `.github/`
+for retained Go/reference and release tooling, using the code map. Use `git grep`
+for committed material, or ordinary `rg` for the working tree; avoid unrestricted searches through `.scratch/`.
 Search reports and historical material explicitly when that is the task.
 
 The current V3 checklist remains at the acceptance root because release
