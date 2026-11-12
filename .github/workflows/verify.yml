@@ -36,7 +36,8 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Prepare pinned native Rust builder
-        run: bash tooling/rust-package/setup-ci.sh native
+        # Temporary approved mirror while Ubuntu archive DNS is unavailable.
+        run: bash tooling/rust-package/setup-ci.sh native mit
       - name: Test Rust and retained repository qualification seams
         run: |
           set -euo pipefail

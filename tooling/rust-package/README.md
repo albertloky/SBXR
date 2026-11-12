@@ -198,7 +198,13 @@ replace every provisioning tool with an inert stub and perform no installation.
 On Ubuntu 24.04 amd64, its two APT commands use the checked-in official Ubuntu
 HTTPS sources and existing Ubuntu archive keyring. This avoids the runner's Azure
 mirror list without changing system source files, DNS, keys or signature checks.
-Arm64 retains its runner sources. Both architectures stop on any index-refresh
+Arm64 retains its runner sources by default. Verify temporarily opts into
+`setup-ci.sh native mit` on both architectures during the Ubuntu DNS outage.
+This uses [MIT's documented Ubuntu/Ubuntu Ports mirrors](https://mirrors.mit.edu/)
+with the same Ubuntu archive keyring and command-scoped source selection.
+Candidate and stable workflows do not opt in. Remove the explicit Verify opt-in
+when the normal sources recover; no automatic mirror switching is performed.
+Both architectures stop on any index-refresh
 error before installation, including transient errors; no stale-index fallback
 or automatic retry is added. The command-scoped options follow
 [APT configuration](https://manpages.ubuntu.com/manpages/noble/man5/apt.conf.5.html),

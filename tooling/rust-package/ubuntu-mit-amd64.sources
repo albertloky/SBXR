@@ -1,0 +1,6 @@
+Types: deb
+URIs: https://mirrors.mit.edu/ubuntu/
+Suites: noble noble-updates noble-backports noble-security
+Components: main restricted universe multiverse
+Architectures: amd64
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

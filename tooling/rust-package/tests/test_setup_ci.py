@@ -11,7 +11,7 @@ TOOLS = Path(__file__).resolve().parents[1]
 
 
 class SetupCI(unittest.TestCase):
-    def run_setup(self, mode="native", machine="x86_64", failure="", system="Linux", release="24.04"):
+    def run_setup(self, mode="native", machine="x86_64", failure="", system="Linux", release="24.04", mirror=None):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             log = root / "calls.jsonl"
@@ -35,7 +35,10 @@ elif name == "sudo":
                 path.chmod(0o755)
             env = dict(os.environ, PATH=str(root) + ":/usr/bin:/bin", CALLS=str(log),
                        SYSTEM=system, MACHINE=machine, FAILURE=failure, RELEASE=release)
-            result = subprocess.run(["/bin/bash", str(TOOLS / "setup-ci.sh"), mode],
+            argv = ["/bin/bash", str(TOOLS / "setup-ci.sh"), mode]
+            if mirror is not None:
+                argv.append(mirror)
+            result = subprocess.run(argv,
                                     env=env, capture_output=True, text=True, timeout=10)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
             return result, calls
@@ -63,6 +66,34 @@ elif name == "sudo":
         apt = [call for call in calls if call[0] == "sudo"]
         self.assertEqual(apt[0], ["sudo", "apt-get", "update", "--error-on=any"])
         self.assertIn(["rustup", "target", "add", "--toolchain", "1.90.0", "aarch64-unknown-linux-musl"], calls)
+
+    def test_mit_opt_in_keeps_ubuntu_keyring_for_each_architecture(self):
+        for machine, architecture, archive in [("x86_64", "amd64", "ubuntu"),
+                                                ("aarch64", "arm64", "ubuntu-ports")]:
+            with self.subTest(architecture=architecture):
+                result, calls = self.run_setup(machine=machine, mirror="mit")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                source = TOOLS / ("ubuntu-mit-" + architecture + ".sources")
+                options = ["-o", "Dir::Etc::sourcelist=" + str(source), "-o", "Dir::Etc::sourceparts=-"]
+                apt = [call for call in calls if call[0] == "sudo"]
+                self.assertEqual(apt, [["sudo", "apt-get", *options, "update", "--error-on=any"],
+                    ["sudo", "apt-get", *options, "install", "--yes", "--no-install-recommends",
+                     "musl-tools", "cmake", "make", "perl"]])
+                fields = dict(line.split(": ", 1) for line in source.read_text().splitlines())
+                self.assertEqual(fields, dict(Types="deb", URIs="https://mirrors.mit.edu/" + archive + "/",
+                    Suites="noble noble-updates noble-backports noble-security",
+                    Components="main restricted universe multiverse", Architectures=architecture,
+                    **{"Signed-By": "/usr/share/keyrings/ubuntu-archive-keyring.gpg"}))
+                for failure in ("update", "install"):
+                    failed, journal = self.run_setup(machine=machine, mirror="mit", failure=failure)
+                    self.assertEqual(failed.returncode, 100)
+                    self.assertFalse(any(call[0] == "cargo" for call in journal))
+
+    def test_unknown_mirror_and_tools_opt_in_refuse_before_provisioning(self):
+        for mode, mirror in [("native", "unknown"), ("tools", "mit")]:
+            result, calls = self.run_setup(mode=mode, mirror=mirror)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(any(call[0] in ("sudo", "cargo", "rustup") for call in calls))
 
     def test_failed_update_or_install_stops_without_retry_or_build(self):
         for failure in ("update", "install"):
