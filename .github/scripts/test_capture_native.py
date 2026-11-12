@@ -356,5 +356,10 @@ class NativeCapture2927Tests(NativeCaptureTests):
     app_build = "2927"
 
 
+class NativeCapture2929Tests(NativeCaptureTests):
+    app_version = "1.2.26"
+    app_build = "2929"
+
+
 if __name__ == "__main__":
     unittest.main()
