@@ -193,7 +193,7 @@ def settings_binding():
     require(isinstance(info, dict) and info.get('CFBundleIdentifier') == 'com.nebula.karing' and
             info.get('CFBundleExecutable') == 'Karing' and
             (info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')) in
-            (('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927'), ('1.2.26', '2929')),
+            (('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927'), ('1.2.26', '2929'), ('1.2.26', '2930')),
             'Unsupported Karing identity for settings v2')
     return {'schema': 'sbxr-karing-settings-binding-v2', 'policy': SETTINGS_POLICY,
             'app': {'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],

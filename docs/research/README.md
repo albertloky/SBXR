@@ -1,5 +1,8 @@
 # Dependency research
 
+- [Karing 1.2.26/2930 preservation compatibility](karing-2930-preservation.md):
+  verified official package, exact build admission and upgrade-binding regressions.
+
 - [Karing 1.2.26/2929 preservation compatibility](karing-2929-preservation.md):
   verified official package, exact build admission and approved-update preservation.
 
