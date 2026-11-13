@@ -103,12 +103,37 @@ class OtherReadbackTests(unittest.TestCase):
    old=after['files']['/etc/hosts'][key];after['files']['/etc/hosts'][key]=bad
    with self.assertRaises(ValueError):T.compare(before,after,original)
    after['files']['/etc/hosts'][key]=old
- def test_ca_restore_keeps_exact_inode_and_type_checks(self):
+ def ca_snapshots(self):
   before,after,original=self.snapshots();path='/etc/ssl/certs/ca-certificates.crt'
-  original[path]={'sha256':'original-ca','ino':10,'mode':'0o644'}
-  before['files'][path]={'sha256':'temporary-ca','ino':10,'mode':'0o644','kind':'regular'}
-  after['files'][path]={**original[path],'kind':'regular'}
-  self.assertTrue(T.compare(before,after,original));after['files'][path]['ino']=11
+  original[path]={'sha256':'original-ca','dev':1,'ino':10,'uid':0,'gid':0,'mode':'0o644','nlink':1,'size':100}
+  before['files'][path]={**original[path],'sha256':'temporary-ca','kind':'regular'}
+  after['files'][path]={**original[path],'ino':11,'kind':'regular'}
+  return before,after,original,path
+ def test_ca_restore_allows_only_inode_replacement(self):
+  before,after,original,path=self.ca_snapshots()
+  self.assertTrue(T.compare(before,after,original))
+  for key,bad in (('sha256','changed'),('dev',2),('uid',1),('gid',1),('mode','0o666'),('nlink',2),('size',101),('kind','symlink'),('target','elsewhere')):
+   with self.subTest(key=key):
+    changed=copy.deepcopy(after);changed['files'][path][key]=bad
+    with self.assertRaises(ValueError):T.compare(before,changed,original)
+ def test_ca_restore_requires_complete_metadata(self):
+  before,after,original,path=self.ca_snapshots()
+  for key in ('sha256','dev','ino','uid','gid','mode','nlink','size'):
+   with self.subTest(key=key):
+    missing=copy.deepcopy(original);del missing[path][key]
+    with self.assertRaises(ValueError):T.compare(before,after,missing)
+    missing=copy.deepcopy(after);del missing['files'][path][key]
+    with self.assertRaises(ValueError):T.compare(before,missing,original)
+ def test_ca_restore_requires_current_type_and_single_link_even_when_equal(self):
+  before,after,original,path=self.ca_snapshots()
+  del after['files'][path]['kind']
+  with self.assertRaises(ValueError):T.compare(before,after,original)
+  before,after,original,path=self.ca_snapshots()
+  original[path]['nlink']=2;after['files'][path]['nlink']=2
+  with self.assertRaises(ValueError):T.compare(before,after,original)
+ def test_unrelated_file_inode_still_exact(self):
+  before,after,original,path=self.ca_snapshots()
+  before['files']['/unrelated']={'ino':1};after['files']['/unrelated']={'ino':2}
   with self.assertRaises(ValueError):T.compare(before,after,original)
  def test_remaining_or_foreign_redirect_refuses(self):
   before,after,original=self.snapshots();after['firewall_normalized']+='\n'+T.REDIRECT

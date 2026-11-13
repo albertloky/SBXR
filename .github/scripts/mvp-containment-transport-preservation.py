@@ -41,6 +41,16 @@ def compare(before,after,original_files):
     if '/etc/hosts' in expected:
         expected['/etc/hosts']=dict(expected['/etc/hosts']);expected['/etc/hosts'].pop('ino',None)
         observed['/etc/hosts'].pop('ino',None)
+    # update-ca-certificates atomically replaces this generated bundle. Only
+    # its inode may differ; require complete original and current metadata.
+    ca='/etc/ssl/certs/ca-certificates.crt'
+    if ca in expected:
+        fields={'sha256','dev','ino','uid','gid','mode','nlink','size','kind'}
+        for value in (expected[ca],observed.get(ca,{})):
+            require(fields <= value.keys(),'incomplete CA bundle metadata')
+            require(value['kind']=='regular' and value['nlink']==1 and 'target' not in value,'CA bundle is not a single-link regular file')
+        expected[ca]=dict(expected[ca]);expected[ca].pop('ino')
+        observed[ca].pop('ino')
     require(observed==expected,'preserved file changes beyond original trust/hosts restoration')
     return True
 
