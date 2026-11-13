@@ -121,7 +121,18 @@ impl Snapshot {
         if InstalledRecord::decode(&record_bytes).map_err(refused)? != record {
             return Err(HostError::Foreign);
         }
-        release_identity::verify_installed_pair(&record, &executable).map_err(refused)?;
+        let arch = match record.architecture() {
+            "amd64" => Architecture::Amd64,
+            "arm64" => Architecture::Arm64,
+            _ => return Err(HostError::Foreign),
+        };
+        if release_identity::verify_installed_linux_pair(&record, &executable, arch)
+            .map_err(refused)?
+            .kind()
+            != release_identity::ArtifactKind::Rust
+        {
+            return Err(HostError::Foreign);
+        }
         let installed = fs.admission_executable()?;
         let original = stamp(&installed)?;
         let value = Self {
@@ -189,16 +200,15 @@ impl Snapshot {
             "arm64" => Architecture::Arm64,
             _ => return Err(HostError::Foreign),
         };
-        if release_identity::inspect_linux_artifact(&bytes, arch)
+        // Capture structurally verified this exact immutable image. The fresh
+        // full named/current bytes above must still equal it on every guard;
+        // reparsing and rehashing those identical bytes adds no new evidence.
+        if self.loaded
+            != release_identity::rust_artifact_metadata(
+                self.record.release_identity().commit(),
+                arch,
+            )
             .map_err(refused)?
-            .kind()
-            != release_identity::ArtifactKind::Rust
-            || self.loaded
-                != release_identity::rust_artifact_metadata(
-                    self.record.release_identity().commit(),
-                    arch,
-                )
-                .map_err(refused)?
         {
             return Err(HostError::Foreign);
         }

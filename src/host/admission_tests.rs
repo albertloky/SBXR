@@ -400,6 +400,7 @@ fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work(
             count.fetch_add(1, Ordering::Relaxed);
         }
     }));
+    let hashes_before = release_identity::payload_hashes_for_test();
     let start = Instant::now();
     let ((), trace) = super::super::timing::capture(|| {
         for _ in 0..4 {
@@ -417,6 +418,11 @@ fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work(
         named_reads.load(Ordering::Relaxed),
         4,
         "one fresh full named-image read per guard"
+    );
+    assert_eq!(
+        release_identity::payload_hashes_for_test(),
+        hashes_before,
+        "unchanged full-byte guards must not rehash an already validated image"
     );
     let trace = String::from_utf8(trace).unwrap();
     assert_eq!(
@@ -658,4 +664,33 @@ fn combined_status_keeps_native_snapshot_guard_and_delegates_one_observation() {
         assert_eq!(review.status, Status::ProblemDetected);
         assert!(review.prepared.is_none());
     }
+}
+
+#[test]
+fn capture_rejects_signed_shape_without_valid_rust_structure() {
+    let f = Fixture::new();
+    let image = release_identity::stamp_executable(
+        b"not an ELF image",
+        "v9.0.0",
+        &"a".repeat(40),
+        200,
+        Architecture::Amd64,
+    )
+    .unwrap();
+    let record = InstalledRecord::new(
+        crate::records::ReleaseIdentity::new("v9.0.0", &"a".repeat(40), &"b".repeat(64)).unwrap(),
+        200,
+        "amd64",
+        &crate::records::sha256_hex(&image),
+    )
+    .unwrap();
+    // A self-consistent installed pair alone must not admit a non-Rust image.
+    release_identity::verify_installed_pair(&record, &image).unwrap();
+    f.write(EXECUTABLE, &image, 0o755);
+    f.write(
+        "var/lib/sbxr/installed.json",
+        &record.encode().unwrap(),
+        0o600,
+    );
+    assert!(f.capture().is_err());
 }

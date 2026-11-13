@@ -567,6 +567,15 @@ impl<'a> ExecutableIdentity<'a> {
         self.payload
     }
 }
+#[cfg(test)]
+thread_local! {
+    static PAYLOAD_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn payload_hashes_for_test() -> usize {
+    PAYLOAD_HASHES.get()
+}
+
 pub fn read_executable_identity(executable: &[u8]) -> Result<ExecutableIdentity<'_>> {
     Ok(read_executable_identity_with_hasher(executable)?.0)
 }
@@ -600,6 +609,8 @@ fn read_executable_identity_with_hasher(
     if payload.ends_with(IDENTITY_MAGIC) {
         return Err(ReleaseError);
     }
+    #[cfg(test)]
+    PAYLOAD_HASHES.set(PAYLOAD_HASHES.get() + 1);
     let mut hasher = Sha256::new();
     hasher.update(payload);
     if format!("{:x}", hasher.clone().finalize()) != identity.payload_sha256 {
