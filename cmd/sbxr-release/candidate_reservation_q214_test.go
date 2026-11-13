@@ -21,7 +21,7 @@ func TestQ214ExactUnknownSigningReservation(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 13 || !reflect.DeepEqual(policy[11], expected) {
+	if len(policy) != 14 || !reflect.DeepEqual(policy[11], expected) {
 		t.Fatal("the exact unknown-signing build 214 must be the twelfth reservation")
 	}
 	prior := sha256.Sum256(mustJSON(policy[:11]))
@@ -29,7 +29,7 @@ func TestQ214ExactUnknownSigningReservation(t *testing.T) {
 		t.Fatal("the preceding eleven reservation bytes changed")
 	}
 	if !checkCandidateReservations(reservationFixture(), nil) {
-		t.Fatal("unchanged thirteen-draft set refused")
+		t.Fatal("unchanged fourteen-draft set refused")
 	}
 	for _, identity := range []struct {
 		tag       string
@@ -42,7 +42,7 @@ func TestQ214ExactUnknownSigningReservation(t *testing.T) {
 			t.Fatal("build 214 identity may be reused")
 		}
 	}
-	if reservedCandidate("v3.1.142", 216, 8) {
+	if reservedCandidate("v3.1.143", 217, 8) {
 		t.Fatal("fresh candidate incorrectly reserved")
 	}
 	for name, change := range map[string]func(*reservationObservations){
@@ -80,7 +80,7 @@ func TestQ214ExactUnknownSigningReservation(t *testing.T) {
 func TestQ214ReservationBindsNextCandidateWithoutOmissionOrRelabeling(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.142", 216
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.143", 217
 	facts.ReservedIdentities = approvedCandidateReservations()
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
 		t.Fatalf("fresh candidate with exact reservations: %v", err)
@@ -95,7 +95,7 @@ func TestQ214ReservationBindsNextCandidateWithoutOmissionOrRelabeling(t *testing
 		"run":            func(f *qualificationFacts) { f.ReservedIdentities[11].RunID = "42370644705" },
 		"tag reuse":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.140" },
 		"sequence reuse": func(f *qualificationFacts) { f.Candidate.BSequence = 214 },
-		"skip sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 217 },
+		"skip sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 218 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := facts
