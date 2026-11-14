@@ -405,3 +405,28 @@ retry, burn, deletion, live attempt, VPS/client/security change, cleanup executi
 or publication follows. v3.1.141/215 is prospective only, subject to fresh global
 admission, final-source CI and separate qualification approval. The earlier
 prospective-214 statements retain their dated context.
+
+
+## Retained q217 identity — 2026-11-14
+
+Adopt the independently reviewed exact reservation for failed draft
+`v3.1.143`, sequence 217, release `445168533`, source
+`80a35da8c4ef94d15db00762a52e5548459e320a`, workflow `43575753539`.
+Preserve the draft, its four assets and the failed run evidence. Signing authority
+remains **unknown**: the signing step failed during its public-latest recheck,
+whose result was not retained. Do not invent an unsigned proof or manifest digest.
+
+The index SHA-256 is
+`34db70d4b0e7c07004b4e7931ce5181a73773fe0f924ee0c8268a06ed488086a`.
+The compiled reservation pins all four asset IDs, names, sizes and digests.
+All fourteen earlier records remain unchanged. New facts bind all fifteen
+reservations, and fresh observations must match every retained draft and prove
+all release/burn refs absent. Missing, changed, duplicated or unavailable
+observations refuse. The retained tag, sequence and release ID cannot be reused,
+including through the current-candidate allowance.
+
+This is a preservation decision, not qualification, deletion, a burn, signing or
+publication authority. Prospective `v3.1.144` / 218 requires final-source CI,
+fresh global admission, an authenticated candidate and the ordinary complete
+qualification. Any live attempt remains separately subject to its approved
+scope, current readiness and bounded operating window.

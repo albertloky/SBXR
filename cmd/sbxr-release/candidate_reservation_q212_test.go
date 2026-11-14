@@ -20,12 +20,12 @@ func TestQ212ExactSignedUnqualifiedReservation(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 14 || !reflect.DeepEqual(policy[9], expected) {
+	if len(policy) != 15 || !reflect.DeepEqual(policy[9], expected) {
 		t.Fatal("the exact signed, unqualified build 212 must be the tenth reservation")
 	}
 	observed := reservationFixture()
 	if !checkCandidateReservations(observed, nil) {
-		t.Fatal("unchanged fourteen-draft set refused")
+		t.Fatal("unchanged fifteen-draft set refused")
 	}
 	for _, identity := range []struct {
 		tag       string
@@ -72,7 +72,7 @@ func TestQ212ExactSignedUnqualifiedReservation(t *testing.T) {
 func TestQ212ReservationBindsNextCandidateWithoutOmissionOrRelabeling(t *testing.T) {
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.143", 217
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.144", 218
 	facts.ReservedIdentities = approvedCandidateReservations()
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
 		t.Fatalf("fresh candidate with exact reservations: %v", err)
@@ -87,7 +87,7 @@ func TestQ212ReservationBindsNextCandidateWithoutOmissionOrRelabeling(t *testing
 		"run":            func(f *qualificationFacts) { f.ReservedIdentities[9].RunID = "41958829812" },
 		"tag reuse":      func(f *qualificationFacts) { f.Candidate.BTag = "v3.1.138" },
 		"sequence reuse": func(f *qualificationFacts) { f.Candidate.BSequence = 212 },
-		"skip sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 218 },
+		"skip sequence":  func(f *qualificationFacts) { f.Candidate.BSequence = 219 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := facts

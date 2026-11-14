@@ -207,7 +207,7 @@ exact applicability and audit boundary.
 
 
 `candidate-reservations` validates canonical read-only GitHub observations against
-the fourteen fixed reservations and emits their exact records for `reserved_identities` in
+the fifteen fixed reservations and emits their exact records for `reserved_identities` in
 new preflight facts. `-policy` exposes the compiled record for observation collection;
 it is not an authorization result. `-allowed-draft-tags` names only the current
 workflow's candidate tags for later rechecks and cannot allow the reserved tag.
@@ -219,4 +219,11 @@ The build-216 reservation preserves failed draft `v3.1.142` (release
 source, index, manifest and asset identities are bound; its tag, sequence and
 release ID cannot be reused. Fresh observations must still match every retained
 draft and prove release/burn tags absent. This permits consideration of fresh
-sequence 217; it neither qualifies build 216 nor authorizes a live test or publication.
+sequence 217 at that decision; it neither qualifies build 216 nor authorizes a live test or publication.
+
+The build-217 reservation preserves failed draft `v3.1.143` (release
+`445168533`, workflow `43575753539`) with signing authority **unknown**.
+It pins the exact source, index and four asset identities; no manifest digest
+or unsigned proof is invented. The prior fourteen records remain unchanged.
+The reservation prevents reuse or promotion of build 217 while permitting
+consideration of fresh sequence 218 under the ordinary qualification checks.
