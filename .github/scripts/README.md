@@ -30,6 +30,7 @@ relax their source, payload, signature or publication requirements.
 | Area | Entry points |
 |---|---|
 | Candidate declaration and dispatch | `v3-candidate-dispatch.sh` |
+| Signing public-latest recheck | `signing-latest-recheck.sh`, `test_signing_latest_recheck.py`; unchanged trust/baseline comparison with filtered outcome/exit diagnostics retained on signing failure, never raw inputs |
 | One-target r24 evidence applicability | `late-confirmation-review.py`, `test_late_confirmation_review.py`; [ADR-0024](../../docs/adr/0024-r24-late-confirmation-supplement.md) |
 | One-target live89 recording correction | `live89-correction-review.py`, `test_live89_correction_review.py`; exact committed-source review and fresh archive payload verification under [ADR-0029](../../docs/adr/0029-live89-operator-recording-correction.md) |
 | MVP observation assembly and submission | `v3-mvp-evidence.py`, `v3-recurring-evidence.sh` |
