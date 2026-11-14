@@ -207,7 +207,7 @@ exact applicability and audit boundary.
 
 
 `candidate-reservations` validates canonical read-only GitHub observations against
-the fifteen fixed reservations and emits their exact records for `reserved_identities` in
+the sixteen fixed reservations and emits their exact records for `reserved_identities` in
 new preflight facts. `-policy` exposes the compiled record for observation collection;
 it is not an authorization result. `-allowed-draft-tags` names only the current
 workflow's candidate tags for later rechecks and cannot allow the reserved tag.
@@ -227,3 +227,11 @@ It pins the exact source, index and four asset identities; no manifest digest
 or unsigned proof is invented. The prior fourteen records remain unchanged.
 The reservation prevents reuse or promotion of build 217 while permitting
 consideration of fresh sequence 218 under the ordinary qualification checks.
+
+The build-218 reservation preserves signed-unqualified draft `v3.1.144`
+(release `445390275`, workflow `43605935683`) and its exact four assets. It pins
+manifest SHA-256 `5ae9b2ef3ac4d6621bc88e76ff0e571a31c063761e9e1681c7fdf7f055941a21`.
+The prior fifteen records remain unchanged. The exact retention decision is
+recorded in ADR-0032; this change neither completes cleanup nor authorizes a live
+attempt or publication. Prospective sequence 219 remains
+subject to final-source verification and all ordinary admission checks.

@@ -430,3 +430,28 @@ publication authority. Prospective `v3.1.144` / 218 requires final-source CI,
 fresh global admission, an authenticated candidate and the ordinary complete
 qualification. Any live attempt remains separately subject to its approved
 scope, current readiness and bounded operating window.
+
+
+## Retained q218 identity — 2026-11-14
+
+Adopt the independently reviewed exact reservation for failed signed draft `v3.1.144`, sequence 218, release `445390275`, source
+`a04bcd46ce4a3759a9c67f7b43049437a3f8d914`, workflow `43605935683`, its four
+assets, signed manifest/bundle and all failure evidence. The manifest SHA-256 is
+`5ae9b2ef3ac4d6621bc88e76ff0e571a31c063761e9e1681c7fdf7f055941a21`;
+the retained bundle SHA-256 is
+`00e2fc929ae291de7848bff3b0f5d805ef2db8eaf47771e938fcfaf9d200f649`.
+The release-index SHA-256 is
+`d24d75239e91d0cdb173fdff10fe8ba704c199b6ba6857e8b64bd952021c1d0e`.
+Signing authority is **signed-unqualified**, never unknown or unsigned.
+
+The compiled record pins every asset ID, name, size and digest. All
+fifteen preceding records remain unchanged. All sixteen exact drafts and their
+absent release/burn refs must still be freshly observed; changed, missing,
+duplicated or unavailable observations refuse. Build 218's tag, sequence and
+release ID cannot be reused or promoted, even as a current-candidate allowance.
+
+This reservation preserves evidence without remote mutation, deletion,
+burn, cleanup, signing or publication. It does not turn the failed Check into a
+pass or resolve incomplete local cleanup verification. Prospective `v3.1.145` /
+219 requires final-source CI and ordinary candidate/live admission, including a
+separately valid bounded test scope and fresh readiness.
