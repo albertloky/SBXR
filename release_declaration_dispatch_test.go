@@ -1,11 +1,14 @@
 package architecture_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDeclarationDispatchStopsBeforeGitHubOnRefusal(t *testing.T) {
@@ -73,7 +76,7 @@ func TestDeclarationDispatchUsesValidatedSnapshot(t *testing.T) {
 				current = "other"
 			}
 			cmd := exec.Command("bash", script, mode, filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
-			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CAPTURE="+filepath.Join(dir, "capture"), "DISPATCHED="+filepath.Join(dir, "dispatched"), "CURRENT="+current)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "CAPTURE="+filepath.Join(dir, "capture"), "DISPATCHED="+filepath.Join(dir, "dispatched"), "CURRENT="+current, "SECURITY_CUTOFF_UNIX="+strconv.FormatInt(time.Now().Unix()+3600, 10))
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != (scenario == "changed-main") {
 				t.Fatalf("unexpected result: %v %s", err, out)
@@ -161,12 +164,58 @@ func testMVPDeclarationDispatch(t *testing.T, policy string) {
 		}
 	}
 	command := exec.Command("bash", script, "dispatch", filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
-	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "DISPATCHED="+filepath.Join(dir, "dispatch"))
+	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "DISPATCHED="+filepath.Join(dir, "dispatch"), "SECURITY_CUTOFF_UNIX="+strconv.FormatInt(time.Now().Unix()+3600, 10))
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("MVP declaration dispatch: %v\n%s", err, output)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, "dispatch"))
 	if err != nil || !strings.Contains(string(body), policy) {
 		t.Fatalf("MVP policy did not reach workflow inputs: %v\n%s", err, body)
+	}
+}
+
+func TestExplicitCutoffDispatch(t *testing.T) {
+	now := time.Now().Unix()
+	for _, cutoff := range []string{"", "$(touch injected)", "123;exit 0", "0123", strconv.FormatInt(now-1, 10), strconv.FormatInt(now+22000, 10), strconv.FormatInt(now+1200, 10)} {
+		t.Run(cutoff, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, body := range map[string]string{
+				"tool":    "#!/bin/sh\ncat >/dev/null\nprintf '{}'\n",
+				"gh":      "#!/bin/sh\ntouch \"$CALLED\"\nif test \"$1\" = api; then printf source; else cat > \"$DISPATCHED\"; fi\n",
+				"facts":   `{"candidate":{"mode":"v3","b_tag":"v3.1.143","b_sequence":217},"commit":"source","remote_main":"source"}`,
+				"attempt": `{"evidence_policy":"mvp-http-live-v1"}`,
+			} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", ".github/scripts/v3-candidate-dispatch.sh", "dispatch", filepath.Join(dir, "tool"), filepath.Join(dir, "facts"), filepath.Join(dir, "attempt"))
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "SECURITY_CUTOFF_UNIX="+cutoff, "CALLED="+filepath.Join(dir, "called"), "DISPATCHED="+filepath.Join(dir, "dispatch"))
+			out, err := cmd.CombinedOutput()
+			valid := cutoff == strconv.FormatInt(now+1200, 10)
+			if !valid {
+				if err == nil {
+					t.Fatalf("invalid cutoff dispatched: %s", out)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "called")); !os.IsNotExist(err) {
+					t.Fatal("GitHub called for invalid cutoff")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dispatch: %v %s", err, out)
+			}
+			body, err := os.ReadFile(filepath.Join(dir, "dispatch"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var inputs map[string]string
+			if err := json.Unmarshal(body, &inputs); err != nil {
+				t.Fatal(err)
+			}
+			if inputs["security_cutoff_unix"] != cutoff {
+				t.Fatalf("cutoff lost: %s", body)
+			}
+		})
 	}
 }

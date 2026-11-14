@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
@@ -44,6 +45,7 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 		name, result, operation, execution, outcome string
 		verifierStatus, wantStatus                  int
 	}{
+		{"cutoff-missing", "", "validate explicit security cutoff", "not started", "missing", 0, 2},
 		{"accepted", accepted, "", "completed", "accepted", 0, 0},
 		{"clean-install-only", accepted, "", "completed", "accepted", 0, 0},
 		{"refused", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
@@ -68,6 +70,21 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			directory := t.TempDir()
+			cutoffHelper, err := os.ReadFile(".github/scripts/validate-security-cutoff.sh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			helperDir := filepath.Join(directory, ".github/scripts")
+			if err := os.MkdirAll(helperDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(helperDir, "validate-security-cutoff.sh"), cutoffHelper, 0600); err != nil {
+				t.Fatal(err)
+			}
+			cutoff := strconv.FormatInt(time.Now().Unix()+3600, 10)
+			if fixture.name == "cutoff-missing" {
+				cutoff = ""
+			}
 			// Substitute only external commands. Bash, jq, redirection, traps,
 			// filesystem writes and the workflow's assertions run unchanged.
 			for name, source := range map[string]string{
@@ -127,6 +144,7 @@ exit "$VERIFIER_STATUS"
 			command.Dir = directory
 			command.Env = []string{
 				"GITHUB_REPOSITORY=fixture/repo",
+				"SECURITY_CUTOFF_UNIX=" + cutoff,
 				"PATH=" + directory + ":" + os.Getenv("PATH"),
 				"V3_CHECKLIST=unused", "V3_ATTEMPT=" + attempt, "GH_TOKEN=" + token,
 				"SIGNED_URL=https://release-assets.githubusercontent.com/fixture?" + signedQuery,

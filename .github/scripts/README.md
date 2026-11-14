@@ -150,9 +150,13 @@ file, with a `runtime-deadline` sixty seconds earlier for process shutdown and
 rollback. `up [UTC_UNIX_EPOCH]` accepts an earlier approved cutoff; it cannot
 extend the signed `attended_finish_by` plus thirty minutes or the existing
 six-hour ceiling. Without attendance the legacy six-hour bound remains. The
-workflow derives the bound from the signed attendance value; the operator must
-choose that value within the approved security window before dispatch. An
-explicit cutoff bounds execution; it does not grant permission to start a run.
+workflow requires the separate `security_cutoff_unix` input and passes it unchanged
+to `up`. Set `SECURITY_CUTOFF_UNIX` when using `v3-candidate-dispatch.sh dispatch`;
+`check` remains read-only and does not require it. Dispatch, workflow preflight,
+and the journey before host staging reject missing, malformed, expired, or
+beyond-six-hour cutoffs. The transport also retains its signed attendance bound.
+Choose both within the approved security window. An explicit cutoff bounds
+execution; it does not grant permission to start a run.
 For an approval at A with journeys ending by A+2h30 and cleanup by A+3h, use
 that attendance value and an absolute cutoff no later than A+3h. Preparation
 counts inside the window. Restart reads the stored runtime deadline unchanged.

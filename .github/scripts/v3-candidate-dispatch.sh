@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Validate the complete preparation snapshot before submitting one V3 workflow.
+# dispatch requires SECURITY_CUTOFF_UNIX from the approved operating window.
 set -euo pipefail
 if test "$#" -ne 4 || { test "$1" != check && test "$1" != dispatch; }; then
   printf '%s\n' 'usage: v3-candidate-dispatch.sh check|dispatch TOOL PREFLIGHT_FACTS DECLARATION' >&2
@@ -22,9 +23,10 @@ if ! jq -e '.evidence_policy == "mvp-live-v1" or .evidence_policy == "mvp-recurr
   exit 2
 fi
 if test "$mode" = check; then exit 0; fi
+bash "$(dirname "$0")/validate-security-cutoff.sh" "${SECURITY_CUTOFF_UNIX:-}"
 # Refuse a source change since the collected preflight snapshot.
 current=$(gh api repos/albertloky/SBXR/git/ref/heads/main --jq .object.sha)
 jq -e --arg current "$current" '.commit == $current and .remote_main == $current and .candidate.mode == "v3"' "$work/preflight.json" >/dev/null
-jq -cn --slurpfile preflight "$work/preflight.json" --rawfile attempt "$work/attempt.json" \
-  '{b_tag:$preflight[0].candidate.b_tag,b_sequence:($preflight[0].candidate.b_sequence|tostring),v3_attempt:$attempt}' > "$work/inputs.json"
+jq -cn --slurpfile preflight "$work/preflight.json" --rawfile attempt "$work/attempt.json" --arg cutoff "$SECURITY_CUTOFF_UNIX" \
+  '{security_cutoff_unix:$cutoff,b_tag:$preflight[0].candidate.b_tag,b_sequence:($preflight[0].candidate.b_sequence|tostring),v3_attempt:$attempt}' > "$work/inputs.json"
 gh workflow run candidate.yml --repo albertloky/SBXR --ref main --json < "$work/inputs.json"

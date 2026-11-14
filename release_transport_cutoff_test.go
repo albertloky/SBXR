@@ -3,6 +3,7 @@ package architecture_test
 import (
 	"context"
 	"encoding/json"
+	"go.yaml.in/yaml/v3"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -544,3 +545,98 @@ elif name == "update-ca-certificates":
 elif name not in ("curl", "ss"):
     sys.exit(80)
 `
+
+// Execute the workflow's real SSH command through the isolated transport fixture.
+// SSH itself is replaced; argument expansion and transport deadline persistence are real.
+func TestWorkflowPropagatesExplicitTransportCutoff(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		On struct {
+			Dispatch struct {
+				Inputs map[string]any `yaml:"inputs"`
+			} `yaml:"workflow_dispatch"`
+		} `yaml:"on"`
+		Env  map[string]string `yaml:"env"`
+		Jobs map[string]struct {
+			Steps []struct{ Name, Run string } `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(body, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := workflow.On.Dispatch.Inputs["security_cutoff_unix"]; !ok {
+		t.Fatal("missing dispatch cutoff input")
+	}
+	if workflow.Env["SECURITY_CUTOFF_UNIX"] != "${{ inputs.security_cutoff_unix }}" {
+		t.Fatal("cutoff input not bound to environment")
+	}
+	validation := `bash .github/scripts/validate-security-cutoff.sh "$SECURITY_CUTOFF_UNIX"`
+	var journey string
+	for _, step := range workflow.Jobs["acceptance-vps"].Steps {
+		if step.Name == "Run the packaged V3 journey" {
+			journey = step.Run
+		}
+	}
+	firstSSH := strings.Index(journey, `ssh "${ssh_options[@]}"`)
+	if i := strings.Index(journey, validation); i < 0 || firstSSH < 0 || i > firstSSH {
+		t.Fatal("cutoff must be checked before host staging")
+	}
+	var up string
+	for _, line := range strings.Split(journey, "\n") {
+		if strings.Contains(line, "v3-qualification-transport.sh up") {
+			up = line
+		}
+	}
+	if up == "" {
+		t.Fatal("transport startup command missing")
+	}
+	var preflight string
+	for _, step := range workflow.Jobs["preflight"].Steps {
+		preflight += step.Run
+	}
+	if !strings.Contains(preflight, validation) {
+		t.Fatal("preflight cutoff check missing")
+	}
+	for _, cutoff := range []string{"", "$(touch injected)", strconv.FormatInt(cutoffFixtureNow-1, 10), strconv.FormatInt(cutoffFixtureNow+22000, 10), strconv.FormatInt(cutoffFixtureNow+1200, 10)} {
+		t.Run(cutoff, func(t *testing.T) {
+			fixture := newTransportCutoffFixture(t)
+			fixture.attendance(time.Unix(cutoffFixtureNow+3600, 0).UTC().Format(time.RFC3339))
+			// No socket or remote host is used. Evaluate the exact remote command after
+			// substituting only the fixture's root path.
+			stub := `#!/usr/bin/env bash
+set -euo pipefail
+printf called > "$SBXR_CUTOFF_FIXTURE/ssh-called"
+command=${!#}
+command=${command//\/root\/sbxr-qualification-v3\//${SBXR_CUTOFF_FIXTURE}/stage/}
+exec bash -c "$command"
+`
+			if err := os.WriteFile(filepath.Join(fixture.bin, "ssh"), []byte(stub), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-c", "set -euo pipefail\nssh_options=()\n"+validation+"\n"+up)
+			cmd.Env = append(os.Environ(), "PATH="+fixture.bin+":"+os.Getenv("PATH"), "SBXR_CUTOFF_FIXTURE="+fixture.directory, "SBXR_CUTOFF_NOW="+strconv.FormatInt(cutoffFixtureNow, 10), "SECURITY_CUTOFF_UNIX="+cutoff, "ACCEPTANCE_VPS_HOST=fixture")
+			out, err := cmd.CombinedOutput()
+			if cutoff != strconv.FormatInt(cutoffFixtureNow+1200, 10) {
+				if err == nil {
+					t.Fatalf("invalid cutoff accepted: %s", out)
+				}
+				if _, err := os.Stat(filepath.Join(fixture.directory, "ssh-called")); !os.IsNotExist(err) {
+					t.Fatal("SSH reached for invalid cutoff")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("workflow startup: %v %s", err, out)
+			}
+			if strings.TrimSpace(fixture.read("stage/deadline")) != cutoff {
+				t.Fatal("workflow cutoff was not persisted exactly")
+			}
+			if strings.TrimSpace(fixture.read("stage/runtime-deadline")) != strconv.FormatInt(cutoffFixtureNow+1140, 10) {
+				t.Fatal("shutdown reserve changed")
+			}
+		})
+	}
+}

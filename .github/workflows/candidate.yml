@@ -16,6 +16,10 @@ on:
         description: V3 candidate sequence
         required: true
         type: number
+      security_cutoff_unix:
+        description: Explicit approved security cutoff in UTC Unix seconds (required for candidate runs)
+        required: false
+        type: string
       v3_attempt:
         description: Canonical secret-safe v3 attempt plan with explicit subscription support scope
         required: true
@@ -28,6 +32,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  SECURITY_CUTOFF_UNIX: ${{ inputs.security_cutoff_unix }}
   CARGO_BUILD_JOBS: "2"
   ARCHIVE_TAG: archive/full-product-v1.0.15
   V3_CHECKLIST: docs/acceptance/v3-packaged-live.md
@@ -82,6 +87,8 @@ jobs:
           }
           # Fixed labels and allowlisted outcomes only; never trace input values.
           trap 'report_preflight_exit "$?"' EXIT
+          preflight_operation='validate explicit security cutoff'
+          bash .github/scripts/validate-security-cutoff.sh "$SECURITY_CUTOFF_UNIX"
           preflight_operation='require V3 declaration'
           test -n "$V3_ATTEMPT"
           preflight_operation='check canonical V3 declaration'
@@ -653,6 +660,7 @@ jobs:
         id: journey
         run: |
           set -euo pipefail
+          bash .github/scripts/validate-security-cutoff.sh "$SECURITY_CUTOFF_UNIX"
           jq '.stages.integrated_verification = "Running" | .stages.codex_live_acceptance = "Running"' candidate-failure-state.json > candidate-failure-state.next
           mv candidate-failure-state.next candidate-failure-state.json
           install -m 0600 /dev/null ssh.key
@@ -679,7 +687,7 @@ jobs:
           trap cleanup_v3_transport EXIT
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && install -d -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3; chmod 0600 /root/sbxr-qualification-v3/qualification-manifest.json /root/sbxr-qualification-v3/qualification.bundle; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up'
+          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up '$SECURITY_CUTOFF_UNIX'"
           # The operator drives only supported packaged paths on the VPS and
           # Mac. This collector validates evidence; it cannot simulate them.
           bash .github/scripts/v3-recurring-evidence.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
