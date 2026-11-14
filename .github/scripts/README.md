@@ -66,14 +66,16 @@ preserved outside that cleanup authority. Absence checks
 treat broken symlinks as present. Keep that inventory aligned with
 `internal/proxyinstallation` whenever an owned host resource is added or moved;
 `release_packaged_driver_test.go` owns the script-level regression checks.
-Details mode and `action "Start setup"` write bounded `SBXR_MENU_PHASE` events
-to stderr with monotonic receipt/acceptance times, input classes, and return-frame
+Details mode and actions `Start setup`, `Enable subscription`, and `Check` write
+bounded `SBXR_MENU_PHASE` events to stderr with monotonic receipt/acceptance times, input classes, and return-frame
 progress. `prompt-received`
 means a complete continuation line was extracted before transcript writing;
 `prompt-accepted` follows the existing post-write deadline check. `input-sent`
 means stdin write/flush completed, not that the product consumed it. No input
 value, transcript line, path, or credential enters these events. A captured late
-prompt still refuses; timing does not extend any deadline.
+prompt still refuses; timing does not extend any deadline. Check records result
+acceptance and the subsequent menu-return wait separately, and relays the same
+filtered native diagnostics. A result code alone still does not complete the action.
 
 A prepared [exact DNS-child observer](dns-child-observer.md) adds a payload-free
 pre-spawn hook, a Linux tracing prototype and a fail-closed post-attachment
@@ -90,7 +92,7 @@ with a private nonblocking open file description. It pins the source descriptor,
 verifies pipe identity, and never modifies inherited descriptor flags or acquires
 a stdio lock. Regular files, terminals, sockets, unsupported platforms and failed
 reopens disable native diagnostics. Both timing and query records use one direct
-write of at most 512 bytes without retry/flush; the bounded details/setup relay
+write of at most 512 bytes without retry/flush; the bounded menu relay
 rejects unknown fields, labels and out-of-range values. Missing/truncated records
 prove nothing and cannot alter readiness, cancellation, cleanup or deadlines.
 `not-exited` means the last nonblocking wait found no exit; it does **not** assert
@@ -110,9 +112,9 @@ first stdout byte/line received from the accepted menu label/frame, and retain
 selection/continuation/return events. Native non-terminal public entry emits only
 typed `SBXR_NATIVE_PHASE` scopes for entry selection/authentication, Owner work,
 fresh installed/process checks, fixed queries/subprocesses and network stages.
-The details/setup driver drains a bounded private stderr pipe, relays only the closed
+The instrumented menu driver drains a bounded private stderr pipe, relays only the closed
 schema/phase allowlist and discards other stderr. Menu/native records and the final
-details/setup refusal use a daemon relay with at most 256 queued records of 512 bytes.
+instrumented menu refusal use a daemon relay with at most 256 queued records of 512 bytes.
 A full queue drops records; sink writes never run on the enforcement thread. The
 relay uses a duplicated raw descriptor without changing inherited descriptor
 flags or holding stderr's buffered lock; exit uses a 50 ms relay join allowance.

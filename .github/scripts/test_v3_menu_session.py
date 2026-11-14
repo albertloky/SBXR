@@ -53,6 +53,9 @@ if spec.get("prompt_delay"): time.sleep(spec["prompt_delay"])
 if spec.get("prompt"):
     print(spec["prompt"],flush=True); answer=sys.stdin.readline().rstrip("\n"); event({"answer":answer})
 kind=spec["kind"]
+if kind == "result-hang":
+    print("Code: "+spec["expected"],flush=True)
+    while True: time.sleep(10)
 if kind == "link":
     print("https://203.0.113.1:8443/s/"+"A"*43)
     print("Press Enter to preserve this link in terminal scrollback and return to the menu.",flush=True)
@@ -870,16 +873,20 @@ class MenuSessionDriverTest(unittest.TestCase):
             return result,events
 
     def test_unread_diagnostic_sink_cannot_block_success_or_deadline_cleanup(self):
-        for kind in ("details", "hang"):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+        for mode, label, kind in (("details", "View details", "details"),
+                                  ("details", "View details", "hang"),
+                                  ("action", "Check", "observe"),
+                                  ("action", "Check", "hang")):
+            with self.subTest(mode=mode, kind=kind), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 executable = root/"sbxr"
                 executable.write_text(FIXTURE)
                 executable.chmod(0o700)
                 row = "SBXR_NATIVE_PHASE " + json.dumps(dict(phase="snapshot",event="begin",id=1,elapsed_us=1))
-                spec = {"label":"View details", "kind":kind, "diagnostics":[row]*1000}
+                expected = "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"
+                spec = {"label":label, "kind":kind, "expected":expected, "diagnostics":[row]*1000}
                 env = dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec))
-                process = subprocess.Popen([sys.executable,"-B",str(DRIVER),"details","View details",
+                process = subprocess.Popen([sys.executable,"-B",str(DRIVER),mode,label,expected,
                                             "--executable",str(executable),"--timeout","1"],
                                            env=env,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
                 try:
@@ -887,11 +894,13 @@ class MenuSessionDriverTest(unittest.TestCase):
                     # A blocked relay has no exception to catch and cannot enforce its deadline.
                     process.wait(timeout=2.5)
                     stderr = process.stderr.read().decode()
-                    self.assertEqual(process.returncode, 0 if kind == "details" else 1, stderr)
+                    self.assertEqual(process.returncode, 0 if kind != "hang" else 1, stderr)
                     events = [json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()]
                     self.assertEqual(events[0], {"selected":"7"})
                     if kind == "details":
                         self.assertEqual(events, [{"selected":"7"},{"continue":""},{"exit":"0"}])
+                    elif kind == "observe":
+                        self.assertEqual(events, [{"selected":"7"},{"exit":"0"}])
                     else:
                         descendant = int((root/"descendant.pid").read_text())
                         until = time.monotonic()+2
@@ -914,6 +923,29 @@ class MenuSessionDriverTest(unittest.TestCase):
                             process.kill()
                             process.communicate(timeout=3)
                     process.stderr.close()
+
+    def test_check_retains_filtered_diagnostics_and_result_return_boundary(self):
+        expected = "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"
+        row = "SBXR_NATIVE_PHASE " + json.dumps(dict(phase="snapshot", event="begin", id=1, elapsed_us=1))
+        for kind in ("observe", "result-hang"):
+            with self.subTest(kind=kind):
+                spec = dict(label="Check", kind=kind, expected=expected,
+                            diagnostics=[row, "SECRET-SENTINEL /private/path"])
+                result, events = self.invoke(spec, "action", "Check", expected, timeout=1)
+                self.assertEqual(result.returncode, int(kind == "result-hang"), result.stderr)
+                self.assertIn("SBXR_NATIVE_PHASE ", result.stderr)
+                self.assertNotIn("SECRET-SENTINEL", result.stderr)
+                phases = [json.loads(line.split(" ", 1)[1])["event"] for line in result.stderr.splitlines()
+                          if line.startswith("SBXR_MENU_PHASE ")]
+                self.assertIn("result-accepted", phases)
+                self.assertIn("return-wait", phases)
+                if kind == "result-hang":
+                    self.assertIn("phase=output-deadline code=" + expected, result.stderr)
+                    self.assertNotIn("return-ready", phases)
+                    self.assertEqual(events, [{"selected": "7"}])
+                else:
+                    self.assertIn("return-ready", phases)
+                    self.assertEqual(events, [{"selected": "7"}, {"exit": "0"}])
 
     def test_enable_subscription_relays_owner_records_from_real_child_pipe(self):
         row = dict(stage="commit", outcome="foreign", id=1, elapsed_us=15)
@@ -1178,7 +1210,7 @@ class MenuSessionDriverTest(unittest.TestCase):
         spec={"label":"Check","kind":"action","expected":"SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT","actual":"SOFTWARE-LIFECYCLE-CHECK-FAILED"}
         result,events=self.invoke(spec,"action","Check",spec["expected"])
         self.assertNotEqual(result.returncode,0)
-        self.assertEqual(result.stderr,"SBXR_MENU_SESSION_REFUSED phase=result-mismatch code=SOFTWARE-LIFECYCLE-CHECK-FAILED\n")
+        self.assertEqual([line for line in result.stderr.splitlines() if not line.startswith("SBXR_MENU_PHASE ")], ["SBXR_MENU_SESSION_REFUSED phase=result-mismatch code=SOFTWARE-LIFECYCLE-CHECK-FAILED"])
         self.assertEqual(events,[{"selected":"7"}])
 
     def test_reviewed_response_clock_admits_only_active_completed_handoff(self):
@@ -1221,7 +1253,7 @@ class MenuSessionDriverTest(unittest.TestCase):
             env=dict(os.environ,FIXTURE_ROOT=temporary,FIXTURE_SPEC=json.dumps(spec),SBXR_QUALIFICATION_REQUEST=str(request))
             result=subprocess.run([sys.executable,str(DRIVER),"action","Check",spec["expected"],"--executable",str(executable)],env=env,text=True,capture_output=True,timeout=5)
             self.assertNotEqual(result.returncode,0)
-            self.assertEqual(result.stderr,"SBXR_MENU_SESSION_REFUSED phase=deadline-before-start\n")
+            self.assertEqual([line for line in result.stderr.splitlines() if not line.startswith("SBXR_MENU_PHASE ")], ["SBXR_MENU_SESSION_REFUSED phase=deadline-before-start"])
             self.assertFalse((root/"events.jsonl").exists())
 
     @unittest.skipUnless(sys.platform.startswith("linux"),"subreaper cleanup requires Linux")

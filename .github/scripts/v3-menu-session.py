@@ -230,7 +230,7 @@ class DiagnosticRelay:
 
 
 class PhaseTiming:
-    """Bounded details/setup events; never transcript bytes or input values."""
+    """Bounded menu events; never transcript bytes or input values."""
     def __init__(self, sink, deadline):
         self.relay = DiagnosticRelay(sink)
         self.deadline = deadline
@@ -594,7 +594,10 @@ class MenuSession:
                     if code != expected:
                         raise ProtocolError("result-mismatch")
                     found = True
+                    self.timing("result-accepted")
+                    self.timing("return-wait")
             elif found and frame and line == "0. Exit":
+                self.timing("return-ready")
                 self.write("0\n")
                 return
 
@@ -979,7 +982,7 @@ def main():
                 raise ProtocolError("subreaper-unavailable")
         for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(signum, receive)
-        if args.mode == "details" or (args.mode == "action" and args.label in ("Start setup", "Enable subscription")):
+        if args.mode == "details" or (args.mode == "action" and args.label in ("Start setup", "Enable subscription", "Check")):
             timing = PhaseTiming(sys.stderr, time.monotonic() + float(args.timeout))
         drive(args, cancelled, timing)
     except Exception as error:
