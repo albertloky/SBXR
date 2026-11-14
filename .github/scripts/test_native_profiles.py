@@ -166,6 +166,25 @@ class OriginalProfilesV3Tests(unittest.TestCase):
                 self.assertTrue(audit['changes'])
                 self.assertFalse(all(item['allowed'] for item in audit['changes']))
 
+    def test_refresh_options_require_exact_preservation(self):
+        options = {'decryptPasswordAES': 'PUBLIC-AES',
+                   'decryptPasswordAGE': 'PUBLIC-AGE',
+                   'outboundDns': ['https://example.invalid/dns-query'],
+                   'preferOutboundDns': True}
+        self.before[1].update(options)
+        refreshed = self.changed('updateTime', '2026-10-20 10:52:38.926923')
+        self.assertTrue(self.audit(refreshed)['passed'])
+        for key, default in [('decryptPasswordAES', ''), ('decryptPasswordAGE', ''),
+                             ('outboundDns', []), ('preferOutboundDns', False)]:
+            for removed in (False, True):
+                with self.subTest(field=key, removed=removed):
+                    changed = copy.deepcopy(refreshed)
+                    if removed:
+                        del changed[1][key]
+                    else:
+                        changed[1][key] = default
+                    self.assertFalse(self.audit(changed)['passed'])
+
     def test_added_removed_fields_nodes_profiles_and_order_fail(self):
         cases = []
         added = copy.deepcopy(self.before); added[1]['other'] = 'PUBLIC'; cases.append(added)
