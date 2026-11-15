@@ -254,6 +254,10 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
         reviewed
     }
 
+    fn discard_review(&self) {
+        *self.owner.borrow_mut() = Rc::new(());
+        self.active.borrow_mut().take();
+    }
     fn review(&self, action: Action) -> Review {
         self.review_observation(action, false).0
     }

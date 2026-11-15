@@ -668,3 +668,56 @@ fn owner_cancellation_prevents_latest_acquisition_and_exact_finisher_restoration
         journal
     );
 }
+
+#[test]
+fn lifecycle_selection_discards_proxy_authority_without_an_unused_status_review() {
+    use crate::domain::Action;
+    use crate::proxyinstallation::{Installation, Interface as Proxy, PreparedAction, Review};
+    struct Observed {
+        inner: Installation,
+        reviews: std::cell::Cell<usize>,
+        discards: std::cell::Cell<usize>,
+    }
+    impl Proxy for Observed {
+        fn review(&self, action: Action) -> Review {
+            self.reviews.set(self.reviews.get() + 1);
+            self.inner.review(action)
+        }
+        fn discard_review(&self) {
+            self.discards.set(self.discards.get() + 1);
+            self.inner.discard_review();
+        }
+        fn execute(&mut self, p: PreparedAction, c: Confirmation) -> crate::domain::Result {
+            self.inner.execute(p, c)
+        }
+    }
+    let root = Root::new();
+    root.pair(&crate::release_acquisition::fixture_archive());
+    let mut lifecycle = root.module();
+    let mut proxy = Observed {
+        inner: Installation::simulation(),
+        reviews: 0.into(),
+        discards: 0.into(),
+    };
+    let mut output = Vec::new();
+    crate::terminal::run_with_lifecycle(
+        &mut std::io::Cursor::new(b"3\n4\n0\n"),
+        &mut output,
+        &mut proxy,
+        &mut lifecycle,
+    )
+    .unwrap();
+    assert_eq!(
+        proxy.discards.get(),
+        2,
+        "Check and Recover each revoke prior authority"
+    );
+    assert_eq!(
+        proxy.reviews.get(),
+        3,
+        "each displayed menu still reads fresh status"
+    );
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains(Code::CheckReleaseUnavailable.as_str()));
+    assert!(text.contains("No recovery is available"));
+}

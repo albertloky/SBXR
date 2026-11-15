@@ -381,3 +381,41 @@ fn combined_status_invalidates_prepared_action_and_preserves_removal_fallback() 
             .contains(&Action::CompleteRemoval)
     );
 }
+
+#[test]
+fn discard_review_revokes_authority_without_opening_host_journeys() {
+    use std::cell::Cell;
+    struct Counted(Rc<Cell<usize>>);
+    impl OwnerSources<'_> for Counted {
+        fn journeys(&self) -> std::result::Result<Vec<Journey>, HostError> {
+            self.0.set(self.0.get() + 1);
+            Ok(vec![Journey::Standard])
+        }
+        fn open(&self, _: Journey) -> std::result::Result<Box<dyn Interface>, HostError> {
+            self.0.set(self.0.get() + 1);
+            Ok(Box::new(Installation::simulation()))
+        }
+        fn mode(&self) -> ExecutionMode {
+            ExecutionMode::InjectedHost
+        }
+    }
+    let calls = Rc::new(Cell::new(0));
+    let mut owner = OwnerInstallation::new(Counted(calls.clone()));
+    let prepared = owner.review(Action::StartSetup).prepared.unwrap();
+    let before = calls.get();
+    owner.discard_review();
+    assert_eq!(calls.get(), before, "revocation must not inspect the host");
+    assert!(
+        owner.active.borrow().is_none(),
+        "selected module/writer must be dropped"
+    );
+    assert_eq!(
+        owner.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    let fresh = owner.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(
+        owner.execute(fresh, Confirmation::Approved).outcome,
+        Outcome::SetupComplete
+    );
+}

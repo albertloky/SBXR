@@ -86,6 +86,11 @@ pub trait Interface {
         review
     }
     fn review(&self, action: Action) -> Review;
+    /// Revoke outstanding action authority before another module runs.
+    /// Adapters without a separate revocation seam retain the full-review fallback.
+    fn discard_review(&self) {
+        self.review(Action::Status);
+    }
     /// Fresh facts for one menu frame. Implementations may share an observation
     /// within this call, but must not retain it across Owner input.
     fn review_status(&self) -> (Review, &'static str) {

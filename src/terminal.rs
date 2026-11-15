@@ -151,8 +151,8 @@ fn run_inner(
             && (number == current.legal_actions.len() + 1
                 || number == current.legal_actions.len() + 2)
         {
-            // Expire every outstanding proxy review before a lifecycle call.
-            installation.review(Action::Status);
+            // Revoke action authority without collecting an unused host snapshot.
+            installation.discard_review();
             if run_lifecycle(
                 input,
                 output,
