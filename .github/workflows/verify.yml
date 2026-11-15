@@ -52,7 +52,8 @@ jobs:
           (
             umask 022
             go test ./... -count=1
-            go test -race ./... -count=1
+            # The full release race suite can exceed Go's default 10m package budget.
+            go test -race ./... -count=1 -timeout=15m
             go vet ./...
             go mod verify
           )
