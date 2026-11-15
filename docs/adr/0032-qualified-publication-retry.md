@@ -455,3 +455,26 @@ burn, cleanup, signing or publication. It does not turn the failed Check into a
 pass or resolve incomplete local cleanup verification. Prospective `v3.1.145` /
 219 requires final-source CI and ordinary candidate/live admission, including a
 separately valid bounded test scope and fresh readiness.
+
+
+## Retained q219 identity — 2026-11-15
+
+The Owner approved preserving failed signed draft `v3.1.145`, sequence 219,
+release `445854747`, source `2443140fcb9fee0180e520350ad9e2cf46263629`,
+workflow `43681700607`, all four assets, its signed manifest and failure evidence.
+The manifest SHA-256 is
+`a5fa50f2b04c5b85a4dd743500b188ad83c8424d70b3786b0eb1ac3455445d07`;
+the release-index SHA-256 is
+`1345061e29b4ffaa3b2da16cf150710271bff2e9a59e0fa48bceb5a429c92f0d`.
+Signing authority remains **signed-unqualified**. The failed qualification is
+unchanged by the separately approved administrative removal of the installation.
+
+The compiled reservation pins all four asset IDs, names, sizes and digests.
+The preceding sixteen records remain unchanged. Fresh observations must match
+all seventeen retained drafts and prove their release/burn refs absent. Missing,
+changed, duplicated or unavailable observations refuse. Build 219's tag, sequence
+and release ID cannot be reused or promoted, including through a current-candidate
+allowance. This decision authorizes no deletion, burn or publication.
+
+Prospective `v3.1.146` / 220 requires final-source CI and its own signed candidate,
+fresh readiness, approved bounded live test and verified scoped restoration.
