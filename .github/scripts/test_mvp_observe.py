@@ -40,6 +40,44 @@ class ObserveTest(unittest.TestCase):
         self.assertFalse(list(self.root.glob(".mvp-observe-*")), "temporary publication file leaked")
         return result
 
+    def test_stage_stdout_is_one_result_with_status_on_stderr(self):
+        # Exercise the actual child CLI and inherited pipes used by staging.
+        producer = """import json, subprocess, sys
+subprocess.run([sys.executable, sys.argv[1], 'start', '--request', sys.argv[2],
+                '--draft', sys.argv[3], '--status-to-stderr'], check=True)
+print(json.dumps({'started': True}))
+"""
+        result = subprocess.run([sys.executable, "-c", producer, str(SCRIPT),
+                                 str(self.request), str(self.draft)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"started": True})
+        status = json.loads(result.stderr)
+        self.assertEqual(status["scenario_id"], self.value["scenario_id"])
+        self.assertEqual(status["pending"], self.value["required_checks"])
+        self.assertGreater(status["seconds_remaining"], 0)
+        self.assertEqual(status["deadline"], dt.datetime.fromtimestamp(
+            self.value["deadline_unix"], dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        draft = json.loads(self.draft.read_text())
+        self.assertIsNone(draft["observation"]["completed_at"])
+        self.assertTrue(all(c["result"] is None for c in draft["observation"]["checks"]))
+        self.assertEqual(self.draft.stat().st_mode & 0o777, 0o600)
+
+    def test_status_stream_preserves_default_deadline_and_refusal(self):
+        default = self.call("start")
+        self.assertEqual(json.loads(default.stdout)["scenario_id"], self.value["scenario_id"])
+        self.assertEqual(default.stderr, "")
+        before = self.draft.read_bytes()
+        status = self.call("status", "--status-to-stderr")
+        self.assertEqual(status.stdout, "")
+        self.assertEqual(json.loads(status.stderr)["pending"], self.value["required_checks"])
+        deadline = self.call("deadline", "--status-to-stderr")
+        self.assertEqual(int(deadline.stdout), self.value["deadline_unix"])
+        self.assertEqual(deadline.stderr, "")
+        refusal = self.call("start", "--status-to-stderr", ok=False)
+        self.assertEqual(refusal.stdout, "")
+        self.assertIn("Observation refused:", refusal.stderr)
+        self.assertEqual(self.draft.read_bytes(), before)
+
     def test_explicit_observations_sealed_atomic_publication(self):
         self.call("start")
         self.assertEqual(self.draft.stat().st_mode & 0o777, 0o600)

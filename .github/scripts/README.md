@@ -50,6 +50,11 @@ relax their source, payload, signature or publication requirements.
 | Candidate failure retention | `candidate-evidence.py`, `test_release_safety.py`; bounded screened proposals, read-only failure handling and explicit action-time decisions under [ADR-0032](../../docs/adr/0032-qualified-publication-retry.md) |
 | Retained candidate reservation | `check-candidate-reservations.sh`; read-only exact observations for the twelve retained drafts and each tag/burn ref, validated by `sbxr-release candidate-reservations`, collected before draft creation and publication; signing verifies the successful current-run record without expanding its token |
 
+Staging callers that emit their own single JSON result can pass
+`mvp-observe.py start --status-to-stderr` to retain the recorder status summary
+on stderr without adding a second stdout record. Default status output and numeric
+deadline stdout are unchanged; the option does not change observations or authority.
+
 `v3-recurring-evidence.sh submit` emits a fixed stderr warning before publishing
 terminal failure facts. Acceptance ends collection and triggers candidate transport
 teardown, so perform authorized, safely admitted product cleanup first when the

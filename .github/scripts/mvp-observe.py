@@ -279,7 +279,8 @@ def run(options):
             raise Refusal("status takes no check or output")
     pending = [c["check"] for c in draft["observation"]["checks"] if c["result"] is None]
     print(json.dumps({"scenario_id": request["scenario_id"], "deadline": stamp(deadline),
-                      "seconds_remaining": int((deadline-now).total_seconds()), "pending": pending}, sort_keys=True))
+                      "seconds_remaining": int((deadline-now).total_seconds()), "pending": pending}, sort_keys=True),
+          file=sys.stderr if getattr(options, "status_to_stderr", False) else sys.stdout)
 
 
 def main():
@@ -292,6 +293,8 @@ def main():
     parser.add_argument("--phase")
     parser.add_argument("--prepared-at")
     parser.add_argument("--notified-at")
+    parser.add_argument("--status-to-stderr", action="store_true",
+                        help="Send status summaries to stderr; numeric deadline output stays on stdout")
     try:
         run(parser.parse_args())
     except (OSError, ValueError, TypeError, KeyError, OverflowError) as error:
