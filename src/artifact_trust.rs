@@ -690,6 +690,10 @@ pub struct AcquisitionResponse {
     link_header_present: bool,
 }
 impl AcquisitionResponse {
+    /// Transport status for diagnostics; this does not authenticate the response.
+    pub fn status(&self) -> u16 {
+        self.status
+    }
     pub fn new(status: u16, body: impl Read + 'static, link_header_present: bool) -> Self {
         Self {
             status,

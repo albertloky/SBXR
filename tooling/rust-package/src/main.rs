@@ -1,3 +1,5 @@
+mod public_diagnostics;
+
 use sbxr::records::sha256_hex;
 use sbxr::release_identity::{Architecture, MAX_EXECUTABLE_BYTES, rust_artifact_metadata};
 use sbxr_rust_package::{
@@ -106,8 +108,9 @@ fn run() -> Result<serde_json::Value> {
                 )
                 .map_err(|_| PackageError("arguments"))?;
             }
-            let mut transport = sbxr::release_https::HttpsTransport::new()
+            let transport = sbxr::release_https::HttpsTransport::new()
                 .map_err(|_| PackageError("public-transport"))?;
+            let mut transport = public_diagnostics::DiagnosticTransport::new(transport);
             let budget = sbxr::artifact_trust::SelectionBudget::new();
             let result = if command == "verify-public-latest" {
                 sbxr::release_acquisition::AuthenticatedArchive::acquire_latest(
@@ -123,7 +126,12 @@ fn run() -> Result<serde_json::Value> {
                     &budget,
                 )
             };
-            Ok(public_result(result))
+            let failed = result.is_err();
+            let mut output = public_result(result);
+            if failed {
+                output["acquisition_diagnostic"] = transport.diagnostic();
+            }
+            Ok(output)
         }
         "inspect-archive" => {
             let arch = architecture(&options)?;

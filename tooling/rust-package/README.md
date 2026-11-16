@@ -169,6 +169,10 @@ perform bounded read-only HTTPS acquisition. The current CLI also provides `insp
 `verify-public-latest` and `verify-public-release --tag vX.Y.Z`. Public verification
 uses the existing real Sigstore/immutable metadata/Acceptance Record/index/asset
 pipeline and emits the established accepted/refused/unavailable identity JSON.
+On failure, `acquisition_diagnostic` records only the last request category,
+transport outcome and HTTP status (or null). It never includes a URL, header or
+body. A 200 status does not establish trust or identify which subsequent evidence
+check refused; no request means the diagnostic is null. Success JSON is unchanged.
 It accepts no endpoint or test-verifier override. Tagged verification cannot
 select Latest or a candidate transport.
 
