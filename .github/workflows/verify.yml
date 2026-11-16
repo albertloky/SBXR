@@ -5,18 +5,46 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      public_verifier_probe:
+        description: Also run the read-only public release verifier
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: verify-${{ github.event.pull_request.number || github.ref }}
+  group: verify-${{ github.event.pull_request.number || github.ref }}-${{ inputs.public_verifier_probe || false }}
   cancel-in-progress: true
 
 env:
   CARGO_BUILD_JOBS: "2"
 
 jobs:
+  public-verifier-probe:
+    if: github.event_name == 'workflow_dispatch' && inputs.public_verifier_probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Prepare pinned Rust repository tools
+        run: bash tooling/rust-package/setup-ci.sh tools
+      - name: Read and authenticate the public release
+        run: |
+          set -euo pipefail
+          cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > public-verification.json
+          jq -e '.outcome == "accepted"' public-verification.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: public-verifier-probe
+          path: public-verification.json
+          if-no-files-found: warn
+          retention-days: 7
+
   native-installer-updater:
     strategy:
       fail-fast: true
