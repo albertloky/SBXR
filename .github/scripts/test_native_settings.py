@@ -136,7 +136,7 @@ class NativeAppIdentityTests(NativeSettingsFixture):
 
     def test_only_reviewed_version_build_pairs_are_admitted(self):
         original = plistlib.loads(self.info.read_bytes())
-        for version, build in [('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927'), ('1.2.26', '2929'), ('1.2.26', '2930'), ('1.2.26', '2931')]:
+        for version, build in [('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927'), ('1.2.26', '2929'), ('1.2.26', '2930'), ('1.2.26', '2931'), ('1.2.26', '2932')]:
             with self.subTest(version=version, build=build):
                 self.write(self.info, plistlib.dumps(dict(original,
                     CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
@@ -145,7 +145,7 @@ class NativeAppIdentityTests(NativeSettingsFixture):
         for version, build in [('1.2.25', '2923'), ('1.2.26', '2802'),
                                ('1.2.26', '2924'), ('1.2.27', '2923'), ('1.2.25', '2927'),
                                ('1.2.27', '2927'), ('1.2.26', '2928'), ('1.2.25', '2929'),
-                               ('1.2.27', '2929'), ('1.2.26', '2932'), ('1.2.25', '2931'), ('1.2.27', '2931'),
+                               ('1.2.27', '2929'), ('1.2.26', '2933'), ('1.2.25', '2932'), ('1.2.27', '2932'), ('1.2.26', 2932), ('1.2.25', '2931'), ('1.2.27', '2931'),
                                ('1.2.26', 2931), ('1.2.25', '2930'),
                                ('1.2.27', '2930'), ('1.2.26', 2930), ('1.2.26', 2929), ('', ''), ('1.2.26', 2927)]:
             with self.subTest(version=version, build=build):
@@ -204,6 +204,17 @@ class NativeAppIdentityTests(NativeSettingsFixture):
         info['CFBundleVersion'] = '2931'
         self.write(self.info, plistlib.dumps(info), 0o644)
         self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2931')
+        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
+            RECEIPTS.settings_readback(binding)
+
+    def test_2931_to_2932_upgrade_invalidates_bound_settings(self):
+        info = plistlib.loads(self.info.read_bytes())
+        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2931')
+        self.write(self.info, plistlib.dumps(info), 0o644)
+        binding = RECEIPTS.settings_binding()
+        info['CFBundleVersion'] = '2932'
+        self.write(self.info, plistlib.dumps(info), 0o644)
+        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2932')
         with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
             RECEIPTS.settings_readback(binding)
 
@@ -698,6 +709,11 @@ class NativeSettings2930Tests(NativeSettingsV2Tests):
 class NativeSettings2931Tests(NativeSettingsV2Tests):
     app_version = "1.2.26"
     app_build = "2931"
+
+
+class NativeSettings2932Tests(NativeSettingsV2Tests):
+    app_version = "1.2.26"
+    app_build = "2932"
 
 
 if __name__ == '__main__':

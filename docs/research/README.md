@@ -1,5 +1,8 @@
 # Dependency research
 
+- [Karing 1.2.26/2932 preservation compatibility](karing-2932-preservation.md):
+  verified official package and installed DMG identity, unchanged preservation rules.
+
 - [Karing 1.2.26/2931 preservation compatibility](karing-2931-preservation.md):
   verified package, refresh-option analysis and strict preservation regressions.
 
