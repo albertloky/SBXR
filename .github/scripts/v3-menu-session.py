@@ -280,7 +280,7 @@ class PhaseTiming:
         self.relay.close()
 
 
-NATIVE_PHASES = frozenset("authenticate entry entry-select installed-pair journeys lifecycle material network network-bind network-connect network-dns network-handshake network-ip-http network-roots network-tls open-disclosure open-http open-identity open-removal open-standard open-tunnel package probe-image query-active query-clock query-configuration-owner query-destination-dns query-enabled query-group query-hold query-listener query-load-state query-package query-process query-public-ip-dns query-start-condition query-unit-owner query-user query-validate review-action review-details review-status snapshot subprocess subprocess-spawn write-details".split())
+NATIVE_PHASES = frozenset("disclosure-execute disclosure-acquire disclosure-guard disclosure-inspect disclosure-running disclosure-read authenticate entry entry-select installed-pair journeys lifecycle material network network-bind network-connect network-dns network-handshake network-ip-http network-roots network-tls open-disclosure open-http open-identity open-removal open-standard open-tunnel package probe-image query-active query-clock query-configuration-owner query-destination-dns query-enabled query-group query-hold query-listener query-load-state query-package query-process query-public-ip-dns query-start-condition query-unit-owner query-user query-validate review-action review-details review-status snapshot subprocess subprocess-spawn write-details".split())
 
 
 QUERY_OUTCOMES = frozenset("completed-zero completed-nonzero timeout cancelled output-limit io unsafe foreign injected live-unavailable unsupported-host busy".split())
@@ -982,7 +982,7 @@ def main():
                 raise ProtocolError("subreaper-unavailable")
         for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(signum, receive)
-        if args.mode == "details" or (args.mode == "action" and args.label in ("Start setup", "Enable subscription", "Check")):
+        if args.mode in ("details", "disclose") or (args.mode == "action" and args.label in ("Start setup", "Enable subscription", "Check")):
             timing = PhaseTiming(sys.stderr, time.monotonic() + float(args.timeout))
         drive(args, cancelled, timing)
     except Exception as error:

@@ -53,6 +53,16 @@ if spec.get("prompt_delay"): time.sleep(spec["prompt_delay"])
 if spec.get("prompt"):
     print(spec["prompt"],flush=True); answer=sys.stdin.readline().rstrip("\n"); event({"answer":answer})
 kind=spec["kind"]
+if kind in ("disclose", "disclose-hang"):
+    print('SBXR_NATIVE_PHASE '+json.dumps(dict(phase='disclosure-execute',event='begin',id=1,elapsed_us=1)),file=sys.stderr,flush=True)
+    print('SECRET-SENTINEL /private/path',file=sys.stderr,flush=True)
+    if kind == "disclose-hang":
+        while True: time.sleep(10)
+    print('SECRET-SENTINEL-CONFIGURATION')
+    print('SBXR_NATIVE_PHASE '+json.dumps(dict(phase='disclosure-execute',event='end',id=1,elapsed_us=2)),file=sys.stderr,flush=True)
+    print("Code: "+spec["expected"],flush=True)
+    print("Press Enter to preserve this configuration in terminal scrollback and return to the menu.",flush=True)
+    event({"continue":sys.stdin.readline().rstrip("\n")})
 if kind == "result-hang":
     print("Code: "+spec["expected"],flush=True)
     while True: time.sleep(10)
@@ -871,6 +881,30 @@ class MenuSessionDriverTest(unittest.TestCase):
                                   env=env,text=True,capture_output=True,timeout=10)
             events=[json.loads(line) for line in (root/"events.jsonl").read_text().splitlines()] if (root/"events.jsonl").exists() else []
             return result,events
+
+    def test_disclosure_cli_retains_filtered_timing_and_unchanged_confirmation_deadline(self):
+        label = "Show client configuration"
+        expected = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
+        for kind in ("disclose", "disclose-hang"):
+            with self.subTest(kind=kind):
+                result, events = self.invoke(dict(label=label, kind=kind,
+                    prompt=menu.PROMPTS[label], expected=expected),
+                    "disclose", label, expected, timeout=1)
+                self.assertEqual(result.returncode, int(kind == "disclose-hang"), result.stderr)
+                self.assertEqual(events[:2], [{"selected":"7"}, {"answer":"y"}])
+                self.assertNotIn("SECRET-SENTINEL", result.stderr)
+                self.assertNotIn("/private/path", result.stderr)
+                rows = [json.loads(line.split(" ", 1)[1]) for line in result.stderr.splitlines()
+                        if line.startswith("SBXR_NATIVE_PHASE ")]
+                self.assertEqual([row["event"] for row in rows],
+                                 ["begin"] if kind == "disclose-hang" else ["begin", "end"])
+                self.assertTrue(all(row["phase"] == "disclosure-execute" for row in rows))
+                if kind == "disclose-hang":
+                    self.assertIn("phase=output-deadline", result.stderr)
+                    self.assertNotIn("SECRET-SENTINEL-CONFIGURATION", result.stdout)
+                else:
+                    self.assertIn("SECRET-SENTINEL-CONFIGURATION", result.stdout)
+                    self.assertEqual(events[2:], [{"continue":""}, {"exit":"0"}])
 
     def test_unread_diagnostic_sink_cannot_block_success_or_deadline_cleanup(self):
         for mode, label, kind in (("details", "View details", "details"),

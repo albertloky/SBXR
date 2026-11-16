@@ -40,6 +40,7 @@ impl<H: d::Host> DisclosureInstallation<H> {
         c: Confirmation,
         output: Option<&mut dyn Write>,
     ) -> io::Result<crate::domain::Result> {
+        let _timing = crate::host::timing::span(crate::host::timing::Phase::DisclosureExecute);
         if !Rc::ptr_eq(self.owner.get_mut(), &p.owner) {
             return Ok(Self::result(
                 Outcome::Refused,

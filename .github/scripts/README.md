@@ -117,6 +117,12 @@ first stdout byte/line received from the accepted menu label/frame, and retain
 selection/continuation/return events. Native non-terminal public entry emits only
 typed `SBXR_NATIVE_PHASE` scopes for entry selection/authentication, Owner work,
 fresh installed/process checks, fixed queries/subprocesses and network stages.
+The `disclose` driver mode now enables the same filtered timing channel as
+`details` and the instrumented actions. Disclosure additionally brackets execution, lock acquisition, guard verification,
+inspection, running-state checks and protected reads. Repeated inspection spans
+remain distinct, so cumulative revalidation cost can be separated from execution
+without removing freshness checks. These fixed labels contain no configuration,
+credential, path or error payload; scope exit includes refusal and is not success.
 The instrumented menu driver drains a bounded private stderr pipe, relays only the closed
 schema/phase allowlist and discards other stderr. Menu/native records and the final
 instrumented menu refusal use a daemon relay with at most 256 queued records of 512 bytes.

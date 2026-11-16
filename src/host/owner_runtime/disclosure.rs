@@ -62,6 +62,7 @@ impl<I: OwnerIo> OwnerRuntime<'_, I> {
         owner: &Arc<HostLock>,
         c: &StartContext,
     ) -> Result<d::RunningFacts, HostError> {
+        let _timing = crate::host::timing::span(crate::host::timing::Phase::DisclosureRunning);
         let host = super::super::linux::observation::ubuntu(&self.fs)?
             && self.text(Observation::Architecture, c)? == "amd64";
         let ip = self.io.public_ipv4(c)?.to_string();

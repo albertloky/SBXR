@@ -2351,9 +2351,73 @@ fn protected_disclosure_streams_only_after_confirmation_and_preserves_output_fai
     );
     assert!(output.is_empty());
     let r = owner.review(Action::ShowClientConfiguration);
-    let result = owner
-        .execute_output(r.prepared.unwrap(), Confirmation::Approved, &mut output)
-        .unwrap();
+    let (result, trace) = crate::host::timing::capture(|| {
+        owner.execute_output(r.prepared.unwrap(), Confirmation::Approved, &mut output)
+    });
+    let result = result.unwrap();
+    let assert_trace = |trace: Vec<u8>| {
+        let text = String::from_utf8(trace).unwrap();
+        for secret in [
+            "12345678-1234-4234-8234-123456789abc",
+            "private_key",
+            "vless://",
+        ] {
+            assert!(!text.contains(secret));
+        }
+        assert!(!text.contains(root.0.to_str().unwrap()));
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("SBXR_NATIVE_PHASE "))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let mut active = std::collections::BTreeMap::new();
+        for row in &rows {
+            assert_eq!(row.as_object().unwrap().len(), 4);
+            let id = row["id"].as_u64().unwrap();
+            let time = row["elapsed_us"].as_u64().unwrap();
+            if row["event"] == "begin" {
+                assert!(active.insert(id, (row["phase"].clone(), time)).is_none());
+            } else {
+                let (phase, start) = active.remove(&id).unwrap();
+                assert_eq!(phase, row["phase"]);
+                assert!(time >= start);
+            }
+        }
+        assert!(active.is_empty());
+        let begins: Vec<&str> = rows
+            .iter()
+            .filter(|r| r["event"] == "begin")
+            .map(|r| r["phase"].as_str().unwrap())
+            .collect();
+        for (phase, count) in [
+            ("disclosure-execute", 1),
+            ("disclosure-acquire", 1),
+            ("disclosure-inspect", 2),
+            ("disclosure-running", 2),
+            ("disclosure-read", 1),
+        ] {
+            assert_eq!(
+                begins.iter().filter(|p| **p == phase).count(),
+                count,
+                "{phase}"
+            );
+        }
+        assert!(begins.iter().filter(|p| **p == "disclosure-guard").count() > 2);
+        let sequence: Vec<_> = begins
+            .iter()
+            .copied()
+            .filter(|p| matches!(*p, "disclosure-inspect" | "disclosure-read"))
+            .collect();
+        assert_eq!(
+            sequence,
+            [
+                "disclosure-inspect",
+                "disclosure-read",
+                "disclosure-inspect"
+            ]
+        );
+    };
+    assert_trace(trace);
     assert_eq!(result.outcome, Outcome::ClientConfigurationDisclosed);
     assert!(output.starts_with(b"----- BEGIN SBXR CLIENT CONFIGURATION -----\n"));
     assert!(
@@ -2367,15 +2431,15 @@ fn protected_disclosure_streams_only_after_confirmation_and_preserves_output_fai
             .any(|s| s == b"private_key")
     );
     let r = owner.review(Action::ShowClientConfiguration);
-    assert!(
-        owner
-            .execute_output(
-                r.prepared.unwrap(),
-                Confirmation::Approved,
-                &mut FailingOutput
-            )
-            .is_err()
-    );
+    let (failed, trace) = crate::host::timing::capture(|| {
+        owner.execute_output(
+            r.prepared.unwrap(),
+            Confirmation::Approved,
+            &mut FailingOutput,
+        )
+    });
+    assert!(failed.is_err());
+    assert_trace(trace);
     assert_eq!(
         fs::read(root.0.join("var/lib/sbxr/proxy-ownership.json")).unwrap(),
         original

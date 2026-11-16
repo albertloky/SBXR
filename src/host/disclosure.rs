@@ -5,6 +5,7 @@ use super::{
     filesystem::ProtectedFs,
     locks::{HostLock, PackageLocks},
     owner_runtime::{NativeIo, OwnerIo, OwnerRuntime},
+    timing::{Phase, span},
 };
 use crate::{
     disclosure as d, durable::OwnershipStore, records::OwnershipRecord,
@@ -69,6 +70,7 @@ impl<I: OwnerIo> d::Host for ProtectedDisclosureHost<'_, I> {
         self.fs.gid
     }
     fn acquire(&mut self) -> Result<Guard, d::Error> {
+        let _timing = span(Phase::DisclosureAcquire);
         let owner = Arc::new(HostLock::existing(self.fs.path(), self.fs.uid).map_err(refused)?);
         let packages = owner.retain_packages().map_err(refused)?;
         let store = RefCell::new(
@@ -84,6 +86,7 @@ impl<I: OwnerIo> d::Host for ProtectedDisclosureHost<'_, I> {
         Ok(guard)
     }
     fn verify_guard(&mut self, g: &Guard) -> Result<(), d::Error> {
+        let _timing = span(Phase::DisclosureGuard);
         if g.owner.root() != self.fs.path() {
             return Err(d::Error::Authority);
         }
@@ -100,6 +103,7 @@ impl<I: OwnerIo> d::Host for ProtectedDisclosureHost<'_, I> {
         })
     }
     fn inspect(&mut self, g: &Guard, r: &OwnershipRecord) -> Result<d::Inspection, d::Error> {
+        let _timing = span(Phase::DisclosureInspect);
         self.verify_guard(g)?;
         if r.release_identity() != self.proof.record().release_identity() {
             return Err(d::Error::Authority);
@@ -112,6 +116,7 @@ impl<I: OwnerIo> d::Host for ProtectedDisclosureHost<'_, I> {
         Ok(result)
     }
     fn read(&mut self, g: &Guard, m: d::Material) -> Result<d::ProtectedFile, d::Error> {
+        let _timing = span(Phase::DisclosureRead);
         self.verify_guard(g)?;
         let (path, mode, limit) = match m {
             d::Material::Configuration => ("etc/sing-box/config.json", 0o640, 1 << 20),
