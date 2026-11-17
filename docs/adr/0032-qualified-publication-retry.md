@@ -478,3 +478,27 @@ allowance. This decision authorizes no deletion, burn or publication.
 
 Prospective `v3.1.146` / 220 requires final-source CI and its own signed candidate,
 fresh readiness, approved bounded live test and verified scoped restoration.
+
+
+## Retained q220 identity — 2026-11-17
+
+Preserve signed-unqualified draft `v3.1.146`, sequence 220, release `447230997`,
+source `066cbd5aa0814c32d9d6e450fcce30b620249dd9`, workflow `43888940342`,
+its four exact assets, signed manifest/bundle and all failure/restoration evidence.
+The manifest SHA-256 is
+`6ecd1c526d9b6cd714ef4e5a840ec73a0a5268e40f0dac03375194c5605f96c1`;
+the bundle SHA-256 is
+`75bcbbaa57e83b3ff2e49cd6f55a24467e3b0099f0bbac94b2c8519ce3999dca`;
+the release-index SHA-256 is
+`50adcb3f65a64176a54fa4fe5262543396b1ccba30e8525ab1449c28a73adb40`.
+
+The compiled reservation pins all four asset IDs, names, sizes and digests.
+All seventeen preceding reservations remain unchanged. Fresh admission requires
+all eighteen matching drafts and absent release/burn refs; missing, changed,
+duplicated or unavailable observations refuse. The reserved tag, sequence and
+release ID cannot be reused or promoted, including as the current candidate.
+
+This code-only preservation decision does not change the failed qualification or
+claim retrospective cleanup. It authorizes no remote draft mutation, deletion,
+burn signing, publication or live test. Prospective `v3.1.147` / 221 requires
+final-source CI and fresh candidate admission; live work needs separate approval.
