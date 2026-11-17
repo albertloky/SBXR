@@ -53,12 +53,19 @@ if spec.get("prompt_delay"): time.sleep(spec["prompt_delay"])
 if spec.get("prompt"):
     print(spec["prompt"],flush=True); answer=sys.stdin.readline().rstrip("\n"); event({"answer":answer})
 kind=spec["kind"]
-if kind in ("disclose", "disclose-hang"):
+if kind in ("disclose", "disclose-hang", "disclose-partial-hang", "disclose-bad-code", "disclose-invalid-output"):
     print('SBXR_NATIVE_PHASE '+json.dumps(dict(phase='disclosure-execute',event='begin',id=1,elapsed_us=1)),file=sys.stderr,flush=True)
     print('SECRET-SENTINEL /private/path',file=sys.stderr,flush=True)
     if kind == "disclose-hang":
         while True: time.sleep(10)
-    print('SECRET-SENTINEL-CONFIGURATION')
+    print('SECRET-SENTINEL-CONFIGURATION',flush=True)
+    if kind == 'disclose-partial-hang':
+        while True: time.sleep(10)
+    if kind == 'disclose-invalid-output':
+        sys.stdout.buffer.write(b'SECRET-SENTINEL-INVALID\xff\n');sys.stdout.buffer.flush()
+    if kind == 'disclose-bad-code':
+        print('Code: SECRET-SENTINEL-CODE',flush=True)
+        raise SystemExit(1)
     print('SBXR_NATIVE_PHASE '+json.dumps(dict(phase='disclosure-execute',event='end',id=1,elapsed_us=2)),file=sys.stderr,flush=True)
     print("Code: "+spec["expected"],flush=True)
     print("Press Enter to preserve this configuration in terminal scrollback and return to the menu.",flush=True)
@@ -905,6 +912,38 @@ class MenuSessionDriverTest(unittest.TestCase):
                 else:
                     self.assertIn("SECRET-SENTINEL-CONFIGURATION", result.stdout)
                     self.assertEqual(events[2:], [{"continue":""}, {"exit":"0"}])
+
+    def test_diagnostic_disclosure_never_persists_raw_output(self):
+        label = "Show client configuration"
+        expected = "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"
+        for kind in ("disclose", "disclose-hang", "disclose-partial-hang", "disclose-bad-code", "disclose-invalid-output"):
+            with self.subTest(kind=kind):
+                result, events = self.invoke(dict(label=label, kind=kind,
+                    prompt=menu.PROMPTS[label], expected=expected),
+                    "disclose", label, expected, "--diagnostic-output", timeout=1)
+                self.assertEqual(result.returncode, int(kind != "disclose"), result.stderr)
+                self.assertEqual(events[:2], [{"selected":"7"}, {"answer":"y"}])
+                self.assertEqual(result.stdout, "")
+                self.assertNotIn("SECRET-SENTINEL", result.stderr)
+                self.assertNotIn("/private/path", result.stderr)
+                self.assertIn("SBXR_MENU_PHASE ", result.stderr)
+                if kind == "disclose":
+                    self.assertEqual(events[2:], [{"continue":""}, {"exit":"0"}])
+                else:
+                    self.assertIn("SBXR_MENU_SESSION_REFUSED phase=", result.stderr)
+                    self.assertNotIn(" code=", result.stderr)
+
+    def test_diagnostic_output_rejects_other_actions_before_spawn(self):
+        for mode, label, expected in (("action", "Check", "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"),
+                                      ("disclose", "Rotate Client Identity", "WRONG"),
+                                      ("disclose", "Show client configuration", "WRONG")):
+            with self.subTest(mode=mode, label=label):
+                result, events = self.invoke(dict(label=label, kind="result-hang", expected=expected),
+                    mode, label, expected, "--diagnostic-output", timeout=1)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(events, [])
+                self.assertEqual(result.stdout, "")
+                self.assertIn("phase=diagnostic-output-scope", result.stderr)
 
     def test_unread_diagnostic_sink_cannot_block_success_or_deadline_cleanup(self):
         for mode, label, kind in (("details", "View details", "details"),

@@ -452,8 +452,9 @@ class LineStream:
         details_prompt = raw.rstrip(b"\r") == DETAILS_PROMPT.encode("ascii")
         if details_prompt:
             self.timing("prompt-received", "details-continuation")
-        self.sink.write(rendered)
-        self.sink.flush()
+        if self.sink is not None:
+            self.sink.write(rendered)
+            self.sink.flush()
         # A slow transcript write must not turn a late prompt/result into
         # permission to continue. Keep the captured bytes for diagnosis.
         if self.cancelled():
@@ -867,6 +868,10 @@ def safety_cleanup_deadline(args, request):
 
 
 def drive(args, cancelled=None, timing=None):
+    diagnostic_output = getattr(args, "diagnostic_output", False)
+    if diagnostic_output and (args.mode != "disclose" or args.label != "Show client configuration" or
+                              args.expected != "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED"):
+        raise ProtocolError("diagnostic-output-scope")
     deadline = timing.deadline if timing else time.monotonic() + float(args.timeout)
     if timing:
         timing("driver-start")
@@ -885,7 +890,7 @@ def drive(args, cancelled=None, timing=None):
     if timing:
         timing.deadline = deadline
         timing("request-ready")
-    session = MenuSession(args.executable, sys.stdout.buffer, deadline, cancelled,
+    session = MenuSession(args.executable, None if diagnostic_output else sys.stdout.buffer, deadline, cancelled,
                           protected_wrapper=args.protected_wrapper,
                           timing=timing)
     try:
@@ -958,6 +963,8 @@ def parser():
     result.add_argument("--executable", default=os.environ.get("SBXR_EXECUTABLE", "/usr/local/bin/sbxr"))
     result.add_argument("--timeout", type=int, default=900)
     result.add_argument("--protected-wrapper", action="store_true")
+    result.add_argument("--diagnostic-output", action="store_true",
+                        help="disclosure only: discard transcript, retain filtered timing and exit status")
     result.add_argument("--cleanup-cutoff", type=int)
     result.add_argument("--cleanup-reserve", type=int)
     result.add_argument("--runtime-deadline", help="local fixture override; live callers use the fixed transport path")
@@ -967,6 +974,7 @@ def parser():
 def main():
     received_signal = None
     timing = None
+    diagnostic_output = False
     def cancelled():
         return received_signal is not None
     def receive(signum, _frame):
@@ -974,6 +982,7 @@ def main():
         received_signal = signum
     try:
         args = parser().parse_args()
+        diagnostic_output = args.diagnostic_output
         if not 0 < args.timeout <= 1800:
             raise ProtocolError("deadline-invalid")
         if sys.platform.startswith("linux"):
@@ -989,7 +998,7 @@ def main():
         phase = ("signal-cancelled" if received_signal is not None else
                  error.phase if isinstance(error, ProtocolError) else "driver-error")
         code = error.code if isinstance(error, ProtocolError) else None
-        suffix = " code=" + code if code and re.fullmatch(r"[A-Z0-9-]+", code) else ""
+        suffix = " code=" + code if not diagnostic_output and code and re.fullmatch(r"[A-Z0-9-]+", code) else ""
         message = "SBXR_MENU_SESSION_REFUSED phase=" + phase + suffix
         if timing:
             timing.relay.emit(message)

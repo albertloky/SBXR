@@ -47,8 +47,11 @@ change or credential rotation. Ordinary qualification still checks latest Karing
    manifest and approved diagnostic window; do not invent `attended_finish_by`.
    Do not use the ordinary collector or its `submit` interface.
 5. Run one packaged install/setup, Check and disclosure through the existing
-   bounded driver. Retain only filtered phase timings in reports; raw disclosure
-   is private credential material and belongs in the frozen cleanup inventory.
+   bounded driver. Pass `--diagnostic-output` for disclosure: the driver discards its entire
+   stdout transcript before capture, retaining only allowlisted stderr timing
+   and refusal metadata plus the supervised exit status. Do not create a client
+   export for this diagnostic. Require the disclosure stdout capture to be empty
+   on both success and failure; preserve its producer-bound empty receipt.
    The request lasts at most 30 minutes and ends at least 60 seconds before the
    approved finish. Its ordinary-operation cutoff is the earlier of the approved
    two-hour cutoff and 15 minutes before the request deadline. The existing
