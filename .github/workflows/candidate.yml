@@ -101,6 +101,9 @@ jobs:
           jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
           preflight_operation='check V3 declaration scope'
           jq -e '.schema == "sbxr-v3-qualification-attempt-v3" and .support == {scope:"subscription-clean-install-only",sources:[],contract:"sbxr-subscription-update-v1"} and .owner_exception == null and .live89_correction_review == null' <<<"$V3_ATTEMPT" >/dev/null
+          if jq -e '.diagnostic != null' <<<"$V3_ATTEMPT" >/dev/null; then
+            jq -e --argjson cutoff "$SECURITY_CUTOFF_UNIX" '.diagnostic.finish_unix == $cutoff' <<<"$V3_ATTEMPT" >/dev/null
+          fi
           preflight_operation='bind retained candidate reservation'
           go run ./cmd/sbxr-release candidate-reservations -policy > reserved-candidates.json
           preflight_operation='fetch source tags'
@@ -519,6 +522,8 @@ jobs:
           jq -e --slurpfile reserved expected-reservations.json '.reserved_identities == $reserved[0]' candidate-preflight-facts.json >/dev/null
       - name: Verify Acceptance VPS readiness before signing
         if: ${{ !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
+        env:
+          V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
           set -euo pipefail
           test -n "$ACCEPTANCE_VPS_HOST"
@@ -528,7 +533,12 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           trap 'rm -f ssh.key known_hosts' EXIT
-          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -L /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -L /var/lib/sbxr && test ! -e /run/sbxr-qualification && test ! -L /run/sbxr-qualification && test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && test ! -e /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence'
+          evidence_check='test ! -e /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence'
+          if jq -e '.diagnostic != null' <<<"$V3_ATTEMPT" >/dev/null; then
+            evidence_path="/root/sbxr-diagnostic-run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT"
+            evidence_check="test ! -e '$evidence_path' && test ! -L '$evidence_path'"
+          fi
+          ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -L /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -L /var/lib/sbxr && test ! -e /run/sbxr-qualification && test ! -L /run/sbxr-qualification && test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && '"$evidence_check"
       - name: Create the complete qualification manifest after approval
         id: signing-manifest
         env:
@@ -546,7 +556,7 @@ jobs:
           test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
           # Recheck Latest after builds and approval, not just at preflight.
           bash .github/scripts/signing-latest-recheck.sh
-          if ! jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
+          if ! jq -e '.live89_correction_review != null or .diagnostic != null' <<<"$V3_ATTEMPT" >/dev/null; then
             gh api repos/KaringX/karing/releases/latest > karing-latest.json || { printf '%s\n' 'Official Karing metadata lookup failed.' >&2; exit 1; }
             jq -e --argjson attempt "$V3_ATTEMPT" '.draft == false and .prerelease == false and (.tag_name | ltrimstr("v")) == $attempt.packages.karing.version and any(.assets[]; .size == $attempt.packages.karing.size and .digest == ("sha256:" + $attempt.packages.karing.sha256))' karing-latest.json >/dev/null
           fi
@@ -557,6 +567,10 @@ jobs:
           test "$(sha256sum "$candidate_index" | cut -d' ' -f1)" = "$(jq -r '.[0].release_identity.release_index_sha256' drafts.json)"
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           karing_latest_checked_at="$now"
+          if jq -e '.diagnostic != null' <<<"$V3_ATTEMPT" >/dev/null; then
+            # Preserve the historical receipt's check time; do not claim a new Latest check.
+            karing_latest_checked_at="$(jq -r .karing_latest_checked_at <<<"$V3_ATTEMPT")"
+          fi
           if jq -e '.live89_correction_review != null' <<<"$V3_ATTEMPT" >/dev/null; then
             # The accepted correction binds the archived Karing package/check,
             # without claiming a fresh client observation or Latest lookup.
@@ -669,8 +683,10 @@ jobs:
         run: |
           set -euo pipefail
           bash .github/scripts/validate-security-cutoff.sh "$SECURITY_CUTOFF_UNIX"
-          jq '.stages.integrated_verification = "Running" | .stages.codex_live_acceptance = "Running"' candidate-failure-state.json > candidate-failure-state.next
-          mv candidate-failure-state.next candidate-failure-state.json
+          if ! jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then
+            jq '.stages.integrated_verification = "Running" | .stages.codex_live_acceptance = "Running"' candidate-failure-state.json > candidate-failure-state.next
+            mv candidate-failure-state.next candidate-failure-state.json
+          fi
           install -m 0600 /dev/null ssh.key
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
@@ -698,13 +714,26 @@ jobs:
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up '$SECURITY_CUTOFF_UNIX'"
           # The operator drives only supported packaged paths on the VPS and
           # Mac. This collector validates evidence; it cannot simulate them.
-          bash .github/scripts/v3-recurring-evidence.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
+          if jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then
+            bash .github/scripts/disclosure-diagnostic.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
+          else
+            bash .github/scripts/v3-recurring-evidence.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
+          fi
           ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down'
           trap - EXIT
           rm handoff/gateway.key v3-transport.tgz
           rm ssh.key known_hosts
+          # A completed diagnostic must never claim that qualification passed.
+          if jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then exit 0; fi
           jq '.stages.integrated_verification = "Passed" | .stages.codex_live_acceptance = "Passed"' candidate-failure-state.json > candidate-failure-state.next
           mv candidate-failure-state.next candidate-failure-state.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && fromJSON(inputs.v3_attempt || '{}').diagnostic }}
+        with:
+          name: diagnostic-handoff-${{ github.run_id }}
+          path: handoff/diagnostic-handoff.json
+          if-no-files-found: warn
+          retention-days: 90
       - name: Finalize exact candidate failure evidence
         if: always()
         run: |
@@ -712,6 +741,7 @@ jobs:
           jq '(.stages[] | select(. == "Running")) = "Failed"' candidate-failure-state.json > candidate-failure-state.next
           mv candidate-failure-state.next candidate-failure-state.json
       - name: Evaluate the Acceptance VPS result and write exact Module records
+        if: ${{ !fromJSON(inputs.v3_attempt || '{}').diagnostic }}
         run: |
           set -euo pipefail
           mkdir -m 0700 acceptance-records
@@ -733,6 +763,7 @@ jobs:
           cat acceptance-records/*.md >> "$GITHUB_STEP_SUMMARY"
           gh release edit "$tag" --draft --notes-file "acceptance-records/$tag.md"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !fromJSON(inputs.v3_attempt || '{}').diagnostic }}
         with:
           name: installer-updater-acceptance-${{ github.run_id }}
           path: |
@@ -883,7 +914,7 @@ jobs:
           retention-days: 90
 
   cleanup-unqualified:
-    if: always() && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success'))
+    if: always() && !fromJSON(inputs.v3_attempt || '{}').diagnostic && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success'))
     needs: [preflight, drafts, sign, acceptance-vps, owner-exception, live89-correction]
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.inventory_only && 10 || 360 }}

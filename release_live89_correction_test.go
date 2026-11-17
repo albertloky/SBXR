@@ -47,7 +47,7 @@ func assertLive89WorkflowPartition(t *testing.T, workflow string) map[string]liv
 	guard := "!fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review"
 	normal := "!inputs.inventory_only && (" + guard + ")"
 	needs := []string{"preflight", "drafts", "sign", "acceptance-vps", "owner-exception"}
-	condition := "always() && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'"
+	condition := "always() && !fromJSON(inputs.v3_attempt || '{}').diagnostic && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'"
 	if jobs["acceptance-vps"].If != "${{ "+normal+" }}" {
 		t.Fatal("ordinary live entry must exclude archival correction")
 	}

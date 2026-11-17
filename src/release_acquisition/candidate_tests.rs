@@ -392,3 +392,29 @@ fn interrupted_candidate_response_cannot_grant_late_authority() {
 pub(super) fn semantic_fixture() -> Vec<u8> {
     serde_json::to_vec(&Fixture::new().manifest).unwrap()
 }
+
+#[test]
+fn diagnostic_semantics_require_a_bounded_single_journey() {
+    let mut f = Fixture::new();
+    f.manifest["v3_attempt"]["diagnostic"] = json!({"start_unix": 1794913200_u64, "test_until_unix":1794920400_u64,"finish_unix":1794924000_u64});
+    assert!(
+        f.inspect().is_err(),
+        "diagnostic cannot declare full qualification"
+    );
+    f.manifest["v3_attempt"]["required_scenarios"] = json!(["mvp-install"]);
+    assert!(f.inspect().is_ok());
+    for value in [
+        json!(null),
+        json!(true),
+        json!({"start_unix":1794913200_u64,"test_until_unix":1794924000_u64,"finish_unix":1794924000_u64}),
+        json!({"start_unix":u64::MAX,"test_until_unix":null,"finish_unix":null}),
+        json!({"start_unix":1794913200_u64,"test_until_unix":1794920400_u64,"finish_unix":1794924000_u64,"waiver":true}),
+    ] {
+        let mut bad = Fixture::new();
+        bad.manifest["v3_attempt"]["diagnostic"] = value;
+        bad.manifest["v3_attempt"]["required_scenarios"] = json!(["mvp-install"]);
+        assert!(bad.inspect().is_err());
+    }
+    f.manifest["v3_attempt"]["karing_response_limit_seconds"] = json!(3600);
+    assert!(f.inspect().is_err());
+}

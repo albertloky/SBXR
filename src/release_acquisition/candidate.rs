@@ -367,6 +367,7 @@ fn attempt_index(attempt: &Value, workflow: &Workflow, release: &Release) -> Res
         "automated_only_scenarios",
         "baseline",
         "candidate_index",
+        "diagnostic",
         "evidence_policy",
         "karing_latest_checked_at",
         "karing_limit_seconds",
@@ -392,20 +393,41 @@ fn attempt_index(attempt: &Value, workflow: &Workflow, release: &Release) -> Res
         "vps_id",
         "vps_identity_sha256",
     ];
+    let diagnostic = attempt.get("diagnostic");
+    if let Some(d) = diagnostic {
+        let start = d["start_unix"].as_u64().ok_or(TrustError::Refused)?;
+        if d.as_object().is_none_or(|m| m.len() != 3)
+            || start == 0
+            || start > u64::MAX - 10800
+            || d["test_until_unix"].as_u64() != start.checked_add(7200)
+            || d["finish_unix"].as_u64() != start.checked_add(10800)
+            || attempt.get("proxy_profile").is_some_and(|v| v != "")
+            || attempt
+                .get("karing_response_limit_seconds")
+                .is_some_and(|v| v != 0)
+            || attempt.get("attended_finish_by").is_some_and(|v| v != "")
+        {
+            return Err(TrustError::Refused);
+        }
+    }
+    let scenarios = if diagnostic.is_some() {
+        serde_json::json!(["mvp-install"])
+    } else {
+        serde_json::json!([
+            "mvp-install",
+            "mvp-subscription",
+            "mvp-credentials",
+            "mvp-serving",
+            "mvp-removal"
+        ])
+    };
     if map.keys().any(|k| !FIELDS.contains(&k.as_str()))
         || attempt["schema"] != "sbxr-v3-qualification-attempt-v3"
         || attempt["evidence_policy"] != "mvp-http-live-v1"
         || attempt["sources"] != serde_json::json!([])
         || attempt["support"]
             != serde_json::json!({"scope":"subscription-clean-install-only","contract":"sbxr-subscription-update-v1","sources":[]})
-        || attempt["required_scenarios"]
-            != serde_json::json!([
-                "mvp-install",
-                "mvp-subscription",
-                "mvp-credentials",
-                "mvp-serving",
-                "mvp-removal"
-            ])
+        || attempt["required_scenarios"] != scenarios
     {
         return Err(TrustError::Refused);
     }

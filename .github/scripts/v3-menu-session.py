@@ -795,7 +795,7 @@ def qualification_deadline(path, *, cleanup=False):
         deadline = document.get("deadline_unix")
         if type(deadline) is not int:
             raise ProtocolError("request-deadline")
-        if "karing_response_limit_seconds" not in document:
+        if "karing_response_limit_seconds" not in document and "diagnostic_test_until_unix" not in document:
             return deadline
     # Cleanup always uses the bounded protected clock subprocess, including its
     # strict request loader. Never open an untrusted FIFO in this parent first.

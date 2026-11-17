@@ -1559,6 +1559,27 @@ class SafetyCleanupTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertFalse((self.root/"spawned").exists(), result.stderr)
 
+    def test_diagnostic_cutoff_blocks_product_but_preserves_guarded_removal(self):
+        stamp = lambda seconds: dt.datetime.fromtimestamp(seconds, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        request = {"scenario_id": "mvp-install", "not_before": stamp(self.epoch-1000),
+                   "deadline_unix": self.epoch+800, "diagnostic_test_until_unix": self.epoch-100,
+                   "scenario_limit_seconds": 1800, "qualification_manifest_sha256": "a"*64,
+                   "required_checks": ["diagnostic-observation"]}
+        self.request.write_text(json.dumps(request))
+        self.draft.write_text(json.dumps({"request_sha256": hashlib.sha256(self.request.read_bytes()).hexdigest(),
+            "observation": {"scenario_id": "mvp-install", "started_at": request["not_before"], "completed_at": None,
+                            "checks": [{"check": "diagnostic-observation", "observed_at": None, "result": None}]}}))
+        originals = {p: p.read_bytes() for p in (self.request, self.draft, self.clock, self.runtime)}
+        result = subprocess.run([sys.executable, str(DRIVER), "action", "Check",
+                                "SOFTWARE-LIFECYCLE-STATUS-READY", "--executable", str(self.executable), "--timeout", "3"],
+                               env=self.env, capture_output=True, text=True, timeout=8)
+        self.assert_unstarted(result)
+        result = self.call()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        events = [json.loads(line) for line in (self.root/"events.jsonl").read_text().splitlines()]
+        self.assertEqual(events, [{"selected": "7"}, {"answer": "REMOVE SBXR"}])
+        for path, body in originals.items(): self.assertEqual(path.read_bytes(), body)
+
     def test_pending_cleanup_removes_once_preserving_original_evidence(self):
         originals = {p: p.read_bytes() for p in (self.request, self.draft, self.clock, self.runtime)}
         result = self.call()

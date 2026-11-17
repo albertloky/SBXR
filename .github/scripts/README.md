@@ -465,3 +465,9 @@ No status/details loop or automatic setup/credential completion is added. See th
 [current bounded-cleanup procedure](../../docs/acceptance/http-subscription-live.md#bounded-supported-cleanup-after-a-stopped-journey)
 for preserved evidence, state selection, shared cutoff and independent verification.
 The historical `remote_failure_cleanup` helper is not this fresh Rust path.
+
+## Disclosure diagnostic
+
+`disclosure-diagnostic.sh` and `disclosure-diagnostic.py` collect only the signed
+diagnostic handoff in a fresh run-specific namespace. They do not execute product
+actions or produce qualification records. See the [diagnostic procedure](../../docs/acceptance/disclosure-diagnostic.md) for exact caller paths, clocks and restoration limits.

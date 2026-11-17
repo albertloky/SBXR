@@ -25,6 +25,8 @@ mvp_required_checks() {
 submit_result() {
   test "$#" -eq 5
   local submit_host=$1 submit_key=$2 submit_known_hosts=$3 submit_manifest=$4 submit_facts=$5
+  # Refuse diagnostics before even reading the ordinary fixed request path.
+  jq -e '.v3_attempt.diagnostic == null' "$submit_manifest" >/dev/null
   local -a submit_remote=(python3 "$(dirname "${BASH_SOURCE[0]}")/bounded-ssh.py" 30 -T -i "$submit_key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$submit_known_hosts" -o ConnectTimeout=15)
   local submit_manifest_digest submit_request submit_request_digest submit_request_json submit_scenario submit_size submit_digest
   submit_manifest_digest="$(sha256sum "$submit_manifest" | cut -d' ' -f1)"
@@ -68,6 +70,8 @@ if ! jq -e '.v3_attempt.evidence_policy == "mvp-live-v1" or .v3_attempt.evidence
   printf '%s\n' 'The current checkout produces ordinary HTTPS or HTTP MVP evidence. Use Git revision 0859e96 to reproduce a historical v1-v4 qualification attempt.' >&2
   exit 2
 fi
+# Diagnostics use a separate non-qualifying collector and namespace.
+jq -e '.v3_attempt.diagnostic == null' "$manifest" >/dev/null
 chmod 0600 "$manifest" "$boundary"
 digest="$(sha256sum "$manifest" | cut -d' ' -f1)"
 directory="$(mktemp -d)"

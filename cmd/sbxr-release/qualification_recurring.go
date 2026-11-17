@@ -203,7 +203,7 @@ func recurringManifest(facts v3RecurringResultFacts) (qualificationManifest, err
 	}
 	manifest, err := evaluateQualificationBoundary(boundary)
 	encoded, marshalErr := marshalCanonical(manifest)
-	if err != nil || marshalErr != nil || !facts.QualificationManifestSigned || (manifest.Schema != "sbxr-qualification-manifest-v2" && manifest.Schema != "sbxr-qualification-manifest-v3") || manifest.V3Attempt == nil || manifest.Mode != "v3" || (manifest.SourceState != "v3-recurring" && manifest.SourceState != "v3-subscription-clean") || len(manifest.Releases) != 1 || !bytes.Equal(encoded, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(encoded) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || facts.Runner != manifest.V3Attempt.Runner {
+	if err != nil || marshalErr != nil || !facts.QualificationManifestSigned || (manifest.Schema != "sbxr-qualification-manifest-v2" && manifest.Schema != "sbxr-qualification-manifest-v3") || manifest.V3Attempt == nil || manifest.V3Attempt.Diagnostic != nil || manifest.Mode != "v3" || (manifest.SourceState != "v3-recurring" && manifest.SourceState != "v3-subscription-clean") || len(manifest.Releases) != 1 || !bytes.Equal(encoded, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(encoded) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || facts.Runner != manifest.V3Attempt.Runner {
 		return qualificationManifest{}, errors.New("recurring qualification refused")
 	}
 	return manifest, nil
@@ -487,6 +487,9 @@ func requiredV3Checks(id string) []string {
 }
 
 func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3RecurringResultFacts) (string, error) {
+	if manifest.V3Attempt != nil && manifest.V3Attempt.Diagnostic != nil {
+		return "", errors.New("diagnostic cannot qualify")
+	}
 	release, attempt := manifest.Releases[0], manifest.V3Attempt
 	role, code, recordSchema := "Recurring subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "sbxr-acceptance-record-v2"
 	var notApplicable []string
@@ -617,6 +620,13 @@ type v3QualificationSource struct {
 	Sequence           uint64                  `json:"sequence"`
 }
 
+// Diagnostic identity is signed, but can never become acceptance evidence.
+type disclosureDiagnostic struct {
+	FinishUnix    int64 `json:"finish_unix"`
+	StartUnix     int64 `json:"start_unix"`
+	TestUntilUnix int64 `json:"test_until_unix"`
+}
+
 type v3QualificationAttempt struct {
 	AfterSnapRefresh           v3QualificationPackages                   `json:"after_snap_refresh"`
 	AttemptID                  string                                    `json:"attempt_id"`
@@ -624,6 +634,7 @@ type v3QualificationAttempt struct {
 	AutomatedOnlyScenarios     []string                                  `json:"automated_only_scenarios,omitempty"`
 	Baseline                   *qualificationRelease                     `json:"baseline,omitempty"`
 	CandidateIndex             string                                    `json:"candidate_index,omitempty"`
+	Diagnostic                 *disclosureDiagnostic                     `json:"diagnostic,omitempty"`
 	EvidencePolicy             string                                    `json:"evidence_policy,omitempty"`
 	KaringLatestCheckedAt      string                                    `json:"karing_latest_checked_at"`
 	KaringLimitSeconds         int                                       `json:"karing_limit_seconds"`
@@ -657,6 +668,17 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 // validV3AttemptDeclaredFields is shared by unsigned preparation and signing.
 // Signing separately binds the workflow identity and candidate release index.
 func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qualificationFacts) bool {
+	if d := attempt.Diagnostic; d != nil {
+		started, ok := qualificationTime(attempt.StartedAt)
+		if !ok || d.StartUnix <= 0 || d.TestUntilUnix <= d.StartUnix || d.FinishUnix <= d.TestUntilUnix || d.TestUntilUnix-d.StartUnix != 7200 || d.FinishUnix-d.StartUnix != 10800 || started.Unix() < d.StartUnix || started.Unix() >= d.TestUntilUnix || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.Support == nil || attempt.Support.Scope != softwarelifecycle.SubscriptionCleanInstallOnly || attempt.EvidencePolicy != softwarelifecycle.MVPHTTPEvidencePolicy || attempt.OwnerException != "" || attempt.Live89CorrectionReview != nil || attempt.LateConfirmationReview != nil || attempt.KaringResponseLimitSeconds != 0 || attempt.AttendedFinishBy != "" || attempt.ProxyProfile != "" || attempt.AutomatedOnlyScenarios != nil || !slices.Equal(attempt.RequiredScenarios, []string{"mvp-install"}) {
+			return false
+		}
+		// Reuse all ordinary source, package and authentication checks. Only the
+		// declared journey set is smaller; results are separately refused below.
+		attempt.Diagnostic = nil
+		attempt.RequiredScenarios = strings.Fields(softwarelifecycle.MVPHTTPScenarios)
+		return validV3AttemptDeclaredFields(attempt, preflight)
+	}
 	if !validProxyProfile(attempt) {
 		return false
 	}

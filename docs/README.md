@@ -11,6 +11,7 @@
 | Find specified project work | [Work specifications](../specs/README.md) | Scope, plans, task progress and recorded checks; not conversation transcripts |
 | Understand domain language | [CONTEXT.md](../CONTEXT.md) | One shared glossary, not a second specification |
 | Find an architectural or policy decision | [ADR index](adr/README.md) | Decisions grouped by scope and product era |
+| Diagnose native disclosure without qualifying | [Disclosure diagnostic](acceptance/disclosure-diagnostic.md) | Signed diagnostic-only scope, preserved client/evidence and bounded restoration |
 | Plan current live qualification | [Acceptance guide](acceptance/README.md) | Current MVP procedure and bounded prerequisites |
 | Inspect a release or repair result | [Report index](acceptance/reports/README.md) | Dated observations, not present host readiness |
 | Build/validate Rust release inputs locally | [Rust packaging/CI tooling](../tooling/rust-package/README.md), [prepared Linux commands](../tooling/rust-package/linux-validation.md) | Native musl inputs, strict artifact/bootstrap verification and source-only snapshot; no dispatch/publication |

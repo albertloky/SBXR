@@ -134,6 +134,9 @@ func attemptVersion(attempt *v3QualificationAttempt) string {
 }
 
 func attemptScenarios(attempt v3QualificationAttempt) []string {
+	if attempt.Diagnostic != nil {
+		return []string{"mvp-install"}
+	}
 	if mvpRecurringAttempt(attempt) {
 		ids := mvpRecurringScenarios(attempt.Sources)
 		return append(ids[:len(ids)-5], ordinaryJourneys(attempt)...)
@@ -205,6 +208,9 @@ func validAttemptIndex(attempt v3QualificationAttempt, release qualificationRele
 }
 
 func validPublicationHistory(manifest qualificationManifest, history *v3ReleaseHistory) bool {
+	if manifest.V3Attempt != nil && manifest.V3Attempt.Diagnostic != nil {
+		return false
+	}
 	if manifest.Schema != "sbxr-qualification-manifest-v3" {
 		return history == nil
 	}
@@ -218,7 +224,7 @@ func validPublicationHistory(manifest qualificationManifest, history *v3ReleaseH
 }
 
 func currentCleanPublication(manifest qualificationManifest) bool {
-	return manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && len(manifest.Releases) == 1 && manifest.V3Attempt != nil && manifest.V3Attempt.Support != nil && manifest.V3Attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly
+	return manifest.Schema == "sbxr-qualification-manifest-v3" && manifest.Mode == "v3" && len(manifest.Releases) == 1 && manifest.V3Attempt != nil && manifest.V3Attempt.Diagnostic == nil && manifest.V3Attempt.Support != nil && manifest.V3Attempt.Support.Scope == softwarelifecycle.SubscriptionCleanInstallOnly
 }
 
 func historicalV1Tag(tag string) bool {

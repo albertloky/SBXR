@@ -107,6 +107,9 @@ def validate_request(request, now):
             "required_checks", "scenario_id", "scenario_limit_seconds"}
     if type(request) is not dict:
         raise Refusal("collector request differs")
+    diagnostic = "diagnostic_test_until_unix" in request
+    if diagnostic:
+        keys.add("diagnostic_test_until_unix")
     enabled = "karing_response_limit_seconds" in request
     if enabled:
         keys |= {"karing_response_limit_seconds", "attended_finish_by"}
@@ -126,6 +129,10 @@ def validate_request(request, now):
                     request["karing_response_limit_seconds"] != 3600 or
                     parse(request["attended_finish_by"]) <= start):
         raise Refusal("attended response window differs")
+    if diagnostic and (enabled or request["scenario_id"] != "mvp-install" or
+            type(request["diagnostic_test_until_unix"]) is not int or
+            not int(start.timestamp()) < request["diagnostic_test_until_unix"] <= request["deadline_unix"] - 900):
+        raise Refusal("diagnostic must preserve the removal reserve")
     return start, deadline
 
 
@@ -198,6 +205,8 @@ def run(options):
             observation = validate_draft(draft, request, digest, now, sealed=True)
         deadline = handoff_deadline(request, observation, now)
         if options.command == "operation-deadline":
+            if "diagnostic_test_until_unix" in request:
+                deadline = min(deadline, dt.datetime.fromtimestamp(request["diagnostic_test_until_unix"], dt.timezone.utc))
             if (observation["completed_at"] is not None or now > deadline or
                     any(h["responded_at"] is None for h in observation.get("karing_handoffs", []))):
                 raise Refusal("product action requires an active technical window with no pending response")
