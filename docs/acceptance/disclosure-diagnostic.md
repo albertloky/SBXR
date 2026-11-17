@@ -41,7 +41,10 @@ change or credential rotation. Ordinary qualification still checks latest Karing
    `SBXR_QUALIFICATION_REQUEST`, and `<directory>/observation-draft.json` as
    `SBXR_QUALIFICATION_DRAFT`, with the reviewed `mvp-observe.py` clock and its
    hash. Start the unsealed recorder through its ordinary `start` command.
-   Every `exact_candidate` invocation must explicitly receive this request path.
+   Every `exact_candidate` invocation must explicitly receive the manifest path
+   as its first argument and this request path as its second argument. Use
+   `diagnostic-restoration.py` to validate the request against the authenticated
+   manifest and approved diagnostic window; do not invent `attended_finish_by`.
    Do not use the ordinary collector or its `submit` interface.
 5. Run one packaged install/setup, Check and disclosure through the existing
    bounded driver. Retain only filtered phase timings in reports; raw disclosure
