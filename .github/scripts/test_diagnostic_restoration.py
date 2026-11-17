@@ -67,6 +67,32 @@ class DiagnosticRestoration(unittest.TestCase):
         self.assertEqual(int(cleanup.stdout), self.q["deadline_unix"])
         self.assertEqual(before, (request.read_bytes(), draft.read_bytes()))
 
+    def test_operation_cutoff_reserves_restoration_once(self):
+        cutoff = binding.operation_cutoff(self.q, self.window["finish_unix"], self.window["finish_unix"])
+        self.assertEqual(cutoff, self.q["diagnostic_test_until_unix"])
+        self.assertEqual(self.q["deadline_unix"]-cutoff, 900)
+        self.assertLess(self.now+90+10, cutoff)
+        self.assertGreaterEqual(self.now+90+10+900, cutoff)  # Old duplicate subtraction refused.
+
+    def test_earlier_runtime_and_approval_keep_full_reserve(self):
+        for runtime, finish in ((self.now+1500,self.window["finish_unix"]),
+                                (self.window["finish_unix"],self.now+1400),
+                                (self.now+800,self.window["finish_unix"])):
+            with self.subTest(runtime=runtime, finish=finish):
+                cutoff=binding.operation_cutoff(self.q,runtime,finish)
+                cleanup=min(self.q["deadline_unix"],runtime,finish)
+                self.assertGreaterEqual(cleanup-cutoff,900)
+                self.assertLessEqual(cutoff,self.q["diagnostic_test_until_unix"])
+        self.assertLess(binding.operation_cutoff(self.q,self.now+800,self.window["finish_unix"]),self.now)
+
+    def test_cutoff_refuses_noninteger_and_nondiagnostic_input(self):
+        for runtime,finish in ((True,self.window["finish_unix"]),(float("inf"),self.window["finish_unix"]),
+                               (self.window["finish_unix"],0)):
+            with self.subTest(runtime=runtime,finish=finish), self.assertRaises(ValueError):
+                binding.operation_cutoff(self.q,runtime,finish)
+        q=copy.deepcopy(self.q);q.pop("diagnostic_test_until_unix")
+        with self.assertRaises(ValueError):binding.operation_cutoff(q,self.window["finish_unix"],self.window["finish_unix"])
+
     def test_refuses_wrong_paths_digest_and_window(self):
         for change in ({"request":"/root/sbxr-qualification-evidence/request.json"},
                        {"draft":"/root/mvp-observation-draft.json"}, {"digest":"0"*64},

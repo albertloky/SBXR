@@ -56,7 +56,10 @@ change or credential rotation. Ordinary qualification still checks latest Karing
    approved finish. Its ordinary-operation cutoff is the earlier of the approved
    two-hour cutoff and 15 minutes before the request deadline. The existing
    driver enforces this through `operation-deadline`; `cleanup-deadline` retains
-   the remainder. No late diagnostic action may consume that removal reserve.
+   the remainder. Ordinary callers use that already-reserved operation cutoff
+   without subtracting the same 900 seconds again. If the runtime or approved
+   finish is earlier, `operation_cutoff` tightens ordinary work to at least 900
+   seconds before that earlier finish. Guarded-removal reserves remain unchanged. No late diagnostic action may consume that removal reserve.
 6. Mark the diagnostic stopped in the existing cleanup review and perform only
    the supported, identity-checked M1 removal path. Verify host/package/service/
    account/firewall preservation, SSH, original Karing state and scoped secret

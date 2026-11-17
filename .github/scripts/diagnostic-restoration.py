@@ -45,3 +45,17 @@ def validate_request(request, manifest_raw, manifest_sha256, request_path, draft
     if request["deadline_unix"] != deadline or request["diagnostic_test_until_unix"] != cutoff or cutoff <= start:
         raise ValueError("diagnostic request reserve")
     return window
+
+
+def operation_cutoff(request, runtime_deadline, approved_finish):
+    """Tighten an authenticated diagnostic clock, reserving removal exactly once.
+
+    Call validate_request first; this calculation neither authenticates inputs
+    nor authorizes an operation. Cleanup callers retain their original deadline.
+    """
+    limits = (request.get("deadline_unix"), request.get("diagnostic_test_until_unix"),
+              runtime_deadline, approved_finish)
+    if any(type(value) is not int or value <= 0 for value in limits):
+        raise ValueError("diagnostic cutoff inputs")
+    cleanup = min(request["deadline_unix"], runtime_deadline, approved_finish)
+    return min(request["diagnostic_test_until_unix"], cleanup - 900)
