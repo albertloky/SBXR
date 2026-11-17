@@ -190,7 +190,7 @@ func TestLive89CorrectionSkipsOnlyFreshKaringMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, script, found := strings.Cut(string(data), "          if ! jq -e '.live89_correction_review != null' <<<\"$V3_ATTEMPT\" >/dev/null; then\n")
+	_, script, found := strings.Cut(string(data), "          if ! jq -e '.live89_correction_review != null or .diagnostic != null' <<<\"$V3_ATTEMPT\" >/dev/null; then\n")
 	if !found {
 		t.Fatal("fresh Karing check guard missing")
 	}
@@ -198,16 +198,19 @@ func TestLive89CorrectionSkipsOnlyFreshKaringMetadata(t *testing.T) {
 	if !found {
 		t.Fatal("Karing metadata boundary missing")
 	}
-	script = "if ! jq -e '.live89_correction_review != null' <<<\"$V3_ATTEMPT\" >/dev/null; then\n" + script
-	for _, correction := range []bool{false, true} {
-		t.Run(fmt.Sprint(correction), func(t *testing.T) {
+	script = "if ! jq -e '.live89_correction_review != null or .diagnostic != null' <<<\"$V3_ATTEMPT\" >/dev/null; then\n" + script
+	for _, mode := range []string{"normal", "correction", "diagnostic"} {
+		correction := mode != "normal"
+		t.Run(mode, func(t *testing.T) {
 			directory := t.TempDir()
 			if err := os.WriteFile(filepath.Join(directory, "gh"), []byte("#!/bin/sh\nprintf called > metadata-called\nexit 41\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			attempt := `{}`
-			if correction {
+			if mode == "correction" {
 				attempt = `{"live89_correction_review":{"target_tag":"v3.1.90"}}`
+			} else if mode == "diagnostic" {
+				attempt = `{"diagnostic":{"start_unix":1,"test_until_unix":7201,"finish_unix":10801}}`
 			}
 			command := exec.Command("bash", "-e", "-o", "pipefail", "-c", script)
 			command.Dir = directory

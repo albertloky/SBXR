@@ -79,7 +79,7 @@ else:
         for name, block in blocks.items():
             if name!='cleanup-unqualified': self.assertIn('!inputs.inventory_only',block.splitlines()[0])
         block=blocks['cleanup-unqualified']
-        self.assertIn("always() && github.ref == 'refs/heads/main' && (inputs.inventory_only ||",block.splitlines()[0])
+        self.assertIn("always() && !fromJSON(inputs.v3_attempt || '{}').diagnostic && github.ref == 'refs/heads/main' && (inputs.inventory_only ||",block.splitlines()[0])
         self.assertIn('timeout-minutes: ${{ inputs.inventory_only && 10 || 360 }}',block)
         steps=re.split(r'^      - ',block.split('    steps:\n')[1],flags=re.M)[1:]
         self.assertEqual(len(steps),9)
