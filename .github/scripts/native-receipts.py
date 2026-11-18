@@ -191,12 +191,13 @@ def settings_binding():
     executable, _ = _native_bytes(NATIVE_APP_EXECUTABLE, app=True)
     info = plistlib.loads(info_raw)
     require(isinstance(info, dict) and info.get('CFBundleIdentifier') == 'com.nebula.karing' and
-            info.get('CFBundleExecutable') == 'Karing' and
-            (info.get('CFBundleShortVersionString'), info.get('CFBundleVersion')) in
-            (('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927'), ('1.2.26', '2929'), ('1.2.26', '2930'), ('1.2.26', '2931'), ('1.2.26', '2932')),
-            'Unsupported Karing identity for settings v2')
+            info.get('CFBundleExecutable') == 'Karing', 'Unsupported Karing identity for settings v2')
+    version = info.get('CFBundleShortVersionString')
+    build = info.get('CFBundleVersion')
+    require(all(isinstance(value, str) and value and value == value.strip() and value.isprintable()
+                for value in (version, build)), 'Unsupported Karing identity for settings v2')
     return {'schema': 'sbxr-karing-settings-binding-v2', 'policy': SETTINGS_POLICY,
-            'app': {'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],
+            'app': {'version': version, 'build': build,
                     'executable_sha256': hashlib.sha256(executable).hexdigest(),
                     'info_plist_sha256': hashlib.sha256(info_raw).hexdigest()},
             'helper_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}

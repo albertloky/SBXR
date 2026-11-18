@@ -292,10 +292,13 @@ Neither command operates Karing or records import, refresh or latency as observe
 
 For new, explicitly pre-bound preparations, the same module owns the
 [fixed native settings v2 comparison](../../docs/acceptance/http-subscription-live.md#future-native-settings-comparison).
-`settings_binding()` reads the supported actual app identity and helper digest;
-freeze that returned contract before dispatch. `settings_readback(binding)`
-produces the full private baseline snapshot. `compare_settings(before, after,
-binding)` validates both snapshots and derives the three permitted differences.
+`settings_binding()` records the installed Karing version, build, app byte hashes
+and helper digest. Verify the app's official package and freeze that exact binding
+before dispatch. `settings_readback(binding)` checks the current binding and
+required native settings fields while producing the full private baseline
+snapshot. An app or helper change requires a fresh binding and baseline.
+`compare_settings(before, after, binding)` validates both snapshots and derives
+the three permitted differences.
 `capture_settings(baseline_source_record, fresh_current_path, binding)` writes
 the actual current snapshot exclusively and returns the settings facts.
 M2/M3/M5 capture and recording callers must all use

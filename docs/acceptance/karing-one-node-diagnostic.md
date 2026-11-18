@@ -10,6 +10,13 @@ The original diagnostic, with no mode field, keeps the disclosure discard, 30-mi
 
 Obtain separate live approval for the exact signed candidate, RackNerd host/key, client/build, private file import, single test destination and UTC deadlines. Use the existing signed-candidate, supported installation and guarded removal callers pinned to this request, with 1500 seconds reserved throughout ordinary work. Any push, signing or dispatch needs its own authority. Confirm direct authenticated SSH and independent supported recovery access, root-owned staging identity, expected service/package effects, outside evidence, installed Karing identity and secret-copy inventory. Resolve a backup/sync or route that would send the test through an unapproved system before admitting it. No changes to DNS, routing, TUN, provider firewall, global CA or selected server are part of this test.
 
+When the Owner chooses to keep automatic backups enabled, observe the backup
+destination and inventory before Save. Karing can archive the full profile
+store, including the temporary node and credential, and rotate its local
+backups. Preserve those archives. Verify the active store and outside rejection
+after removal, and report retained or uncertain backup copies separately from
+active client and host restoration.
+
 ## Operator sequence
 
 1. Freeze the exact initial host inventory, existing evidence, and current client state, together with the readback caller and native side-file inventory (diversion, cache and other applicable files). Include existing profiles that use the RackNerd address. Confirm that native UI readbacks and cleanup remain available even if an attended reply is lost. Reconcile any earlier pending attempt before creating a fresh request. A disposable Ubuntu environment is optional for offline rehearsal.
@@ -45,6 +52,6 @@ Obtain separate live approval for the exact signed candidate, RackNerd host/key,
      --directory "$run_directory/karing-$attempt_id" --receipt-sha256 "$receipt_sha"
    ```
 
-9. Verify the outcome of the supported host removal. Client ambiguity or silence must not delay independently authorized host restoration. Verify fresh SSH, preserved host files, firewall, packages/services/accounts, test endpoint rejection, owned client/cache/secret absence and the original app state. Follow the existing diagnostic operator-finished notification and guarded gateway teardown only when its prerequisites are met. Verify gateway unit/listener/staging removal and the baseline hosts, trust and routing afterward. A notification, passing fixture or zero producer exit does not establish restoration or qualification. Record any residues and retain the diagnostic evidence and draft.
+9. Verify the outcome of the supported host removal. Client ambiguity or silence must not delay independently authorized host restoration. Verify fresh SSH, preserved host files, firewall, packages/services/accounts, test endpoint rejection, absence of test-owned active client, cache and import files, and the original app state. Follow the existing diagnostic operator-finished notification and guarded gateway teardown only when its prerequisites are met. Verify gateway unit/listener/staging removal and the baseline hosts, trust and routing afterward. A notification, passing fixture or zero producer exit does not establish restoration or qualification. Record any residues and retain the diagnostic evidence and draft.
 
 See the [original disclosure procedure](disclosure-diagnostic.md), [guarded removal budgets](bounded-operator-cleanup.md), and [client preservation procedure](http-subscription-live.md).

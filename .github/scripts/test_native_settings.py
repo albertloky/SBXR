@@ -134,88 +134,49 @@ class NativeAppIdentityTests(NativeSettingsFixture):
                 with self.assertRaisesRegex(ValueError, 'Unsupported Karing identity'):
                     RECEIPTS.settings_binding()
 
-    def test_only_reviewed_version_build_pairs_are_admitted(self):
+    def test_version_and_build_are_recorded_without_an_allowlist(self):
         original = plistlib.loads(self.info.read_bytes())
-        for version, build in [('1.2.25', '2802'), ('1.2.26', '2923'), ('1.2.26', '2927'), ('1.2.26', '2929'), ('1.2.26', '2930'), ('1.2.26', '2931'), ('1.2.26', '2932')]:
+        for version, build in [('1.2.26', '2933'), ('4.2.1', '5100'), ('4.2.1', '3.14.15')]:
             with self.subTest(version=version, build=build):
                 self.write(self.info, plistlib.dumps(dict(original,
                     CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
                 binding = RECEIPTS.settings_binding()
                 self.assertEqual((binding['app']['version'], binding['app']['build']), (version, build))
-        for version, build in [('1.2.25', '2923'), ('1.2.26', '2802'),
-                               ('1.2.26', '2924'), ('1.2.27', '2923'), ('1.2.25', '2927'),
-                               ('1.2.27', '2927'), ('1.2.26', '2928'), ('1.2.25', '2929'),
-                               ('1.2.27', '2929'), ('1.2.26', '2933'), ('1.2.25', '2932'), ('1.2.27', '2932'), ('1.2.26', 2932), ('1.2.25', '2931'), ('1.2.27', '2931'),
-                               ('1.2.26', 2931), ('1.2.25', '2930'),
-                               ('1.2.27', '2930'), ('1.2.26', 2930), ('1.2.26', 2929), ('', ''), ('1.2.26', 2927)]:
-            with self.subTest(version=version, build=build):
-                self.write(self.info, plistlib.dumps(dict(original,
-                    CFBundleShortVersionString=version, CFBundleVersion=build)), 0o644)
-                with self.assertRaisesRegex(ValueError, 'Unsupported Karing identity'):
-                    RECEIPTS.settings_binding()
+                RECEIPTS.settings_readback(binding)
 
-    def test_upgrade_to_another_supported_pair_requires_a_new_baseline(self):
-        binding = RECEIPTS.settings_binding()
+    def test_missing_or_invalid_version_metadata_is_rejected(self):
+        original = plistlib.loads(self.info.read_bytes())
+        for field in ('CFBundleShortVersionString', 'CFBundleVersion'):
+            for value in (None, '', ' ', ' 4.2.1', 5100, True):
+                with self.subTest(field=field, value=value):
+                    info = dict(original)
+                    if value is None:
+                        info.pop(field)
+                    else:
+                        info[field] = value
+                    self.write(self.info, plistlib.dumps(info), 0o644)
+                    with self.assertRaisesRegex(ValueError, 'Unsupported Karing identity'):
+                        RECEIPTS.settings_binding()
+
+    def test_app_upgrade_requires_a_fresh_baseline(self):
+        old_binding = RECEIPTS.settings_binding()
         info = plistlib.loads(self.info.read_bytes())
-        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2923')
+        info.update(CFBundleShortVersionString='4.2.1', CFBundleVersion='5100')
         self.write(self.info, plistlib.dumps(info), 0o644)
-        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2923')
+        new_binding = RECEIPTS.settings_binding()
+        self.assertEqual(new_binding['app']['build'], '5100')
         with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
-            RECEIPTS.settings_readback(binding)
+            RECEIPTS.settings_readback(old_binding)
+        RECEIPTS.settings_readback(new_binding)
 
-    def test_2923_to_2927_upgrade_invalidates_bound_settings(self):
+    def test_new_build_refuses_incompatible_native_settings(self):
         info = plistlib.loads(self.info.read_bytes())
-        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2923')
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        binding = RECEIPTS.settings_binding()
-        info['CFBundleVersion'] = '2927'
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2927')
-        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
-            RECEIPTS.settings_readback(binding)
-
-    def test_2927_to_2929_upgrade_invalidates_bound_settings(self):
-        info = plistlib.loads(self.info.read_bytes())
-        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2927')
+        info.update(CFBundleShortVersionString='4.2.1', CFBundleVersion='5100')
         self.write(self.info, plistlib.dumps(info), 0o644)
         binding = RECEIPTS.settings_binding()
-        info['CFBundleVersion'] = '2929'
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2929')
-        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
-            RECEIPTS.settings_readback(binding)
-
-    def test_2929_to_2930_upgrade_invalidates_bound_settings(self):
-        info = plistlib.loads(self.info.read_bytes())
-        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2929')
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        binding = RECEIPTS.settings_binding()
-        info['CFBundleVersion'] = '2930'
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2930')
-        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
-            RECEIPTS.settings_readback(binding)
-
-    def test_2930_to_2931_upgrade_invalidates_bound_settings(self):
-        info = plistlib.loads(self.info.read_bytes())
-        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2930')
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        binding = RECEIPTS.settings_binding()
-        info['CFBundleVersion'] = '2931'
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2931')
-        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
-            RECEIPTS.settings_readback(binding)
-
-    def test_2931_to_2932_upgrade_invalidates_bound_settings(self):
-        info = plistlib.loads(self.info.read_bytes())
-        info.update(CFBundleShortVersionString='1.2.26', CFBundleVersion='2931')
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        binding = RECEIPTS.settings_binding()
-        info['CFBundleVersion'] = '2932'
-        self.write(self.info, plistlib.dumps(info), 0o644)
-        self.assertEqual(RECEIPTS.settings_binding()['app']['build'], '2932')
-        with self.assertRaisesRegex(ValueError, 'Settings binding differs'):
+        self.settings['window']['x'] = 'unknown format'
+        self.save_settings()
+        with self.assertRaisesRegex(ValueError, 'Window position must retain'):
             RECEIPTS.settings_readback(binding)
 
 
@@ -370,7 +331,7 @@ class NativeSettingsV2Tests(NativeSettingsFixture):
         with self.assertRaises(ValueError):
             RECEIPTS.settings_readback(self.binding)
 
-    def test_binding_rejects_wrong_version_build_and_modified_app(self):
+    def test_bound_readback_rejects_changed_app_identity(self):
         original = self.info.read_bytes()
         for key, value in [('CFBundleIdentifier', 'other.app'), ('CFBundleExecutable', 'other'),
                            ('CFBundleShortVersionString', '1.2.99'), ('CFBundleVersion', '2803')]:
@@ -379,7 +340,7 @@ class NativeSettingsV2Tests(NativeSettingsFixture):
                 info[key] = value
                 self.write(self.info, plistlib.dumps(info), 0o644)
                 with self.assertRaises(ValueError):
-                    RECEIPTS.settings_binding()
+                    RECEIPTS.settings_readback(self.binding)
         self.write(self.info, original, 0o644)
         self.write(self.executable, b'PUBLIC CHANGED APP EXECUTABLE\n', 0o755)
         with self.assertRaises(ValueError):
