@@ -195,11 +195,18 @@ class NativeDecision(unittest.TestCase):
         write(self.store, self.before)
         source = self.root / 'before.private'
         tzif = self.root / 'tz.private'
-        zone = Path('/usr/share/zoneinfo/Etc/UTC').resolve()
+        zone_bytes = Path('/usr/share/zoneinfo/Etc/UTC').read_bytes()
+        # System tzdata can be hard-linked. Supply an owned, one-link source.
+        zone = self.root / 'zoneinfo/Etc/UTC'
+        zone.parent.mkdir(parents=True)
+        zone.write_bytes(zone_bytes)
+        zone.chmod(0o644)
         self.helper.native.NATIVE_TIMEZONE_SOURCE = zone
+
         def record(path, raw):
             return dict(source_file=str(path), sha256=write(path, raw), size=len(raw))
-        tz_record = record(tzif, zone.read_bytes())
+
+        tz_record = record(tzif, zone_bytes)
         bundle = dict(original_store_baseline=record(source, self.store.read_bytes()),
                       original_store_observed_at=(now - dt.timedelta(seconds=10)).isoformat(),
                       native_tzif=tz_record, native_timezone=self.helper.native.native_timezone_binding())
