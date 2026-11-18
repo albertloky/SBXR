@@ -205,8 +205,10 @@ client configuration and raw captures private; retain secret-safe observations
 with original timestamps. Preserve unrelated resources, the existing client
 connection/settings and SSH. Finish reviewed product removal and verify owned
 absence, outside rejection, client restoration, stopped clients and removal of
-temporary secrets, transport, trust and routing. A workflow conclusion alone does
-not prove cleanup. Qualification transport TLS and software attestations remain
+temporary secrets. Verify that the private loopback gateway, its service and
+its staging tree (including the private CA and handoff) are gone. The transport
+helper also checks for the older system-wide redirect, hosts entry and CA file.
+A workflow conclusion alone does not prove cleanup. Qualification transport TLS and software attestations remain
 required. Fresh HTTP subscriptions need no CA dry run, replacement or renewal.
 
 After all required tests and actual host/client/secret cleanup pass, the exact
@@ -333,8 +335,10 @@ actual prepared callers and recheck feasibility before an approved attempt.
 
 Submitting `v3-scenario-failure` through `v3-recurring-evidence.sh submit` is a
 terminal operation, not just saving a report. The collector accepts the failed
-outcome, writes STOP, and exits. The candidate workflow's EXIT trap then removes
-the qualification gateway, protected handoff, temporary trust and routing.
+outcome, writes STOP, and exits. The candidate workflow's EXIT trap then tears down the private loopback gateway
+and its owned staging, including the protected handoff and private TLS material.
+The [transport guide](../../.github/scripts/README.md) describes the checks on
+the service, staging tree and any earlier system-wide redirect.
 A signed draft candidate is not a Qualified Stable Release: after that teardown,
 its public menu cannot authenticate through the stable route, including for
 Complete removal. Unsetting recorder variables cannot restore authentication.

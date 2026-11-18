@@ -12,6 +12,15 @@ pub enum Journey {
     Tunnel,
 }
 impl Journey {
+    fn subscription_source(journeys: &[Self]) -> Self {
+        if journeys.first() == Some(&Self::Identity) {
+            Self::Identity
+        } else if journeys.contains(&Self::Standard) && !journeys.contains(&Self::Http) {
+            Self::Standard
+        } else {
+            Self::Http
+        }
+    }
     fn accepts(self, action: Action) -> bool {
         match self {
             Self::Standard => matches!(
@@ -143,11 +152,7 @@ impl<'a, S: OwnerSources<'a>> OwnerInstallation<'a, S> {
         let Ok(journeys) = self.sources.journeys() else {
             return (self.refusal(), subscription_status);
         };
-        let subscription_journey = if journeys.first() == Some(&Journey::Identity) {
-            Journey::Identity
-        } else {
-            Journey::Http
-        };
+        let subscription_journey = Journey::subscription_source(&journeys);
         let mut legal = Vec::new();
         let mut routes = Vec::new();
         let mut primary = None;
@@ -321,20 +326,15 @@ impl<'a, S: OwnerSources<'a>> Interface for OwnerInstallation<'a, S> {
         Ok(())
     }
     fn subscription_status(&self) -> &'static str {
-        if let Some((_, m)) = self.active.borrow().as_ref() {
-            return m.subscription_status();
+        if let Some((_, module)) = self.active.borrow().as_ref() {
+            return module.subscription_status();
         }
         let Ok(journeys) = self.sources.journeys() else {
             return "Problem detected";
         };
-        let j = if journeys.first() == Some(&Journey::Identity) {
-            Journey::Identity
-        } else {
-            Journey::Http
-        };
         self.sources
-            .open(j)
-            .map_or("Problem detected", |m| m.subscription_status())
+            .open(Journey::subscription_source(&journeys))
+            .map_or("Problem detected", |module| module.subscription_status())
     }
     fn take_subscription_link(&mut self) -> Option<HttpSubscriptionLink> {
         self.link.take()

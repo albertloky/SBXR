@@ -364,7 +364,7 @@ fn combined_status_invalidates_prepared_action_and_preserves_removal_fallback() 
     let prepared = owner.review(Action::StartSetup).prepared.unwrap();
     let (review, status) = owner.review_status();
     assert!(review.legal_actions.contains(&Action::CompleteRemoval));
-    assert_eq!(status, "Problem detected"); // No HTTP adapter in this setup fixture.
+    assert_eq!(status, "Not enabled");
     assert_eq!(
         owner.execute(prepared, Confirmation::Approved).outcome,
         Outcome::Refused
@@ -373,13 +373,9 @@ fn combined_status_invalidates_prepared_action_and_preserves_removal_fallback() 
         removal: true,
         standard: false,
     });
-    assert!(
-        owner
-            .review_status()
-            .0
-            .legal_actions
-            .contains(&Action::CompleteRemoval)
-    );
+    let (review, status) = owner.review_status();
+    assert_eq!(status, "Problem detected");
+    assert!(review.legal_actions.contains(&Action::CompleteRemoval));
 }
 
 #[test]

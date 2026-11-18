@@ -1,180 +1,19 @@
 # Code map
 
-Use this map to locate the implementation and tests for a change. The domain
-vocabulary lives in [CONTEXT.md](../../CONTEXT.md); architectural decisions live
-in [docs/adr](../adr). The [documentation index](../README.md) separates current
-MVP guidance from historical material. Module READMEs explain the contracts
-behind these paths.
-
-## Isolated Rust rewrite
-
-The Owner-requested Rust implementation lives in the isolated sibling workspace
-documented by [the Rust handoff](../rust-rewrite.md). In that workspace, Standard
-setup/recovery is `src/proxyinstallation/fixture.rs` (`StandardInstallation<H>`);
-`src/host/setup.rs` defines its narrow host contract. Native observations and
-injected-root effects are in `src/host/linux.rs` and its small submodules; bounded
-process transport is `src/host/process.rs`. Retained locks, direct TLS/bind
-admission and fixed native command effects are `src/host/{locks,network,system}.rs`;
-the public frontend requires the controlled native build and authenticated process admission, with no simulator fallback. `build.rs` retains the canonical structural `.sbxr.rust` statement through a
-linker script for explicitly selected pinned Linux musl release builds;
-`src/build_identity.rs` checks the loaded statement independently of authentication.
-Identity generation, structural
-release inspection and offline Sigstore authentication have separate modules and
-adjacent/integration tests. `tooling/rust-package/` owns the Rust repository packaging/public-proof CLI,
-byte-preserved standalone bootstrap, native musl builder, four-asset assembly and
-local source snapshot/manifest verification. Its `linux-validation.md` lists
-prepared-builder commands. The workflow definitions build native archives once
-per architecture, reuse them for independent assembly checks and retain signed
-qualification/manual publication gates. No workflow/provisioning follows from
-local fixture success.
-Exact installed-byte acquisition is `src/release_acquisition.rs`; its
-`candidate.rs` submodule authenticates the signed empty-source HTTP candidate
-manifest and keeps candidate archive/installed authority distinct from stable
-proof. It shares bounded asset/archive/ELF verification with the stable route;
-`host::admission` binds real delivery proofs to the protected/current executable
-and loaded Rust statement, and guards selected Owner journeys. The sealed
-`InstalledEvidence` interface retains candidate/stable roles throughout concrete
-runtime effects and handoff. `host::admission_private` owns the separate offline
-private exact-pair/role/start-lock proof; it never performs release acquisition.
-Public entry requires genuine delivery/current-process admission; private startup keeps its exact offline pair/role/lock checks. The private-root, fixed-route
-`release_https::CandidateGatewayTransport` composes the retained qualification
-gateway without changing public/system TLS trust or artifact authentication.
-Archive decoding is `src/release_archive.rs`; bounded HTTPS is `src/release_https.rs`. Genuine
-public proofs and the repository evidence example cover actual acquisition.
-Runtime-start descriptor lending and serving composition are `src/runtime_handoff.rs`.
-Concrete proxy-start checks, protected material and scoped cutover publication are
-`src/host/runtime/{proxy,material,gate}.rs`; `src/host/runtime_io.rs` provides bounded
-Unix transport. The one-use consume effect is `src/host/filesystem/runtime.rs`.
-Concrete serving/sandbox observations and fixed service control are
-`src/host/runtime/{serving,serving_environment,control}.rs`. Private native
-composition is `src/host/runtime/native_dispatch.rs`, with joined signals in
-`shutdown.rs`; the public Owner shares that stop across acquisition, transaction,
-probe and bounded child contexts, and `src/host/input.rs` provides cancellable
-terminal I/O without changing terminal or descriptor settings. `src/private_roles.rs` owns exact argument dispatch. Development
-builds fail closed before native effects. Tests use explicit injected roots,
-process/command observations and real local sockets; new native execution is
-unvalidated. Pinned key/DEB acquisition is `src/package_acquisition.rs`, consumed
-by `src/host/linux/material.rs`.
-HTTP Owner enable/rotate/repair/recovery is `src/proxyinstallation/subscription.rs`
-with exact protected effects in `src/host/subscription{,/material,/effects}.rs`.
-Client Identity orchestration is `src/client_identity.rs`, shared Owner bridge
-`src/proxyinstallation/identity.rs`, and protected injected host
-`src/host/identity{,/effects}.rs`. Publication recovery is
-`src/host/filesystem/subscription.rs`; ordinary protected reads still reject all
-hardlinks. The Owner tests in `src/proxyinstallation/subscription_tests.rs` compose
-real local HTTP, locks and cutover consumption with injected system effects.
-The injected constructors reject `/`; typed native constructors now use
-`src/host/owner_runtime.rs` and its command/observation/probe/effect submodules.
-The composed Interface is `src/proxyinstallation/owner.rs`; native authenticated
-sources are `src/host/owner.rs`. Only one selected journey retains its writer and
-prepared authority. `src/host/owner.rs` composes zero-argument native Owner/lifecycle dispatch behind
-the controlled native build and genuine delivery/current-process admission. `src/host/entry_input.rs` reads only the
-retained fixed protected qualification handoff; full absence selects stable and
-partial/stale input refuses. It binds real staged/delivered candidate proofs and
-retains input freshness through the process guard; no environment/CLI switch is
-supported. `src/software_lifecycle.rs` and
-`src/host/lifecycle.rs` own Status/Check, clean-install Update refusal and reviewed
-exact-finisher recovery; `src/host/filesystem/lifecycle.rs` is its read-only lock
-probe. `terminal::run_with_lifecycle` supplies the two-module menu. Native public
-Owner effects require the concrete retained admission and exact ownership. Fixed cgroup
-virtual reads use `src/host/filesystem/runtime.rs` without changing ordinary
-record/file validation. `src/disclosure.rs` and `src/tunnel_setup.rs` hold the
-completed orchestration modules. Disclosure now uses the protected Host in
-`src/host/disclosure.rs`, independent runtime proofs in
-`src/host/owner_runtime/disclosure.rs`, and streaming Interface bridge in
-`src/proxyinstallation/disclosure.rs`. The terminal uses an explicit output sink;
-client secrets never enter Review details. Native tunnel composition is
-`src/host/linux/tunnel.rs`, with independent observations in
-`src/host/owner_runtime/tunnel.rs` and the shared frontend in
-`src/proxyinstallation/tunnel.rs`. `src/package_acquisition/probe.rs` derives the
-probe executable proof from the full pinned DEB without extraction/execution.
-The fixed initial setup start in `ServiceController` is separate from ordinary
-private startup. The exact pinned public conffile is recognized only at
-pre-configuration setup checkpoints by `src/host/linux/package_default.rs`; its protected atomic private
-replacement is `src/host/filesystem/package_default.rs`. Native gates remain
-conditional on genuine admission; Linux and packaged installation qualification remain separate.
-Concrete Standard removal/finalization is `src/host/linux/removal.rs`, with the
-model in `src/removal.rs` and shared Interface bridge in
-`src/proxyinstallation/removal.rs`. Exact missing-member restoration is `src/host/restoration.rs`, using
-`AuthenticatedArchive` and the protected prefix-staging helper in
-`src/host/filesystem/restoration.rs`. It now includes a native unreleased constructor and sealed exact-inode finisher
-takeover behind the existing closed production gate. Current HTTP/startup and
-Client Identity artifact removal is
-`src/host/linux/removal/{auxiliary,client_subscription}.rs`; dedicated connector
-removal composes the same runtime in `src/host/linux/removal/tunnel.rs`, with
-local native runtime
-observations in `src/host/owner_runtime/removal.rs`. Digest-only cleanup/removal
-material is in `src/host/linux/material.rs`; it never downloads or regenerates
-secrets. Retained HTTPS/renewal cleanup and certificate selection/state publication are
-in `src/host/historical/`; descriptor-relative lineage/lock handling is
-`src/host/filesystem/historical.rs`, composed into removal by
-`src/host/linux/removal/historical.rs`. Native retained renewal route observations
-are `src/host/owner_runtime/historical.rs`. Legacy unit recognition is removal-only;
-ordinary startup stays strict. Historical TLS serving/activation/renewal Owner
-flows and unfinished transport migration remain explicitly unavailable. Exact
-restored-finisher
-command preparation reuses the retained authenticated descriptor; actual native
-exec remains unqualified. Read that handoff before selecting Rust checks; Go live qualification never follows from local
-Rust fixture or cross-compilation results.
-
-## Product execution
-
-`cmd/sbxr` selects the platform entry point and private runtime roles. Normal
-zero-argument execution reaches the numbered menu in the Proxy Installation
-terminal adapter. That menu calls `Review`/`Execute` for proxy actions and
-Software Lifecycle for `Check`/`Recover`. Update is absent from the menu; the
-compatibility Interface refuses new Update while historical transaction recovery
-remains.
-
-| Task | Start here | Follow into / focused tests |
+| If you are tracing… | Start here | Follow the handoff |
 |---|---|---|
-| Executable startup and role dispatch | [cmd/sbxr/run.go](../../cmd/sbxr/run.go), [main_linux.go](../../cmd/sbxr/main_linux.go) | [run_test.go](../../cmd/sbxr/run_test.go); `go test ./cmd/sbxr` |
-| Menu selection, confirmation, and result rendering | [terminal/run.go](../../internal/proxyinstallation/adapter/terminal/run.go), [lifecycle.go](../../internal/proxyinstallation/adapter/terminal/lifecycle.go) | Adjacent `run_test.go`; `go test ./internal/proxyinstallation/adapter/terminal` |
-| Proxy actions and setup/removal orchestration | [proxyinstallation.go](../../internal/proxyinstallation/proxyinstallation.go) | [Proxy Installation map](../../internal/proxyinstallation/README.md); `go test ./internal/proxyinstallation` |
-| Ownership Record decoding, compatibility, or resource admission | [ownership.go](../../internal/proxyinstallation/ownership.go) | `proxyinstallation_test.go`, `software_update_test.go`, and adjacent feature tests |
-| Proxy status details | [details.go](../../internal/proxyinstallation/details.go) | Module tests plus terminal rendering tests |
-| Reviewed certificate replacement and fault repair | [repair.go](../../internal/proxyinstallation/repair.go), [host renewal](../../internal/proxyinstallation/adapter/host/renewal.go) | `repair_test.go`, `renewal_process_test.go`; [replacement procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/mvp-live-acceptance.md#certificate-replacement-procedure) |
-| Certificate snapshot publication, mismatch recovery, and ordinary-start coordination | [activation.go](../../internal/proxyinstallation/activation.go), [certificate_state.go](../../internal/proxyinstallation/adapter/host/certificate_state.go), [runtime_start.go](../../internal/proxyinstallation/adapter/host/runtime_start.go) | Adjacent certificate-state/runtime tests; [isolated Linux checks and recovery plan](../acceptance/reports/certificate-start-coordination-repair-2026-09-19.md) |
-| Volatile whole-host lock creation after reboot | [lock_provision.go](../../internal/proxyinstallation/lock_provision.go), [host lock provisioning](../../internal/proxyinstallation/adapter/host/lock_provision.go), [mutation lock primitive](../../internal/softwarelifecycle/mutation_lock.go) | Adjacent `lock_provision_test.go` and `mutation_lock_test.go`, plus private-role dispatch in `cmd/sbxr/run_test.go`; `go test ./internal/proxyinstallation/... ./internal/softwarelifecycle ./cmd/sbxr` |
-| Ubuntu filesystem, packages, systemd, locks, or processes | [host/host.go](../../internal/proxyinstallation/adapter/host/host.go), [mutation.go](../../internal/proxyinstallation/adapter/host/mutation.go) | Named host feature files and adjacent tests; `go test ./internal/proxyinstallation/adapter/host` |
-| Subscription firewall command and enablement-link ownership | [subscription_firewall.go](../../internal/proxyinstallation/adapter/host/subscription_firewall.go), [subscription_http.go](../../internal/proxyinstallation/adapter/host/subscription_http.go) | `subscription_firewall_test.go`; `go test ./internal/proxyinstallation/adapter/host` |
-| sing-box configuration and client encoding | [singbox.go](../../internal/proxyinstallation/adapter/singbox/singbox.go) | Adjacent `singbox_test.go` |
-| Optional VMess WebSocket, dedicated tunnel connector and public connection check | [VMess encoding](../../internal/proxyinstallation/adapter/singbox/vmess.go), [tunnel journey](../../internal/proxyinstallation/tunnel.go), [host connector](../../internal/proxyinstallation/adapter/host/tunnel.go), [traffic probe](../../internal/proxyinstallation/adapter/host/vmess_probe.go), [terminal](../../internal/proxyinstallation/adapter/terminal/run.go) | Adjacent `vmess_test.go`, `tunnel_test.go` and `vmess_probe_test.go`; opt-in `TestDedicatedTunnelUnderIsolatedSystemd`; [setup guide](../setup-vmess-tunnel.md) |
-| HTTP subscription serving and legacy HTTPS runtime | [subscriptionserving/README.md](../../internal/proxyinstallation/subscriptionserving/README.md) | `serving.go` and adjacent tests; module authority remains in Proxy Installation |
-| Installed state, update ordering, transactions, and recovery | [Software Lifecycle README](../../internal/softwarelifecycle/README.md) | `status_local.go`, `latest.go`, `review.go`, `update_transaction.go`, `update_runtime.go`; `go test ./internal/softwarelifecycle/...` |
-| GitHub release discovery, attestations, and supported sources | [github.go](../../internal/softwarelifecycle/adapter/github/github.go), [release_support.go](../../internal/softwarelifecycle/adapter/github/release_support.go) | Adjacent adapter tests; external dependencies stay in this adapter |
+| <a id="isolated-rust-rewrite"></a>Installed candidate, menu status, setup, HTTP, identity rotation, restart or removal | [Rust product and the five Owner journeys](rust-product.md) | [Native Owner selection](../../src/host/owner.rs) → [composed Owner](../../src/proxyinstallation/owner.rs) → [terminal](../../src/terminal.rs) |
+| <a id="release-tooling-and-qualification-harness"></a>Build inputs, private delivery, qualification, cleanup, publication or retry | [Release stages and focused checks](release-tooling.md) | [Rust package builder](../../tooling/rust-package/README.md) → [Go decisions](../../cmd/sbxr-release/README.md) → [workflow and operator helpers](../../.github/scripts/README.md) |
+| <a id="product-execution"></a>Go behavior in an older release, parity vectors or a Go release-tool dependency | [Retained Go product map](go-reference.md) | [Go Proxy Installation](../../internal/proxyinstallation/README.md) and [Software Lifecycle](../../internal/softwarelifecycle/README.md) |
+| What was specified, implemented, observed or released | [Documentation and evidence index](../README.md) | [Specifications](../../specs/README.md), [Rust acceptance matrix](../rust-acceptance.md), [dated reports](../acceptance/reports/README.md) |
 
-`*_linux.go`, `*_darwin.go`, and `*_other.go` select platform behavior. Tests
-beside the implementation exercise those distinctions; a macOS skip is not
-Linux validation. `testdata/` directories contain test inputs, not live evidence.
-
-## Release tooling and qualification harness
-
-These are separate from installed product behavior. For a missing menu action,
-first inspect product review/legal-action logic; for lost menu output or a
-deadline failure, inspect the driver and operator wrapper. Native fixed timing
-scopes live in `src/host/timing.rs`; the details driver relays their closed schema
-without raw stderr. See the script map for clock and scope-exit semantics.
-
-| Task | Implementation | Checks / procedure |
-|---|---|---|
-| Packaging, index, bootstrap installer, or tool dispatch | [cmd/sbxr-release/main.go](../../cmd/sbxr-release/main.go), [bootstrap.go](../../cmd/sbxr-release/bootstrap.go) | Adjacent `main_test.go` / `installer_test.go`; `go test ./cmd/sbxr-release` |
-| Qualification decisions and accepted wire formats | [Release stage map](../../cmd/sbxr-release/README.md), [qualification.go](../../cmd/sbxr-release/qualification.go), [scope](../../cmd/sbxr-release/qualification_scope.go), [recurring](../../cmd/sbxr-release/qualification_recurring.go), [MVP](../../cmd/sbxr-release/qualification_mvp.go) | Corresponding `qualification*_test.go`; [HTTP acceptance](../acceptance/http-subscription-live.md) describes the current five journeys; historical scopes retain their interpretation |
-| Candidate delivery transport | [gateway.go](../../cmd/sbxr-release/gateway.go), [v3-qualification-transport.sh](../../.github/scripts/v3-qualification-transport.sh) | `gateway_test.go`, `release_transport_test.go` |
-| Authenticated release asset downloads | [download-release-asset.py](../../.github/scripts/download-release-asset.py), [recheck-qualified-release.sh](../../.github/scripts/recheck-qualified-release.sh) | `test_download_release_asset.py`, `release_asset_download_test.go`; requires `gh`, `python3`, `jq`, and `sha256sum` |
-| Native CI / pinned actions | [.github/workflows](../../.github/workflows), [script map](../../.github/scripts/README.md) | `release_workflow_test.go` |
-| Candidate preflight, build, draft, signing, or handoff | [Release stage map](../../cmd/sbxr-release/README.md), [.github/workflows](../../.github/workflows) | `release_candidate_workflow_test.go`, `release_candidate_handoff_test.go`, `release_declaration_dispatch_test.go` |
-| Stable publication, retry, failure, or burn record | [publication](../../cmd/sbxr-release/qualification_publication.go), [recovery](../../cmd/sbxr-release/qualification_publication_recovery.go), [failure](../../cmd/sbxr-release/qualification_failure.go) | `release_stable_workflow_test.go`, `release_publication_recovery_test.go`, adjacent publication retry/recovery tests; [ADR-0032](../adr/0032-qualified-publication-retry.md) |
-| Collector request or result submission | [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | `release_collector_test.go` |
-| Real SSH fixture readiness, account isolation, or transport boundaries | [test_ssh_boundary.py](../../.github/scripts/test_ssh_boundary.py) | Adjacent `test_ssh_boundary_account.py` locks the caller account and proves success/failure preservation; root `v3_ssh_boundary_test.go` runs both on root Linux |
-| Packaged menu results, protected-footprint inventory, or cleanup | [v3-packaged-live.sh](../../.github/scripts/v3-packaged-live.sh), [v3-menu-session.py](../../.github/scripts/v3-menu-session.py) | `release_packaged_driver_test.go`, including exact absence and broken-link checks |
-| Current MVP observation assembly and submission | [v3-mvp-evidence.py](../../.github/scripts/v3-mvp-evidence.py), [v3-recurring-evidence.sh](../../.github/scripts/v3-recurring-evidence.sh) | [HTTP evidence handoff](../acceptance/http-subscription-live.md#recording-the-five-journeys), `test_mvp_evidence.py`, and `v3_mvp_evidence_test.go` |
-| Retained recurring upgrade scope and incremental observations | [qualification_mvp.go](../../cmd/sbxr-release/qualification_mvp.go), [mvp-observe.py](../../.github/scripts/mvp-observe.py) | `qualification_mvp_recurring_test.go`, `qualification_mvp_assembly_test.go`, `recurring_mvp_test.go`, `test_mvp_observe.py`; [retained recurring procedure](https://github.com/albertloky/SBXR/blob/c298af182cdd159a6258c0d17fb37b9b663cf4ee/docs/acceptance/ordinary-recurring-live.md) |
-| Read-only MVP package/window observations | [mvp-inspect-window.py](../../.github/scripts/mvp-inspect-window.py), [documented SSH caller](../acceptance/mvp-protected-log-parent-2026-09-19.md#read-only-state-checks-corrected-september-22) | Adjacent `test_mvp_inspect_window.py`, opt-in `test_mvp_inspect_window_linux.py` and root `v3_mvp_window_test.go`; real pinned DEB/dpkg/SSH fixtures in a marked disposable amd64 VM |
-| Temporary MVP log-parent prerequisite | [mvp-protected-menu.sh](../../.github/scripts/mvp-protected-menu.sh), [operator plan](../acceptance/mvp-protected-log-parent-2026-09-19.md) | Adjacent `test_mvp_protected_menu.py` and [isolated systemd/TLS test](../../internal/proxyinstallation/protected_log_parent_linux_test.go); uses the reviewed wrapper and [startup cancellation regression](../../.github/scripts/test_mvp_startup_cleanup.py) |
-| Current ordinary live procedure | [HTTP acceptance](../acceptance/http-subscription-live.md), [ADR-0028](../adr/0028-clean-install-only.md) | Five HTTP journeys, explicit empty incoming sources |
+The product glossary is [CONTEXT.md](../../CONTEXT.md). The [ADR index](../adr/README.md) identifies the applicable decision and its scope.
 
 ## Choosing validation
+
+For a Rust change, use the focused tests in the [journey map](rust-product.md) and the
+[packaging and native checks](../../tooling/rust-package/linux-validation.md) for the boundary being changed.
+For Go, release and operator changes, use the focused checks in the [Go](go-reference.md) or [release](release-tooling.md) map.
 
 Use the Go toolchain declared in [go.mod](../../go.mod). From the repository root,
 choose a short local run name (replace `r1` as needed):
@@ -183,14 +22,26 @@ choose a short local run name (replace `r1` as needed):
 (
   set -eu
   umask 022
-  run="$PWD/.scratch/acceptance/r1"
+  name=r1
+  run="$PWD/.scratch/acceptance/$name"
   mkdir -p "$run"
-  export TMPDIR="$run/t"
-  mkdir "$TMPDIR" # Refuse to reuse an existing temporary directory.
-  trap 'rmdir "$TMPDIR" || exit 1' EXIT
+  fixtures="$run/t"
+  mkdir "$fixtures" # Refuse to reuse an existing temporary directory.
+  export TMPDIR="$fixtures"
+  if [ "$(uname -s)" = Darwin ]; then
+    short="$PWD/.scratch/$name"
+    [ ! -e "$short" ] && [ ! -L "$short" ] || exit 1
+    ln -s "$fixtures" "$short"
+    export TMPDIR="$short"
+  fi
+  finish() {
+    if [ "$TMPDIR" != "$fixtures" ]; then unlink "$TMPDIR"; fi
+    rmdir "$fixtures" || exit 1
+  }
+  trap finish EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  GOTOOLCHAIN=go1.26.6 go test ./...
+  GOTOOLCHAIN=go1.26.6 go test -timeout 30m ./...
   GOTOOLCHAIN=go1.26.6 go vet ./...
 )
 ```
@@ -204,9 +55,12 @@ Host-adapter fixtures expect newly created files to have the current user's grou
 Use a workspace-local directory owned by that user and group, not macOS
 `/private/tmp`, which can give fixtures the `wheel` group.
 
-On macOS, runtime-start tests also create Unix sockets under `TMPDIR`. Long
-absolute paths can exceed the operating system's socket-path limit and fail
-with `bind: invalid argument`. Keep the run name short, as in the recipe above.
+On macOS, runtime-start tests append a 40-byte socket filename to `TMPDIR`.
+The full pathname must fit in 103 bytes. The short alias above keeps the actual
+fixtures in the run directory. For a longer checkout path, choose a shorter
+alias whose full socket pathname fits. The 30-minute Go timeout applies to each
+test package as a whole. The release-tool package runs many installer and
+qualification fixtures in sequence.
 
 The tables identify narrower package tests during development. Root Go tests
 cover architecture, dependencies, script integration, and workflow contracts;

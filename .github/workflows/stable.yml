@@ -121,8 +121,9 @@ jobs:
             jq -cnS --argjson expected "$release" --slurpfile assets assets.json --slurpfile metadata "$metadata" '{assets:$assets[0],body:$metadata[0].body,commit:$metadata[0].target_commitish,draft:$metadata[0].draft,immutable:($metadata[0].immutable // false),prerelease:$metadata[0].prerelease,release_id:$metadata[0].id,release_identity:$expected.release_identity,sequence:$expected.sequence,tag:$metadata[0].tag_name}' > observation.json
             jq -cS --slurpfile observation observation.json '. + $observation' verified/releases.json > verified/releases.next
             mv verified/releases.next verified/releases.json
-            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture amd64
-            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture arm64
+            commit="$(jq -er .commit <<<"$release")"
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-release-package -commit "$commit" -directory "$directory" -architecture amd64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-release-package -commit "$commit" -directory "$directory" -architecture arm64
             if jq -e '.v3_attempt.live89_correction_review != null' "$manifest" >/dev/null; then
               for architecture in amd64 arm64; do
                 python3 .github/scripts/live89-correction-review.py payload "$directory/sbxr-linux-$architecture.tar.gz" "$run_sha" > "$directory/live89-$architecture-payload.json"
@@ -270,6 +271,8 @@ jobs:
       ACCEPTANCE_VPS_SSH_PRIVATE_KEY: ${{ secrets.ACCEPTANCE_VPS_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: go.mod
@@ -339,9 +342,9 @@ jobs:
           }
 
           verify_public_package() {
-            local directory=$1 tag=$2
-            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture amd64
-            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-package -directory "$directory" -architecture arm64
+            local directory=$1 tag=$2 commit=$3
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-release-package -commit "$commit" -directory "$directory" -architecture amd64
+            cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-release-package -commit "$commit" -directory "$directory" -architecture arm64
             if test "$(jq -r .mode verified/qualification-manifest.json)" = v3; then return; fi
             sudo bash "$directory/install.sh" > "$tag-install.transcript"
             grep -Fx 'SOFTWARE-LIFECYCLE-INSTALL-INSTALLED' "$tag-install.transcript"
@@ -420,7 +423,7 @@ jobs:
               sleep "$(jq -r .actions[0].wait_seconds stable-publication-verification-decision.json)"
             done
             test "$outcome" = accepted
-            verify_public_package "public/$tag" "$tag"
+            verify_public_package "public/$tag" "$tag" "$(jq -er .commit <<<"$action")"
             cp stable-publication-verification-facts.json prior-verification-facts.json
             cp stable-publication-verification-decision.json prior-verification-decision.json
           done

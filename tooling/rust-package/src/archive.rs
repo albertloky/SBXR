@@ -176,6 +176,10 @@ mod compatibility_tests {
         fs::write(root.0.join("release-index.json"), index.bytes()).unwrap();
         assert!(crate::verify_package(&root.0, Architecture::Amd64).is_ok());
         assert!(crate::verify_package(&root.0, Architecture::Arm64).is_ok());
+        // These Go assets predate the Rust template; replay requires no source blob.
+        for arch in [Architecture::Amd64, Architecture::Arm64] {
+            assert!(crate::verify_release_package(&root.0, arch, &commit).is_ok());
+        }
         fs::remove_file(root.0.join("release-index.json")).unwrap();
         assert!(
             crate::build_index(&root.0, tag, &commit, 200).is_err(),
@@ -189,5 +193,6 @@ mod compatibility_tests {
         )
         .unwrap();
         assert!(crate::verify_package(&root.0, Architecture::Amd64).is_err());
+        assert!(crate::verify_release_package(&root.0, Architecture::Amd64, &commit).is_err());
     }
 }

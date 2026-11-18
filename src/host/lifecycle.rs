@@ -168,6 +168,40 @@ impl LifecycleHost {
         s.fingerprint = sha256_hex(image.as_bytes());
         Ok(s)
     }
+    pub(super) fn require_owner_installed(
+        &self,
+        expected: &InstalledRecord,
+    ) -> Result<(), HostError> {
+        let observed = self.inspect()?;
+        if observed.busy || observed.transaction || observed.installed.as_ref() != Some(expected) {
+            return Err(HostError::Foreign);
+        }
+        // Preserve the independent protected reread after the final lock probe.
+        // The ELF and its payload were just verified. raw() hashes every byte
+        // of the freshly opened image, so an exact digest binds the same image.
+        let _phase = super::timing::span(super::timing::Phase::Installed);
+        let (record, _) = self
+            .fs
+            .raw(INSTALLED, Mode::from_raw_mode(0o600), 4096)?
+            .ok_or(HostError::Foreign)?;
+        if expected.architecture() != Architecture::Amd64.as_str()
+            || InstalledRecord::decode(&record).map_err(|_| HostError::Foreign)? != *expected
+        {
+            return Err(HostError::Foreign);
+        }
+        let (_, evidence) = self
+            .fs
+            .raw(
+                EXECUTABLE,
+                Mode::from_raw_mode(0o755),
+                release_identity::MAX_EXECUTABLE_BYTES,
+            )?
+            .ok_or(HostError::Foreign)?;
+        if evidence.digest.as_deref() != Some(expected.executable_sha256()) {
+            return Err(HostError::Foreign);
+        }
+        Ok(())
+    }
     pub(crate) fn restore(
         &self,
         expected: &Snapshot,

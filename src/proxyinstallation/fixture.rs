@@ -529,9 +529,29 @@ impl<H: SetupHost> StandardInstallation<H> {
 #[path = "fixture_tests.rs"]
 mod tests;
 
+// Standard can prove absence before setup. HTTP and Client Identity own the
+// subscription observations once the profile is running.
+fn standard_subscription_status(status: Status) -> &'static str {
+    if status == Status::NotSetUp {
+        "Not enabled"
+    } else {
+        "Problem detected"
+    }
+}
+
 impl<H: SetupHost> Interface for StandardInstallation<H> {
     fn review(&self, action: Action) -> Review {
         StandardInstallation::review(self, action)
+    }
+    fn review_status(&self) -> (Review, &'static str) {
+        let review = self.review(Action::Status);
+        let subscription = standard_subscription_status(review.status);
+        (review, subscription)
+    }
+    fn subscription_status(&self) -> &'static str {
+        self.state().map_or("Problem detected", |state| {
+            standard_subscription_status(state.status)
+        })
     }
     fn execute(&mut self, prepared: PreparedAction, confirmation: Confirmation) -> ActionResult {
         StandardInstallation::execute(self, prepared, confirmation)

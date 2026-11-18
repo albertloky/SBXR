@@ -16,13 +16,16 @@ const TAG: &str = "v9.8.7";
 
 // Inert ELF64 fixture: a real layout, never an executable build or live proof.
 fn fixture(architecture: Architecture) -> Vec<u8> {
+    fixture_at(architecture, COMMIT)
+}
+fn fixture_at(architecture: Architecture, commit: &str) -> Vec<u8> {
     let mut sections = vec![
         ("", vec![], 0_u32, 0_u64),
         (".text", vec![0xc3], 1, 6),
         (".rodata", b"fixture".to_vec(), 1, 2),
         (
             RUST_ARTIFACT_SECTION,
-            rust_artifact_metadata(COMMIT, architecture).unwrap(),
+            rust_artifact_metadata(commit, architecture).unwrap(),
             1,
             0,
         ),
@@ -262,6 +265,143 @@ assert sorted(x.name for x in p.iterdir()) == sorted([x['name'] for x in assets]
         assert_eq!(message["outcome"], "consistent-local");
         assert_eq!(message["sequence"], 193);
     }
+}
+
+// Replay two real Git trees without checking out or executing candidate code.
+#[test]
+fn stable_replay_uses_the_signed_release_commit_for_all_bootstrap_inputs() {
+    use sbxr::release_identity::{
+        AssetProof, INDEXED_ASSET_NAMES, ReleaseIndex, ReleaseSupport, SupportScope,
+    };
+    let run = Directory::new();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(&run.0)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q", "--object-format=sha1"]);
+    let template_path = run.0.join("tooling/rust-package/templates/install.sh.tmpl");
+    let unit_path = run.0.join("src/records/tunnel-authority.service");
+    fs::create_dir_all(template_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(unit_path.parent().unwrap()).unwrap();
+    let template = include_str!("../templates/install.sh.tmpl");
+    let earlier = format!("{template}\n# candidate revision\n");
+    let unit = sbxr::server_configuration::tunnel_unit();
+    let earlier_unit = format!("{unit}# candidate unit\n");
+    fs::write(&template_path, &earlier).unwrap();
+    fs::write(&unit_path, &earlier_unit).unwrap();
+    git(&["add", "--force", "."]);
+    git(&["commit", "-qm", "candidate fixture"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    fs::write(&template_path, template).unwrap();
+    fs::write(&unit_path, unit).unwrap();
+    git(&["commit", "-qam", "dispatch fixture"]);
+    let dispatch = git(&["rev-parse", "HEAD"]);
+    let assets = run.0.join("assets");
+    fs::create_dir(&assets).unwrap();
+    let mut hashes = vec![];
+    for arch in [Architecture::Amd64, Architecture::Arm64] {
+        let archive =
+            package_executable(&fixture_at(arch, &commit), TAG, &commit, 193, arch).unwrap();
+        hashes.push(sha256_hex(&unpack_archive(&archive).unwrap()));
+        fs::write(
+            assets.join(format!("sbxr-linux-{}.tar.gz", arch.as_str())),
+            archive,
+        )
+        .unwrap();
+    }
+    let current = sbxr_rust_package::bootstrap(TAG, &commit, 193, &hashes[0], &hashes[1]).unwrap();
+    let current = String::from_utf8(current).unwrap();
+    let candidate = format!(
+        "{}\n# candidate revision\n",
+        current.replace(
+            &sha256_hex(unit.as_bytes()),
+            &sha256_hex(earlier_unit.as_bytes())
+        )
+    );
+    assert_ne!(current, candidate);
+    // Rebuild the exact index for each installer. A digest mismatch must not mask a renderer defect.
+    let index_installer = |installer: &str| {
+        fs::write(assets.join("install.sh"), installer).unwrap();
+        let proofs = INDEXED_ASSET_NAMES
+            .iter()
+            .map(|name| AssetProof::for_bytes(name, &fs::read(assets.join(name)).unwrap()).unwrap())
+            .collect();
+        let support = ReleaseSupport::new(SupportScope::CleanInstallOnly, vec![]).unwrap();
+        let index = ReleaseIndex::build(TAG, &commit, 193, proofs, Some(support)).unwrap();
+        fs::write(assets.join("release-index.json"), index.bytes()).unwrap();
+    };
+    let verify = |arch: &str, candidate_commit: Option<&str>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sbxr-rust-package"));
+        cmd.current_dir(&run.0);
+        if let Some(id) = candidate_commit {
+            cmd.args(["verify-release-package", "--commit", id]);
+        } else {
+            cmd.arg("verify-package");
+        }
+        cmd.arg("--directory")
+            .arg(&assets)
+            .args(["--architecture", arch])
+            .output()
+            .unwrap()
+    };
+    index_installer(&candidate);
+    assert!(String::from_utf8_lossy(&verify("amd64", None).stderr).contains("bootstrap-binding"));
+    for arch in ["amd64", "arm64"] {
+        let replay = verify(arch, Some(&commit));
+        assert!(
+            replay.status.success(),
+            "{}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+    }
+    for wrong in [
+        &dispatch[..],
+        "HEAD",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        assert!(!verify("amd64", Some(wrong)).status.success());
+    }
+    fs::write(assets.join("install.sh"), &current).unwrap();
+    assert!(!verify("amd64", Some(&commit)).status.success());
+    for altered in [
+        &current,
+        &candidate.replace("candidate revision", "changed revision"),
+        &candidate.replace(&hashes[0], &hashes[1]),
+    ] {
+        index_installer(altered);
+        assert!(
+            String::from_utf8_lossy(&verify("amd64", Some(&commit)).stderr)
+                .contains("bootstrap-binding")
+        );
+    }
+    index_installer(&candidate);
+    git(&["replace", &commit, &dispatch]);
+    assert!(verify("amd64", Some(&commit)).status.success());
+    // The source object must exist locally and cannot fall back to the dispatch inputs.
+    fs::rename(run.0.join(".git"), run.0.join("saved-git")).unwrap();
+    assert!(
+        String::from_utf8_lossy(&verify("amd64", Some(&commit)).stderr)
+            .contains("candidate-source")
+    );
 }
 
 #[test]

@@ -353,9 +353,7 @@ fn snapshot_timings_keep_fresh_record_refusal_and_never_emit_authority() {
     }
 }
 
-#[test]
-fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work() {
-    use std::{sync::Arc, time::Instant};
+pub(in crate::host) fn padded_fixture() -> (Fixture, InstalledRecord, usize) {
     let f = Fixture::new();
     let payload = elf(
         Architecture::Amd64,
@@ -390,6 +388,13 @@ fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work(
         &record.encode().unwrap(),
         0o600,
     );
+    (f, record, image.len())
+}
+
+#[test]
+fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work() {
+    use std::{sync::Arc, time::Instant};
+    let (f, _, image_len) = padded_fixture();
     let capture_start = Instant::now();
     let snapshot = f.capture().unwrap();
     let capture_elapsed = capture_start.elapsed();
@@ -409,7 +414,7 @@ fn snapshot_revalidation_reads_the_named_image_once_without_repeating_pair_work(
     });
     println!(
         "inert image bytes={} capture_us={} four_verify_us={} named_reads={}",
-        image.len(),
+        image_len,
         capture_elapsed.as_micros(),
         start.elapsed().as_micros(),
         named_reads.load(Ordering::Relaxed)

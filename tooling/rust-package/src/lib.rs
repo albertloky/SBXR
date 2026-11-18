@@ -37,21 +37,28 @@ pub fn build_index(directory: &Path, tag: &str, commit: &str, sequence: u64) -> 
     let index = ReleaseIndex::build(tag, commit, sequence, proofs, Some(support))
         .map_err(|_| PackageError("index"))?;
     for architecture in [Architecture::Amd64, Architecture::Arm64] {
-        check_architecture(&bodies, &index, architecture, false)?;
+        check_architecture(&bodies, &index, architecture, Verification::Build)?;
     }
     Ok(index.bytes().to_vec())
 }
+#[derive(Clone, Copy)]
+enum Verification<'a> {
+    Build,
+    Inspect,
+    Replay(&'a str),
+}
+
 fn check_architecture(
     bodies: &BTreeMap<String, Vec<u8>>,
     index: &ReleaseIndex,
     architecture: Architecture,
-    historical: bool,
+    verification: Verification,
 ) -> Result<()> {
     let executable =
         unpack_archive(&bodies[&format!("sbxr-linux-{}.tar.gz", architecture.as_str())])?;
     let inspected = inspect_release_executable(index, &executable, architecture)
         .map_err(|_| PackageError("executable"))?;
-    if !historical && inspected.kind() != ArtifactKind::Rust {
+    if matches!(verification, Verification::Build) && inspected.kind() != ArtifactKind::Rust {
         return Err(PackageError("rust-executable"));
     }
     let mut hashes = Vec::new();
@@ -86,7 +93,11 @@ fn check_architecture(
         }
         return Ok(());
     }
-    let expected = bootstrap(
+    let renderer = match verification {
+        Verification::Replay(_) => bootstrap::replay,
+        Verification::Build | Verification::Inspect => bootstrap,
+    };
+    let expected = renderer(
         index.identity().tag(),
         index.identity().commit(),
         index.sequence(),
@@ -100,9 +111,32 @@ fn check_architecture(
 }
 /// Structural agreement only; caller still needs authenticated asset proofs.
 pub fn verify_package(directory: &Path, architecture: Architecture) -> Result<ReleaseIndex> {
+    verify(directory, architecture, Verification::Inspect)
+}
+
+/// Stable replay uses the commit supplied by the signed release entry.
+/// This structural check supplements the caller's signature and asset proofs.
+pub fn verify_release_package(
+    directory: &Path,
+    architecture: Architecture,
+    commit: &str,
+) -> Result<ReleaseIndex> {
+    verify(directory, architecture, Verification::Replay(commit))
+}
+
+fn verify(
+    directory: &Path,
+    architecture: Architecture,
+    verification: Verification,
+) -> Result<ReleaseIndex> {
     let bodies = files::asset_files(directory, &RELEASE_ASSET_NAMES)?;
     let index =
         ReleaseIndex::decode(&bodies["release-index.json"]).map_err(|_| PackageError("index"))?;
+    if let Verification::Replay(commit) = verification
+        && commit != index.identity().commit()
+    {
+        return Err(PackageError("candidate-commit"));
+    }
     let proofs = RELEASE_ASSET_NAMES
         .iter()
         .map(|name| AssetProof::for_bytes(name, &bodies[*name]))
@@ -111,6 +145,6 @@ pub fn verify_package(directory: &Path, architecture: Architecture) -> Result<Re
     index
         .verify_asset_proofs(&index.identity(), &proofs)
         .map_err(|_| PackageError("asset-proof"))?;
-    check_architecture(&bodies, &index, architecture, true)?;
+    check_architecture(&bodies, &index, architecture, verification)?;
     Ok(index)
 }

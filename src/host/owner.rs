@@ -272,16 +272,8 @@ impl<'a> OwnerSources<'a> for NativeOwnerSources<'a> {
             return Err(HostError::Cancelled);
         }
         let fs = ProtectedFs::native()?;
-        let lifecycle = super::lifecycle::LifecycleHost::native_unreleased()?.inspect()?;
-        if lifecycle.busy
-            || lifecycle.transaction
-            || lifecycle.installed.as_ref() != Some(self.proof.record())
-        {
-            return Err(HostError::Foreign);
-        }
-        if super::linux::observation::read_installed(&fs)?.as_ref() != Some(self.proof.record()) {
-            return Err(HostError::Foreign);
-        }
+        super::lifecycle::LifecycleHost::native_unreleased()?
+            .require_owner_installed(self.proof.record())?;
         let r = super::linux::observation::read_ownership(&fs)?;
         if let Some((bytes, _)) = fs.raw(
             "var/lib/.sbxr-removal.json",

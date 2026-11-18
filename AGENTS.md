@@ -20,7 +20,7 @@ every guide by default.
 
 | Title | File path | When to read |
 |---|---|---|
-| Code map | [docs/agents/code-map.md](docs/agents/code-map.md) | First, before any code change, to find entry points, owning modules, and focused checks. |
+| Code map | [docs/agents/code-map.md](docs/agents/code-map.md) | First, before any code change. Follow the matching map for the [Rust candidate and five Owner journeys](docs/agents/rust-product.md), [release tooling](docs/agents/release-tooling.md), or [retained Go product](docs/agents/go-reference.md). Each links its focused checks. |
 | Implementation and regression prevention | [docs/agents/implementation.md](docs/agents/implementation.md) | Before implementation changes, including features, fixes, refactors, and build/test tooling; follow through validation and completion reporting. |
 | Test files and local artifacts | [docs/agents/files-and-artifacts.md](docs/agents/files-and-artifacts.md) | Before creating or moving tests, fixtures, logs, captures, downloads, handoffs, reports, or backups, or running validation that uses temporary files. |
 | Issue tracker: GitHub | [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md) | Before reading, creating, updating, or closing issues or PRDs. |

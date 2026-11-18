@@ -35,7 +35,7 @@ pub(super) struct Resource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Evidence {
     identity: String,
-    digest: Option<String>,
+    pub(super) digest: Option<String>,
     pub(super) gid: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

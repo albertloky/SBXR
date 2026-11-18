@@ -6,7 +6,8 @@
 |---|---|---|
 | Use SBXR | [Product README](../README.md) | Supported host, installation and menu journey |
 | Set up optional VMess Tunnel | [VMess setup guide](setup-vmess-tunnel.md) | Your own domain/tunnel, protected token, dedicated connector and honest connection checks |
-| Continue isolated Rust rewrite | [Rust increment and handoff](rust-rewrite.md), [current acceptance matrix](rust-acceptance.md) | Implemented slices, intentional exclusions and separate qualification |
+| Trace a Rust candidate journey | [Rust product map](agents/rust-product.md), [acceptance matrix](rust-acceptance.md), [revision handoff](rust-rewrite.md) | Current source in this checkout, boundaries, tests and dated evidence |
+| Compare the Go product or trace a Go dependency | [Retained Go map](agents/go-reference.md) | Historical product behavior and packages still used by release tooling |
 | Change implementation | [Agent code map](agents/code-map.md) | Entry points, owning modules and focused checks |
 | Find specified project work | [Work specifications](../specs/README.md) | Scope, plans, task progress and recorded checks; not conversation transcripts |
 | Understand domain language | [CONTEXT.md](../CONTEXT.md) | One shared glossary, not a second specification |
@@ -15,14 +16,16 @@
 | Plan current live qualification | [Acceptance guide](acceptance/README.md) | Current MVP procedure and bounded prerequisites |
 | Inspect a release or repair result | [Report index](acceptance/reports/README.md) | Dated observations, not present host readiness |
 | Build/validate Rust release inputs locally | [Rust packaging/CI tooling](../tooling/rust-package/README.md), [prepared Linux commands](../tooling/rust-package/linux-validation.md) | Native musl inputs, strict artifact/bootstrap verification and source-only snapshot; no dispatch/publication |
-| Operate retained qualification tooling | [Release stage map](../cmd/sbxr-release/README.md), [script map](../.github/scripts/README.md) | Qualification code and workflow/helper ownership |
+| Trace a release, failure, or retry | [Release tooling map](agents/release-tooling.md) | Rust assets, Go decisions, operator observations and publication |
 | Investigate upstream behavior | [Research index](research/README.md) | Current dependency compatibility, not adopted policy |
 
-The latest publication recorded here is
-[v3.1.81 / 159 on 2026-09-25](acceptance/reports/v3.1.81-stable-publication-2026-09-25.md).
-Its [bounded Owner exception](adr/0024-r24-late-confirmation-supplement.md)
-reuses prior live evidence; it is not a fresh live pass or a general waiver.
-Refresh remote release state before a future release operation.
+## Reading release evidence
+
+| Question | Local evidence |
+|---|---|
+| What does this checkout implement? | [Rust product map](agents/rust-product.md) and [acceptance matrix](rust-acceptance.md). The public bootstrap selects the published Latest. |
+| What did a particular live run establish? | [Dated reports](acceptance/reports/README.md). For later signed drafts, consult the [reservation decisions](adr/0032-qualified-publication-retry.md) for the outcome and cleanup actually recorded. |
+| Was a particular historical version public? | The [v3.1.81 / 159 publication report](acceptance/reports/v3.1.81-stable-publication-2026-09-25.md) records its [bounded exception](adr/0024-r24-late-confirmation-supplement.md). The [public v3.1.118 / 192 fixture](../tests/testdata/public_release/README.md) preserves newer release metadata and signatures captured in October. Verify current remote state when a release operation requires it. |
 
 Current releases are [clean installation only](adr/0028-clean-install-only.md),
 with no incoming sources and the five [HTTP live journeys](acceptance/http-subscription-live.md).
@@ -46,7 +49,7 @@ tests/                         Rust integration tests and reusable fixtures
 examples/                      Rust evidence/acquisition example
 tooling/rust-package/           separate Rust package/bootstrap crate and local checks
 cmd/sbxr/                       retained Go product startup and private-role dispatch
-cmd/sbxr-release/               retained Go release/qualification tooling
+cmd/sbxr-release/               active Go qualification decisions, gateway and retained packaging
 internal/proxyinstallation/    Go proxy reference, private serving module and adapters
 internal/softwarelifecycle/    Go installed-software and lifecycle reference
 .github/scripts/               release/operator helpers and adjacent tests
@@ -55,7 +58,9 @@ docs/agents/                   task-triggered working instructions
 docs/adr/                      scoped decisions (see its index first)
 docs/acceptance/                current and fixed-path procedures/decisions
 docs/acceptance/reports/        dated release, repair and investigation reports
-specs/                         scoped work specifications, plans, tasks and assessments
+specs/                         tracked work specifications, plans, tasks and assessments
+.specify/, .agents/skills/      checkout-local Spec Kit configuration and retained skills, when present
+.cargo/, target/               native build configuration and ignored compiler output
 .scratch/                      ignored private evidence, drafts and backups
 ```
 

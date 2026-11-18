@@ -44,6 +44,56 @@ func TestBurnEvidenceTagCanBeRetriedOnlyWithTheExactPayload(t *testing.T) {
 	}
 }
 
+func TestStableWorkflowVerifiesPackagesAtSignedReleaseCommit(t *testing.T) {
+	const path = ".github/workflows/stable.yml"
+	preflight := workflowRun(t, path, "preflight", "Verify the successful signed qualification")
+	publication := workflowRun(t, path, "publish", "Publish unchanged qualified releases in order and publicly verify them")
+
+	between := func(source, start, end string) string {
+		t.Helper()
+		_, rest, foundStart := strings.Cut(source, start)
+		body, _, foundEnd := strings.Cut(rest, end)
+		if !foundStart || !foundEnd {
+			t.Fatalf("missing workflow block between %q and %q", start, end)
+		}
+		return body
+	}
+	// Run only the package checks. Leave publication and historical installation outside the fixture.
+	preflightChecks := between(preflight, "mv verified/releases.next verified/releases.json\n", "if jq -e")
+	publicChecks := "verify_public_package() {" + between(publication, "verify_public_package() {", "if test ") + "}\n"
+	afterVerification := between(publication, "test \"$outcome\" = accepted\n", "cp stable-publication-verification-facts.json")
+	const candidate = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	for _, stage := range []struct{ name, input, check string }{
+		{"preflight", "release", preflightChecks},
+		{"published", "action", publicChecks + afterVerification},
+	} {
+		t.Run(stage.name, func(t *testing.T) {
+			prefix := `set -eu
+run_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+GITHUB_SHA=$run_sha
+tag=v3.1.95
+directory="public/$tag"
+unset release action
+` + stage.input + `='{"commit":"` + candidate + `"}'
+cargo() { printf '%s\n' "$*"; }
+`
+			cmd := exec.Command("bash", "-c", prefix+stage.check)
+			cmd.Dir = t.TempDir()
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("workflow package check: %v\n%s", err, output)
+			}
+			var want []string
+			for _, arch := range []string{"amd64", "arm64"} {
+				want = append(want, "run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-release-package -commit "+candidate+" -directory public/v3.1.95 -architecture "+arch)
+			}
+			if string(output) != strings.Join(want, "\n")+"\n" {
+				t.Fatalf("unexpected verifier calls:\n%s", output)
+			}
+		})
+	}
+}
+
 func TestStablePublishesOnlyTheSignedQualifiedDraftsAndProvesStableNoUpdate(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/stable.yml")
 	if err != nil {

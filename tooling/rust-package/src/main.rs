@@ -4,7 +4,7 @@ use sbxr::records::sha256_hex;
 use sbxr::release_identity::{Architecture, MAX_EXECUTABLE_BYTES, rust_artifact_metadata};
 use sbxr_rust_package::{
     PackageError, Result, bootstrap, build_index, package_executable, read_input, unpack_archive,
-    verify_package, write_exclusive, write_script_exclusive,
+    verify_package, verify_release_package, write_exclusive, write_script_exclusive,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -48,6 +48,7 @@ fn run() -> Result<serde_json::Value> {
         "verify-public-release" => &["tag"],
         "index" => &["tag", "commit", "sequence", "directory", "output"],
         "verify-package" => &["directory", "architecture"],
+        "verify-release-package" => &["directory", "architecture", "commit"],
         "metadata" => &["commit", "architecture", "output"],
         _ => return Err(PackageError("arguments")),
     };
@@ -192,11 +193,14 @@ fn run() -> Result<serde_json::Value> {
             write_exclusive(Path::new(value(&options, "output")?), &metadata)?;
             Ok(serde_json::json!({"outcome":"metadata-local"}))
         }
-        "verify-package" => {
-            let index = verify_package(
-                Path::new(value(&options, "directory")?),
-                architecture(&options)?,
-            )?;
+        "verify-package" | "verify-release-package" => {
+            let directory = Path::new(value(&options, "directory")?);
+            let arch = architecture(&options)?;
+            let index = if command == "verify-release-package" {
+                verify_release_package(directory, arch, value(&options, "commit")?)?
+            } else {
+                verify_package(directory, arch)?
+            };
             Ok(
                 serde_json::json!({"outcome":"consistent-local", "sequence":index.sequence(),
                 "release_identity":{"repository":index.identity().repository(),

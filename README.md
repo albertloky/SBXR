@@ -2,7 +2,7 @@
 
 This isolated checkout contains the [Rust rewrite in progress](docs/rust-rewrite.md).
 Its Rust executable uses conditional native admission with no simulator fallback;
-the Go source below remains the product reference. Native implementation does not
+the [Go product](docs/agents/go-reference.md) provides a historical reference. Native implementation does not
 establish exact-candidate live qualification.
 
 SBXR is a root-only V3 proxy product for one Ubuntu Server. Software Lifecycle installs the `sbxr` executable and retains recovery for existing durable transactions. Proxy Installation owns the installed proxy journey through a review-first numbered menu.
@@ -30,8 +30,8 @@ research notes.
 Software Lifecycle owns `/usr/local/bin/sbxr` and `/var/lib/sbxr/installed.json`.
 Confirmed V3 setup creates the Proxy Installation resources recorded in
 `/var/lib/sbxr/proxy-ownership.json`; reviewed Complete removal uses that authority
-to remove the installation. See the [Proxy Installation guide](internal/proxyinstallation/README.md)
-for setup, subscription, identity, and removal responsibilities.
+to remove the installation. The [Rust product map](docs/agents/rust-product.md) traces setup, subscription,
+identity and removal through the current implementation.
 
 ## Installation
 
@@ -45,6 +45,8 @@ This command selects the published Latest, not unpublished checkout changes. The
 
 ## Numbered menu
 
+This section describes the menu implemented in this checkout. For a published
+build, use the README at its release tag to identify the available actions.
 Run the installed product with no arguments:
 
 ```sh

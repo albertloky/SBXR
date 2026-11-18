@@ -49,6 +49,73 @@ fn perform(journey: &mut FixtureInstallation, action: Action) -> crate::domain::
 }
 
 #[test]
+fn owner_menu_distinguishes_a_clean_standard_host_from_damaged_authority() {
+    use crate::proxyinstallation::{Journey, OwnerInstallation, OwnerSources};
+
+    struct SetupSources<'a>(&'a std::path::Path);
+    impl OwnerSources<'_> for SetupSources<'_> {
+        fn journeys(&self) -> Result<Vec<Journey>, HostError> {
+            Ok(vec![Journey::Standard, Journey::Tunnel, Journey::Removal])
+        }
+        fn open(&self, journey: Journey) -> Result<Box<dyn Interface>, HostError> {
+            match journey {
+                Journey::Standard => Ok(Box::new(FixtureInstallation::new(
+                    FixtureHost::open(self.0)?,
+                    release(),
+                )?)),
+                _ => Err(HostError::LiveUnavailable),
+            }
+        }
+        fn mode(&self) -> ExecutionMode {
+            ExecutionMode::Fixture
+        }
+    }
+
+    let root = Fixture::new();
+    drop(root.create());
+    let mut owner = OwnerInstallation::new(SetupSources(&root.0));
+    let journal = root.0.join("var/lib/sbxr/proxy-ownership.json");
+    let assert_menu =
+        |owner: &mut OwnerInstallation<SetupSources>, proxy: &str, subscription: &str| {
+            let mut output = Vec::new();
+            crate::terminal::run(&mut &b"0\n"[..], &mut output, owner).unwrap();
+            let frame = String::from_utf8(output).unwrap();
+            assert!(
+                frame.contains(&format!("Proxy status: {proxy} (fixture)\n")),
+                "{frame}"
+            );
+            assert!(
+                frame.contains(&format!("Subscription status: {subscription} (fixture)\n")),
+                "{frame}"
+            );
+            assert_eq!(owner.subscription_status(), subscription);
+            assert!(!frame.contains("Enable subscription"));
+            assert!(owner.review(Action::EnableSubscription).prepared.is_none());
+        };
+
+    assert_menu(&mut owner, "Not set up", "Not enabled");
+    assert!(!journal.exists());
+    let prepared = owner.review(Action::StartSetup).prepared.unwrap();
+    assert_eq!(owner.subscription_status(), "Not enabled");
+
+    assert_eq!(
+        owner.execute(prepared, Confirmation::Declined).outcome,
+        Outcome::Cancelled
+    );
+    let prepared = owner.review(Action::StartSetup).prepared.unwrap();
+
+    fs::write(&journal, b"damaged").unwrap();
+    fs::set_permissions(&journal, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(owner.subscription_status(), "Problem detected");
+    assert_eq!(
+        owner.execute(prepared, Confirmation::Approved).outcome,
+        Outcome::Refused
+    );
+    assert_menu(&mut owner, "Problem detected", "Problem detected");
+    assert_eq!(fs::read(&journal).unwrap(), b"damaged");
+}
+
+#[test]
 fn standard_setup_reaches_a_persisted_fixture_running_state() {
     let root = Fixture::new();
     let mut journey = root.create();

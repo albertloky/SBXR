@@ -184,6 +184,14 @@ Go bootstrap/recovery contract at the rewrite base; the Rust generator invokes n
 Go process. Existing ownership, locks, exact finisher restoration, interrupted
 publication, foreign-file and result-code behavior remain. Current construction
 requires the complete generated bootstrap bytes, not only matching constant lines.
+Stable preflight and the post-publication package check call
+`verify-release-package --directory DIR --architecture ARCH --commit SHA`.
+The caller supplies the release commit from the signed manifest or its validated
+publication action. For Rust assets the verifier matches that commit to the
+release index, reads the installer template and tunnel service definition from
+that exact local Git commit, and compares the complete rendered script. Run the
+command in a checkout containing the commit. Candidate assembly and
+`verify-package` continue to use the current build's embedded inputs.
 Read-only historical Go inspection retains the original pin contract and strict
 Go metadata proof; it grants no incoming migration or Update route.
 

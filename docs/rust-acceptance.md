@@ -12,7 +12,12 @@ closed-gate increment notes describe their named revisions, not an additional
 current blanket refusal. Conditional code availability does not authorize or
 establish a live installation or stable release.
 
-## Latest dated qualification closeout
+<a id="latest-dated-qualification-closeout"></a>
+
+## Build 213 details and removal evidence
+
+Later signed draft dispositions are recorded in [ADR-0032](adr/0032-qualified-publication-retry.md).
+Use the [documentation index](README.md#reading-release-evidence) to distinguish a dated journey observation, a reservation, and a publication.
 
 [q213 interrupted details and administrative cleanup, 2026-11-06](acceptance/reports/q213-interrupted-details-cleanup-2026-11-06.md)
 records successful packaged installation/Standard setup, incomplete details-cycle

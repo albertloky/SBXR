@@ -128,7 +128,7 @@ class MainReviewTests(unittest.TestCase):
         workflow = WORKFLOW.read_text()
         start = workflow.index('            if test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main"')
         end_marker = '            verify_public_package "public/$tag" "$tag"'
-        end = workflow.index(end_marker, start) + len(end_marker)
+        end = workflow.index('\n', workflow.index(end_marker, start))
         shell = workflow[start:end]
         for failure in ("before-patch", "after-patch", "verification"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
@@ -175,9 +175,9 @@ remote_main=''' + "a" * 40 + '''
 release_id=17
 tag=v3.1.95
 action_index=0
-action='{"failure_reason":"v3-publication-or-verification-failure"}'
+action='{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","failure_reason":"v3-publication-or-verification-failure"}'
 collect_observation() { jq -cnS --arg state "$(cat remote-state)" '{remote:$state}'; }
-verify_public_package() { test "$(cat remote-state)" = 'stable immutable tested bytes'; }
+verify_public_package() { test "$3" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb && test "$(cat remote-state)" = 'stable immutable tested bytes'; }
 '''
                 env = dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
                            GITHUB_REPOSITORY="fixture/repo", GITHUB_OUTPUT=str(root / "output"),
