@@ -28,23 +28,69 @@ class DiagnosticRestoration(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.now = int(time.time())
         self.window = dict(start_unix=self.now-10, test_until_unix=self.now-10+7200, finish_unix=self.now-10+10800)
+        self.prepare_request()
+
+    def prepare_request(self, mode=None):
         manifest = {"schema":"sbxr-qualification-manifest-v3", "v3_attempt":{
-            "diagnostic":self.window, "required_scenarios":["mvp-install"], "attempt_id":"run-999001-attempt-1"}}
+            "diagnostic":self.window, "scenario_limit_seconds":1800, "required_scenarios":["mvp-install"], "attempt_id":"run-999001-attempt-1"}}
+        if mode is not None:
+            self.window["mode"] = mode
+            manifest["v3_attempt"]["scenario_limit_seconds"] = 2700
+            manifest["v3_attempt"]["attempt_id"] = "run-999002-attempt-1"
         self.raw = collector.canonical(manifest)
         self.digest = hashlib.sha256(self.raw).hexdigest()
         self.manifest = self.root / "manifest.json"
         self.manifest.write_bytes(self.raw)
         self.manifest.chmod(0o600)
-        handoff = collector.prepare(self.root, self.manifest, self.now)
+        clock = (HERE / "mvp-observe.py").read_bytes()
+        stage = dict(clock=clock, clock_sha256=collector.digest(clock)) if mode else {}
+        handoff = collector.prepare(self.root, self.manifest, self.now, **stage)
         self.directory = Path(handoff["directory"])
         self.q = json.loads((self.directory / "request.json").read_bytes())
-        self.request_path = "/root/sbxr-diagnostic-run-999001-attempt-1/request.json"
-        self.draft_path = "/root/sbxr-diagnostic-run-999001-attempt-1/observation-draft.json"
+        self.request_path = f"/root/{self.directory.name}/request.json"
+        self.draft_path = f"/root/{self.directory.name}/observation-draft.json"
 
     def validate(self, q=None, raw=None, digest=None, request=None, draft=None, window=None):
         return binding.validate_request(self.q if q is None else q, self.raw if raw is None else raw,
             self.digest if digest is None else digest, self.request_path if request is None else request,
             self.draft_path if draft is None else draft, self.window if window is None else window)
+
+    def clock(self, command):
+        recorder = self.directory if self.window.get("mode") == "karing-one-node" else HERE
+        return subprocess.run([sys.executable, "-B", str(recorder / "mvp-observe.py"), command,
+            "--request", str(self.directory / "request.json"), "--draft", str(self.directory / "observation-draft.json")],
+            capture_output=True, timeout=10)
+
+    def test_one_node_clock_through_collector_validator_and_recorder(self):
+        self.prepare_request("karing-one-node")
+        self.assertEqual(self.validate(), self.window)
+        self.assertEqual(self.q["required_checks"], ["diagnostic-karing-one-node"])
+        self.assertEqual(self.q["scenario_limit_seconds"], 2700)
+        self.assertEqual(self.q["deadline_unix"], self.now + 2700)
+        self.assertEqual(self.q["diagnostic_test_until_unix"], self.now + 1200)
+        self.assertNotIn("attended_finish_by", self.q)
+        self.assertNotIn("karing_response_limit_seconds", self.q)
+        self.assertEqual(binding.operation_cutoff(self.q, self.now+2000, self.now+2400), self.now+500)
+        self.assertEqual(binding.operation_cutoff(self.q, self.now+2400, self.now+1900), self.now+400)
+        request = self.directory / "request.json"
+        draft = self.directory / "observation-draft.json"
+        self.assertEqual(self.clock("start").returncode, 0)
+        self.assertEqual(int(self.clock("operation-deadline").stdout), self.now+1200)
+        self.assertEqual(int(self.clock("cleanup-deadline").stdout), self.now+2700)
+        draft.unlink()  # Probe request admission independently of the previous draft digest.
+        for edit in (dict(required_checks=["diagnostic-observation"]), dict(scenario_limit_seconds=1800),
+                     dict(diagnostic_test_until_unix=self.now+1201), dict(scenario_id="mvp-subscription")):
+            altered = dict(self.q, **edit)
+            with self.subTest(edit=edit):
+                with self.assertRaises(ValueError):
+                    self.validate(q=altered)
+                request.write_bytes(collector.canonical(altered))
+                self.assertNotEqual(self.clock("deadline").returncode, 0)
+        ordinary = dict(self.q)
+        del ordinary["diagnostic_test_until_unix"]
+        ordinary["required_checks"] = ["packaged-install"]
+        request.write_bytes(collector.canonical(ordinary))
+        self.assertNotEqual(self.clock("deadline").returncode, 0)
 
     def test_real_collector_request_needs_no_attendance_claim(self):
         self.assertNotIn("attended_finish_by", self.q)
@@ -55,13 +101,10 @@ class DiagnosticRestoration(unittest.TestCase):
     def test_real_recorder_keeps_removal_reserve(self):
         request = self.directory / "request.json"
         draft = self.directory / "observation-draft.json"
-        def clock(command):
-            return subprocess.run([sys.executable, "-B", str(HERE / "mvp-observe.py"), command,
-                "--request", str(request), "--draft", str(draft)], capture_output=True, timeout=10)
-        result = clock("start")
+        result = self.clock("start")
         self.assertEqual(result.returncode, 0, result.stderr)
         before = (request.read_bytes(), draft.read_bytes())
-        ordinary, cleanup = clock("operation-deadline"), clock("cleanup-deadline")
+        ordinary, cleanup = self.clock("operation-deadline"), self.clock("cleanup-deadline")
         self.assertEqual((ordinary.returncode, cleanup.returncode), (0, 0))
         self.assertGreaterEqual(int(cleanup.stdout)-int(ordinary.stdout), 900)
         self.assertEqual(int(cleanup.stdout), self.q["deadline_unix"])
@@ -92,6 +135,10 @@ class DiagnosticRestoration(unittest.TestCase):
                 binding.operation_cutoff(self.q,runtime,finish)
         q=copy.deepcopy(self.q);q.pop("diagnostic_test_until_unix")
         with self.assertRaises(ValueError):binding.operation_cutoff(q,self.window["finish_unix"],self.window["finish_unix"])
+
+    def test_nonobject_window_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.validate(window=[])
 
     def test_refuses_wrong_paths_digest_and_window(self):
         for change in ({"request":"/root/sbxr-qualification-evidence/request.json"},

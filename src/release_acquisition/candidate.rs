@@ -396,7 +396,13 @@ fn attempt_index(attempt: &Value, workflow: &Workflow, release: &Release) -> Res
     let diagnostic = attempt.get("diagnostic");
     if let Some(d) = diagnostic {
         let start = d["start_unix"].as_u64().ok_or(TrustError::Refused)?;
-        if d.as_object().is_none_or(|m| m.len() != 3)
+        let (field_count, scenario_limit) = match d.get("mode") {
+            None => (3, 1800),
+            Some(mode) if mode == "karing-one-node" => (4, 2700),
+            _ => return Err(TrustError::Refused),
+        };
+        if d.as_object().is_none_or(|m| m.len() != field_count)
+            || attempt["scenario_limit_seconds"].as_u64() != Some(scenario_limit)
             || start == 0
             || start > u64::MAX - 10800
             || d["test_until_unix"].as_u64() != start.checked_add(7200)

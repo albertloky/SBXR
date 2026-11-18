@@ -622,9 +622,10 @@ type v3QualificationSource struct {
 
 // Diagnostic identity is signed, but can never become acceptance evidence.
 type disclosureDiagnostic struct {
-	FinishUnix    int64 `json:"finish_unix"`
-	StartUnix     int64 `json:"start_unix"`
-	TestUntilUnix int64 `json:"test_until_unix"`
+	FinishUnix    int64  `json:"finish_unix"`
+	Mode          string `json:"mode,omitempty"`
+	StartUnix     int64  `json:"start_unix"`
+	TestUntilUnix int64  `json:"test_until_unix"`
 }
 
 type v3QualificationAttempt struct {
@@ -668,16 +669,23 @@ func validV3Attempt(attempt v3QualificationAttempt, preflight qualificationFacts
 // validV3AttemptDeclaredFields is shared by unsigned preparation and signing.
 // Signing separately binds the workflow identity and candidate release index.
 func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qualificationFacts) bool {
+	scenarioLimit := 1800
 	if d := attempt.Diagnostic; d != nil {
+		switch d.Mode {
+		case "":
+		case "karing-one-node":
+			scenarioLimit = 2700
+		default:
+			return false
+		}
 		started, ok := qualificationTime(attempt.StartedAt)
 		if !ok || d.StartUnix <= 0 || d.TestUntilUnix <= d.StartUnix || d.FinishUnix <= d.TestUntilUnix || d.TestUntilUnix-d.StartUnix != 7200 || d.FinishUnix-d.StartUnix != 10800 || started.Unix() < d.StartUnix || started.Unix() >= d.TestUntilUnix || attempt.Schema != "sbxr-v3-qualification-attempt-v3" || attempt.Support == nil || attempt.Support.Scope != softwarelifecycle.SubscriptionCleanInstallOnly || attempt.EvidencePolicy != softwarelifecycle.MVPHTTPEvidencePolicy || attempt.OwnerException != "" || attempt.Live89CorrectionReview != nil || attempt.LateConfirmationReview != nil || attempt.KaringResponseLimitSeconds != 0 || attempt.AttendedFinishBy != "" || attempt.ProxyProfile != "" || attempt.AutomatedOnlyScenarios != nil || !slices.Equal(attempt.RequiredScenarios, []string{"mvp-install"}) {
 			return false
 		}
-		// Reuse all ordinary source, package and authentication checks. Only the
-		// declared journey set is smaller; results are separately refused below.
+		// Check all common source, package and authentication fields against
+		// the underlying clean-install scope, without changing the signed attempt.
 		attempt.Diagnostic = nil
 		attempt.RequiredScenarios = strings.Fields(softwarelifecycle.MVPHTTPScenarios)
-		return validV3AttemptDeclaredFields(attempt, preflight)
 	}
 	if !validProxyProfile(attempt) {
 		return false
@@ -704,7 +712,7 @@ func validV3AttemptDeclaredFields(attempt v3QualificationAttempt, preflight qual
 	mvp := ordinaryLiveAttempt(attempt)
 	if !validKaringResponseDeclaration(attempt) || !ok || !checkedOK || started.Before(checked) || !mvp && started.Sub(checked) > 5*time.Minute ||
 		(attempt.Schema != "sbxr-v3-qualification-attempt-v2" && attempt.Schema != "sbxr-v3-qualification-attempt-v3") || attempt.RunAttempt < 1 ||
-		attempt.ScenarioLimitSeconds != 1800 || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
+		attempt.ScenarioLimitSeconds != scenarioLimit || attempt.KaringLimitSeconds != 7200 || attempt.ValidationLimitSeconds != 300 ||
 		!validAcceptanceRunner(attempt.Runner) || attempt.Runner.GoToolchain != "go1.26.6" ||
 		!independentID(attempt.VPSID, "vps") || !independentID(attempt.OutsideRunnerID, "runner") || !independentID(attempt.MacRunnerID, "mac") || !regexp.MustCompile(`^[0-9]+\.[0-9]+(?:\.[0-9]+)?$`).MatchString(attempt.MacOSVersion) || !validSHA256(attempt.VPSIdentitySHA256) ||
 		attempt.ProxyPackage != expectedV3AttemptPackageIdentity(attempt, preflight) || !validV3Packages(attempt.Packages, attempt) || !validV3Packages(attempt.AfterSnapRefresh, attempt) ||

@@ -20,6 +20,27 @@ func TestDisclosureDiagnosticAdmissionCannotQualifyOrPublish(t *testing.T) {
 	started, _ := qualificationTime(a.StartedAt)
 	a.Diagnostic = &disclosureDiagnostic{StartUnix: started.Unix(), TestUntilUnix: started.Unix() + 7200, FinishUnix: started.Unix() + 10800}
 	a.RequiredScenarios = []string{"mvp-install"}
+	for _, mode := range []string{"disclosure", "karing-one-node"} {
+		t.Run(mode, func(t *testing.T) {
+			attemptWire := qualificationDocument(t, a)
+			if mode == "karing-one-node" {
+				attemptWire = strings.Replace(attemptWire, `"start_unix":`, `"mode":"karing-one-node","start_unix":`, 1)
+				attemptWire = strings.Replace(attemptWire, `"scenario_limit_seconds":1800`, `"scenario_limit_seconds":2700`, 1)
+			}
+			var signed v3QualificationAttempt
+			if !decodeCanonical([]byte(attemptWire), &signed) {
+				t.Fatal("canonical attempt wire refused")
+			}
+			boundary := bf
+			boundary.V3Attempt = &signed
+			checkDiagnosticCannotQualifyOrPublish(t, binary, boundary, pre, evidence)
+		})
+	}
+}
+
+func checkDiagnosticCannotQualifyOrPublish(t *testing.T, binary string, bf qualificationBoundaryFacts, pre qualificationFacts, evidence map[string]any) {
+	t.Helper()
+	a := bf.V3Attempt
 	manifest, err := evaluateQualificationBoundary(bf)
 	if err != nil {
 		t.Fatalf("diagnostic boundary: %v", err)
@@ -51,6 +72,14 @@ func TestDisclosureDiagnosticAdmissionCannotQualifyOrPublish(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*v3QualificationAttempt){
+		"unknown diagnostic mode": func(a *v3QualificationAttempt) { a.Diagnostic.Mode = "automatic" },
+		"mismatched scenario budget": func(a *v3QualificationAttempt) {
+			if a.ScenarioLimitSeconds == 2700 {
+				a.ScenarioLimitSeconds = 1800
+			} else {
+				a.ScenarioLimitSeconds = 2700
+			}
+		},
 		"no cleanup reserve": func(a *v3QualificationAttempt) { a.Diagnostic.TestUntilUnix = a.Diagnostic.FinishUnix },
 		"extended window":    func(a *v3QualificationAttempt) { a.Diagnostic.FinishUnix++ },
 		"signed after test cutoff": func(a *v3QualificationAttempt) {

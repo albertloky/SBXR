@@ -115,7 +115,6 @@ def validate_request(request, now):
         keys |= {"karing_response_limit_seconds", "attended_finish_by"}
     if (set(request) != keys or type(request["deadline_unix"]) is not int or
             type(request["scenario_limit_seconds"]) is not int or
-            request["scenario_limit_seconds"] not in (1800, 7200) or
             type(request["qualification_manifest_sha256"]) is not str or
             not re.fullmatch(r"[a-f0-9]{64}", request["qualification_manifest_sha256"]) or
             type(request["scenario_id"]) is not str or
@@ -129,10 +128,16 @@ def validate_request(request, now):
                     request["karing_response_limit_seconds"] != 3600 or
                     parse(request["attended_finish_by"]) <= start):
         raise Refusal("attended response window differs")
-    if diagnostic and (enabled or request["scenario_id"] != "mvp-install" or
-            type(request["diagnostic_test_until_unix"]) is not int or
-            not int(start.timestamp()) < request["diagnostic_test_until_unix"] <= request["deadline_unix"] - 900):
-        raise Refusal("diagnostic must preserve the removal reserve")
+    one_node = request["required_checks"] == ["diagnostic-karing-one-node"]
+    if diagnostic:
+        limit, reserve = (2700, 1500) if one_node else (1800, 900)
+        if (enabled or request["scenario_id"] != "mvp-install" or request["scenario_limit_seconds"] != limit or
+                not one_node and request["required_checks"] != ["diagnostic-observation"] or
+                type(request["diagnostic_test_until_unix"]) is not int or
+                not int(start.timestamp()) < request["diagnostic_test_until_unix"] <= request["deadline_unix"] - reserve):
+            raise Refusal("diagnostic scope or removal reserve differs")
+    elif one_node or request["scenario_limit_seconds"] not in (1800, 7200):
+        raise Refusal("ordinary scenario limit or scope differs")
     return start, deadline
 
 

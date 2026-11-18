@@ -396,6 +396,7 @@ pub(super) fn semantic_fixture() -> Vec<u8> {
 #[test]
 fn diagnostic_semantics_require_a_bounded_single_journey() {
     let mut f = Fixture::new();
+    f.manifest["v3_attempt"]["scenario_limit_seconds"] = json!(1800);
     f.manifest["v3_attempt"]["diagnostic"] = json!({"start_unix": 1794913200_u64, "test_until_unix":1794920400_u64,"finish_unix":1794924000_u64});
     assert!(
         f.inspect().is_err(),
@@ -411,10 +412,41 @@ fn diagnostic_semantics_require_a_bounded_single_journey() {
         json!({"start_unix":1794913200_u64,"test_until_unix":1794920400_u64,"finish_unix":1794924000_u64,"waiver":true}),
     ] {
         let mut bad = Fixture::new();
+        bad.manifest["v3_attempt"]["scenario_limit_seconds"] = json!(1800);
         bad.manifest["v3_attempt"]["diagnostic"] = value;
         bad.manifest["v3_attempt"]["required_scenarios"] = json!(["mvp-install"]);
         assert!(bad.inspect().is_err());
     }
     f.manifest["v3_attempt"]["karing_response_limit_seconds"] = json!(3600);
+    assert!(f.inspect().is_err());
+}
+
+#[test]
+fn one_node_candidate_requires_the_signed_mode_and_matching_clock() {
+    let mut f = Fixture::new();
+    let attempt = &mut f.manifest["v3_attempt"];
+    attempt["diagnostic"] = json!({
+        "mode": "karing-one-node",
+        "start_unix": 1794913200_u64,
+        "test_until_unix": 1794920400_u64,
+        "finish_unix": 1794924000_u64
+    });
+    attempt["required_scenarios"] = json!(["mvp-install"]);
+    attempt["scenario_limit_seconds"] = json!(2700);
+    assert!(f.inspect().is_ok());
+    for mode in [json!("other"), json!(""), json!(null)] {
+        f.manifest["v3_attempt"]["diagnostic"]["mode"] = mode;
+        assert!(f.inspect().is_err());
+    }
+    f.manifest["v3_attempt"]["diagnostic"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mode");
+    assert!(f.inspect().is_err());
+    f.manifest["v3_attempt"]["diagnostic"]["mode"] = json!("karing-one-node");
+    f.manifest["v3_attempt"]["scenario_limit_seconds"] = json!(1800);
+    assert!(f.inspect().is_err());
+    f.manifest["v3_attempt"]["scenario_limit_seconds"] = json!(2700);
+    f.manifest["v3_attempt"]["diagnostic"]["extra"] = json!(true);
     assert!(f.inspect().is_err());
 }

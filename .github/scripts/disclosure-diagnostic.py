@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Private diagnostic handoff; never runs SBXR or emits qualification evidence."""
 import argparse
+import base64
 import datetime as dt
 import hashlib
 import json
@@ -41,10 +42,14 @@ def digest(body):
     return hashlib.sha256(body).hexdigest()
 
 
-def write_new(path, value):
+def write_bytes_new(path, body):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as stream:
-        stream.write(canonical(value))
+        stream.write(body)
+
+
+def write_new(path, value):
+    write_bytes_new(path, canonical(value))
 
 
 def directory(path):
@@ -83,13 +88,20 @@ def context(root, manifest, now):
     value = json.loads(raw, object_pairs_hook=pairs)
     attempt = value["v3_attempt"]
     window = attempt["diagnostic"]
-    if (set(window) != {"start_unix", "test_until_unix", "finish_unix"} or
-            any(type(n) is not int for n in window.values()) or
+    if type(window) is not dict:
+        raise ValueError("diagnostic window differs")
+    clocks = {"start_unix", "test_until_unix", "finish_unix"}
+    one_node = window.get("mode") == "karing-one-node"
+    if (set(window) != (clocks | {"mode"} if one_node else clocks) or
+            any(type(window[key]) is not int for key in clocks) or
+            type(attempt.get("scenario_limit_seconds")) is not int or
+            attempt["scenario_limit_seconds"] != (2700 if one_node else 1800) or
             window["start_unix"] <= 0 or
             window["test_until_unix"] != window["start_unix"] + 7200 or
             window["finish_unix"] != window["start_unix"] + 10800 or
             not window["start_unix"] <= now < window["finish_unix"] or
             attempt["required_scenarios"] != ["mvp-install"] or
+            attempt.get("attended_finish_by") or attempt.get("owner_exception") or attempt.get("proxy_profile") or
             attempt.get("karing_response_limit_seconds", 0) != 0 or
             value["schema"] != "sbxr-qualification-manifest-v3"):
         raise ValueError("diagnostic scope differs")
@@ -99,24 +111,36 @@ def context(root, manifest, now):
     return root / ("sbxr-diagnostic-" + identity), digest(raw), window
 
 
-def prepare(root, manifest, now):
+def prepare(root, manifest, now, *, clock=None, clock_sha256=None):
     target, binding, window = context(root, manifest, now)
-    # The same ordinary 30-minute request bounds all product actions. Reserve
-    # at least 15 minutes for the existing M1 guarded removal envelope.
-    deadline = min(now + 1800, window["finish_unix"] - 60)
-    test_until = min(deadline - 900, window["test_until_unix"])
+    one_node = window.get("mode") == "karing-one-node"
+    limit, reserve = (2700, 1500) if one_node else (1800, 900)
+    check = "diagnostic-karing-one-node" if one_node else "diagnostic-observation"
+    deadline = min(now + limit, window["finish_unix"] - 60)
+    test_until = min(deadline - reserve, window["test_until_unix"])
     if test_until <= now:
         raise ValueError("insufficient diagnostic/restoration time")
+    if one_node:
+        if type(clock) is not bytes or not 0 < len(clock) <= 65536 or digest(clock) != clock_sha256:
+            raise ValueError("diagnostic recorder differs")
+    elif clock is not None or clock_sha256 is not None:
+        raise ValueError("diagnostic recorder not declared")
     before = retained(root)
     target.mkdir(mode=0o700)  # Refuses an existing directory, including symlinks.
     request = {"deadline_unix": deadline, "diagnostic_test_until_unix": test_until,
                "not_before": dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                "qualification_manifest_sha256": binding,
-               "required_checks": ["diagnostic-observation"], "scenario_id": "mvp-install", "scenario_limit_seconds": 1800}
+               "required_checks": [check], "scenario_id": "mvp-install", "scenario_limit_seconds": limit}
     write_new(target / "request.json", request)
     state = {"manifest_sha256": binding, "request_sha256": digest(canonical(request)),
              "directory_identity": directory(target), "retained": before,
              "test_until_unix": test_until, "deadline_unix": deadline}
+    if one_node:
+        path = target / "mvp-observe.py"
+        write_bytes_new(path, clock)
+        if digest(read(path)) != clock_sha256:
+            raise ValueError("staged diagnostic recorder differs")
+        state["clock_sha256"] = clock_sha256
     write_new(target / "state.json", state)
     return {"directory": str(target), "state_sha256": digest(canonical(state)),
             "test_until_unix": test_until, "deadline_unix": deadline}
@@ -130,6 +154,8 @@ def status(root, manifest, state_sha256, now):
             directory(target) != state["directory_identity"] or retained(root) != state["retained"] or
             digest(read(target / "request.json")) != state["request_sha256"]):
         raise ValueError("diagnostic preservation binding changed")
+    if window.get("mode") == "karing-one-node" and digest(read(target / "mvp-observe.py")) != state["clock_sha256"]:
+        raise ValueError("staged diagnostic recorder changed")
     if now >= min(state["deadline_unix"], window["finish_unix"] - 60):
         raise ValueError("diagnostic deadline expired")
     done = target / "operator-finished.json"
@@ -150,6 +176,8 @@ def main():
     parser.add_argument("operation", choices=("prepare", "status"))
     parser.add_argument("--state-sha256")
     parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--clock-base64")
+    parser.add_argument("--clock-sha256")
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise ValueError("root required")
@@ -159,7 +187,8 @@ def main():
         raise ValueError("staged manifest differs from verified workflow bytes")
     now = int(time.time())
     if args.operation == "prepare":
-        print(canonical(prepare(root, manifest, now)).decode())
+        clock = base64.b64decode(args.clock_base64, validate=True) if args.clock_base64 is not None else None
+        print(canonical(prepare(root, manifest, now, clock=clock, clock_sha256=args.clock_sha256)).decode())
     else:
         print(status(root, manifest, args.state_sha256, now))
 

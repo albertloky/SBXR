@@ -11,10 +11,17 @@ def validate_request(request, manifest_raw, manifest_sha256, request_path, draft
         raise ValueError("diagnostic manifest digest")
     manifest = json.loads(manifest_raw)
     attempt = manifest["v3_attempt"]
+    if type(window) is not dict:
+        raise ValueError("diagnostic window differs")
+    clocks = {"start_unix", "test_until_unix", "finish_unix"}
+    one_node = window.get("mode") == "karing-one-node"
+    limit, reserve = (2700, 1500) if one_node else (1800, 900)
+    check = "diagnostic-karing-one-node" if one_node else "diagnostic-observation"
     if (manifest["schema"] != "sbxr-qualification-manifest-v3" or
             attempt.get("diagnostic") != window or
-            set(window) != {"start_unix", "test_until_unix", "finish_unix"} or
-            any(type(n) is not int for n in window.values()) or
+            set(window) != (clocks | {"mode"} if one_node else clocks) or
+            any(type(window[key]) is not int for key in clocks) or
+            type(attempt.get("scenario_limit_seconds")) is not int or attempt["scenario_limit_seconds"] != limit or
             window["start_unix"] <= 0 or
             window["test_until_unix"] != window["start_unix"] + 7200 or
             window["finish_unix"] != window["start_unix"] + 10800 or
@@ -32,16 +39,16 @@ def validate_request(request, manifest_raw, manifest_sha256, request_path, draft
     keys = {"deadline_unix", "diagnostic_test_until_unix", "not_before", "qualification_manifest_sha256",
             "required_checks", "scenario_id", "scenario_limit_seconds"}
     if (set(request) != keys or request["qualification_manifest_sha256"] != manifest_sha256 or
-            request["required_checks"] != ["diagnostic-observation"] or
+            request["required_checks"] != [check] or
             request["scenario_id"] != "mvp-install" or
-            type(request["scenario_limit_seconds"]) is not int or request["scenario_limit_seconds"] != 1800 or
+            type(request["scenario_limit_seconds"]) is not int or request["scenario_limit_seconds"] != limit or
             type(request["deadline_unix"]) is not int or type(request["diagnostic_test_until_unix"]) is not int):
         raise ValueError("diagnostic request scope")
     start = int(datetime.datetime.strptime(request["not_before"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp())
     if not window["start_unix"] <= start < window["finish_unix"]:
         raise ValueError("diagnostic request start")
-    deadline = min(start + 1800, window["finish_unix"] - 60)
-    cutoff = min(deadline - 900, window["test_until_unix"])
+    deadline = min(start + limit, window["finish_unix"] - 60)
+    cutoff = min(deadline - reserve, window["test_until_unix"])
     if request["deadline_unix"] != deadline or request["diagnostic_test_until_unix"] != cutoff or cutoff <= start:
         raise ValueError("diagnostic request reserve")
     return window
@@ -58,4 +65,5 @@ def operation_cutoff(request, runtime_deadline, approved_finish):
     if any(type(value) is not int or value <= 0 for value in limits):
         raise ValueError("diagnostic cutoff inputs")
     cleanup = min(request["deadline_unix"], runtime_deadline, approved_finish)
-    return min(request["diagnostic_test_until_unix"], cleanup - 900)
+    reserve = 1500 if request["required_checks"] == ["diagnostic-karing-one-node"] else 900
+    return min(request["diagnostic_test_until_unix"], cleanup - reserve)

@@ -5,6 +5,8 @@ This is a non-qualifying diagnostic, not a replacement for the five
 acceptance record or support stable publication. A separate approved live window
 is required; local tests do not authorize dispatch or host changes.
 
+For a separately approved private one-node Karing check, use the [opt-in procedure](karing-one-node-diagnostic.md). The default procedure below retains its original disclosure-only behavior.
+
 The signed attempt contains `diagnostic` with integer `start_unix`,
 `test_until_unix` and `finish_unix`. The latter two are exactly two and three
 hours after the approved start. Its only declared scenario is `mvp-install`;
