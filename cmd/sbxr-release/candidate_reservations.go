@@ -221,6 +221,17 @@ func approvedCandidateReservations() []candidateReservation {
 			{ID: 755378911, Name: "sbxr-linux-amd64.tar.gz", Size: 6239583, Digest: "76056c60c9f3ced0079c93e37b6bcb905f2f6879e9053a65aa0f2335a709979c"},
 			{ID: 755378908, Name: "sbxr-linux-arm64.tar.gz", Size: 5274350, Digest: "89b6f938f7a58d4328a64c91b691b6413470270cef9fdf18e5d04184564339e8"},
 		},
+	}, {
+		Tag: "v3.1.147", Sequence: 221, ReleaseID: 448920065,
+		Commit: "9506d078135184594294f2b53bfffed1d0ba2d35", RunID: "44119602131", SigningState: "signed-unqualified",
+		ReleaseIndexSHA256:          "13359c01d4886004368f4056806f027235b8e62af6a79976a802d40e2f73c3e3",
+		QualificationManifestSHA256: "68505f68e935c6ef3d3ddd9a54d76e99e56138880276d621c8d720c3a0346f36",
+		Assets: []observedAsset{
+			{ID: 759837069, Name: "install.sh", Size: 76781, Digest: "59a9d732806e31833ecc701e4cd54de1cee28be101780491ead89123064bd38c"},
+			{ID: 759837071, Name: "release-index.json", Size: 609, Digest: "13359c01d4886004368f4056806f027235b8e62af6a79976a802d40e2f73c3e3"},
+			{ID: 759837074, Name: "sbxr-linux-amd64.tar.gz", Size: 6244513, Digest: "ae2bedc6abc08316145ea5d8956c8897098c71108f06cf8a2da682b08ba26c54"},
+			{ID: 759837068, Name: "sbxr-linux-arm64.tar.gz", Size: 5273215, Digest: "e1b9d150e139b4d8876aab3ac0782d06f9a7e4473b86a69eddac257d05496283"},
+		},
 	}}
 }
 
@@ -289,8 +300,8 @@ type reservationObservations struct {
 
 func checkCandidateReservations(observed reservationObservations, allowed []string) bool {
 	policy := approvedCandidateReservations()
-	// The Owner-approved exception is exactly these eighteen retained identities.
-	if len(policy) != 18 || observed.Releases == nil || len(observed.Refs) != len(policy) {
+	// The Owner-approved exception is exactly these nineteen retained identities.
+	if len(policy) != 19 || observed.Releases == nil || len(observed.Refs) != len(policy) {
 		return false
 	}
 	for i, r := range policy {

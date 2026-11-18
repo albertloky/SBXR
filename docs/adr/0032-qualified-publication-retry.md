@@ -502,3 +502,11 @@ This code-only preservation decision does not change the failed qualification or
 claim retrospective cleanup. It authorizes no remote draft mutation, deletion,
 burn signing, publication or live test. Prospective `v3.1.147` / 221 requires
 final-source CI and fresh candidate admission; live work needs separate approval.
+
+## Retained q221 identity — 2026-11-18
+
+The signed diagnostic window for build 221 expired before live testing.
+Workflow 44119602131 was canceled with zero VPS or cleanup steps.
+Preserve draft v3.1.147 (release 448920065), its four assets, and signed
+manifest `68505f68e935c6ef3d3ddd9a54d76e99e56138880276d621c8d720c3a0346f36`.
+It remains unqualified. Build 222 needs its own signed window.
