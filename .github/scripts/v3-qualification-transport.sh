@@ -30,24 +30,6 @@ has_redirect() {
   return 1
 }
 
-route_down() {
-  if has_redirect; then
-    iptables -w 5 -t nat -D OUTPUT "${redirect[@]}"
-  fi
-  # Remove only our exact hosts line; preserve concurrent unrelated changes.
-  if test -f "$root/hosts.after" && cmp -s "$root/hosts.after" "$hosts"; then
-    cat "$root/hosts.before" > "$hosts"
-  else
-    sed -i '\|^127\.0\.0\.2 api\.github\.com github\.com # sbxr-qualification-v3$|d' "$hosts"
-  fi
-  if ! path_absent "$ca"; then
-    test ! -L "$ca"
-    cmp -s "$root/ca.crt" "$ca"
-    rm "$ca"
-  fi
-  # Always refresh: a prior cleanup may have removed the source then failed.
-  update-ca-certificates >/dev/null
-}
 # The signed attendance limit bounds a legacy default, not security approval.
 # A newly approved run passes its own absolute security cutoff to `up`.
 cutoff_deadline() {
@@ -69,20 +51,10 @@ cutoff_deadline() {
     test "$explicit" -le "$limit" || return 1
     limit=$explicit
   fi
-  # Stop early enough for TERM/KILL and the bounded rollback hook, within cutoff.
+  # Leave time to stop the gateway and remove its staging directory.
   test "$limit" -gt "$((now + 60))" || return 1
   printf '%s\n' "$limit"
 }
-
-locked_route_down() (
-  transport_owned
-  exec 9<"$root/transport-owned"
-  flock -w 15 -x 9
-  # An old waiter must not restore a new run after the old directory was removed.
-  transport_owned
-  test "$root/transport-owned" -ef /proc/self/fd/9
-  route_down
-)
 
 unit_route_owned() {
   local fragment dropins kill_mode
@@ -119,7 +91,7 @@ remove_staging() {
   python3 - "$root" <<'PYTHON'
 import json, os, pathlib, re, stat, sys
 root = pathlib.Path(sys.argv[1])
-fixed = set("qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt v3-qualification-transport.sh staging-owned transport-owned unit deadline runtime-deadline hosts.before hosts.after".split())
+fixed = set("qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt v3-qualification-transport.sh staging-owned transport-owned unit deadline runtime-deadline".split())
 files, dirs = set(fixed), {"assets"}
 def require(condition):
     if not condition:
@@ -175,7 +147,6 @@ finish_down() (
   flock -w 15 -x 9
   transport_owned
   test "$root/transport-owned" -ef /proc/self/fd/9
-  route_down
   if has_redirect; then exit 1; fi
   if grep -Fxq "$hosts_line" "$hosts"; then exit 1; fi
   path_absent "$ca"
@@ -223,9 +194,7 @@ Type=simple
 KillMode=control-group
 TimeoutStartSec=20
 TimeoutStopSec=30
-ExecStartPre=/usr/bin/bash $root/v3-qualification-transport.sh route-up
 ExecStart=/usr/bin/bash $root/v3-qualification-transport.sh serve
-ExecStopPost=/usr/bin/timeout --signal=TERM --kill-after=5 25 /usr/bin/bash $root/v3-qualification-transport.sh route-down
 StandardOutput=null
 StandardError=journal
 [Install]
@@ -237,7 +206,7 @@ UNIT
     systemctl enable "$unit" >/dev/null
     systemctl start "$unit"
     for attempt in {1..30}; do
-      if curl --connect-timeout 2 --max-time 2 -fsS https://api.github.com/repos/albertloky/SBXR/releases/latest >/dev/null; then exit 0; fi
+      if curl --disable --noproxy '*' --cacert "$root/ca.crt" --connect-timeout 2 --max-time 2 -fsS https://127.0.0.1:9443/repos/albertloky/SBXR/releases/latest >/dev/null; then exit 0; fi
       systemctl is-active --quiet "$unit"
       sleep 1
     done
@@ -252,48 +221,41 @@ UNIT
     test "$remaining" -gt 0
     exec timeout --signal=TERM --kill-after=5 "$remaining" "$root/sbxr-release" gateway -manifest "$root/qualification-manifest.json" -bundle "$root/qualification.bundle" -assets "$root/assets" -certificate "$root/gateway.crt" -key "$root/gateway.key" -listen 127.0.0.1:9443
     ;;
-  route-up)
-    test "$#" -eq 1
+  install)
+    test "$#" -eq 2
+    requested_tag=$2
     transport_owned
-    test "$(date +%s)" -lt "$(cat "$root/runtime-deadline")"
-    if path_absent "$ca"; then
-      install -m 0644 "$root/ca.crt" "$ca"
-    else
-      test ! -L "$ca"
-      cmp -s "$root/ca.crt" "$ca"
-    fi
-    update-ca-certificates >/dev/null
-    if ! grep -Fxq "$hosts_line" "$hosts"; then
-      cp "$hosts" "$root/hosts.before"
-      {
-        cat "$root/hosts.before"
-        if test "$(tail -c 1 "$root/hosts.before" | wc -l)" -eq 0; then printf '\n'; fi
-        printf '%s\n' "$hosts_line"
-      } > "$root/hosts.after"
-      cat "$root/hosts.after" > "$hosts"
-    fi
-    if ! has_redirect; then iptables -w 5 -t nat -A OUTPUT "${redirect[@]}"; fi
-    ;;
-  route-down)
-    test "$#" -eq 1
-    # EXIT also runs when a failure exits the locked subshell; ERR does not.
-    trap 'rollback_status=$?; trap - EXIT; set +e
-      if test "$rollback_status" -ne 0; then printf "%s\n" SBXR-TRANSPORT-ROLLBACK-FAILED >&2; fi
-      exit "$rollback_status"' EXIT
-    locked_route_down
-    printf '%s\n' SBXR-TRANSPORT-ROUTES-RESTORED >&2 || true
+    runtime=$(cat "$root/runtime-deadline")
+    [[ "$runtime" =~ ^[0-9]{1,10}$ ]]
+    remaining=$((runtime - $(date +%s)))
+    test "$remaining" -gt 5
+    # Verify the whole bootstrap before giving it to bash. The signed gateway
+    # verifies these same bytes when opening its assets.
+    tag=$(jq -er --arg requested "$requested_tag" '.releases[] | select(.tag == $requested) | .tag | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$root/qualification-manifest.json")
+    installer="$root/assets/$tag/install.sh"
+    expected=$(jq -er --arg tag "$tag" '.releases[] | select(.tag == $tag) | .assets[] | select(.name == "install.sh") | .sha256 | select(test("^[0-9a-f]{64}$"))' "$root/qualification-manifest.json")
+    test -f "$installer"
+    test ! -L "$installer"
+    test "$(sha256sum "$installer" | cut -d' ' -f1)" = "$expected"
+    fetch_seconds=$((runtime - $(date +%s) - 5))
+    test "$fetch_seconds" -gt 0
+    if test "$fetch_seconds" -gt 20; then fetch_seconds=20; fi
+    curl --disable --noproxy '*' --cacert "$root/ca.crt" --fail --silent --show-error --connect-timeout 5 --max-time "$fetch_seconds" https://127.0.0.1:9443/albertloky/SBXR/releases/latest/download/install.sh | cmp - "$installer"
+    remaining=$((runtime - $(date +%s) - 5))
+    test "$remaining" -gt 0
+    exec timeout --signal=TERM --kill-after=5 "$remaining" /usr/bin/bash "$installer" --qualification-gateway
     ;;
   down)
     test "$#" -eq 1
     transport_owned
-    # Capture authority before stop without holding the hook's lock.
+    # Capture authority before stop without holding the staging lock.
     exec 9<"$root/transport-owned"
     owned_unit_link
     if ! path_absent "$unit_path"; then
       test ! -L "$unit_path"
       cmp -s "$root/unit" "$unit_path"
       unit_route_owned
-      # Stop/wait before taking the hook's lock: never deadlock ExecStopPost.
+      # Reap the service before locking and removing its staging files.
       systemctl stop "$unit"
     fi
     unit_stopped

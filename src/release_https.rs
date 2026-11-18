@@ -44,7 +44,10 @@ impl AcquisitionTransport for LifecycleTransport {
 #[derive(Clone, Copy)]
 enum Scope {
     Public,
-    CandidateGateway(std::time::Instant),
+    CandidateGateway {
+        until: std::time::Instant,
+        port: u16,
+    },
 }
 impl fmt::Debug for HttpsTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -141,7 +144,7 @@ impl HttpsTransport {
     }
     fn check_budget(&self, budget: &SelectionBudget) -> Result<()> {
         budget.check()?;
-        if matches!(self.scope, Scope::CandidateGateway(until) if std::time::Instant::now() >= until)
+        if matches!(self.scope, Scope::CandidateGateway { until, .. } if std::time::Instant::now() >= until)
         {
             return Err(TrustError::Interrupted);
         }
@@ -150,14 +153,14 @@ impl HttpsTransport {
     fn deadline(&self, budget: &SelectionBudget) -> std::time::Instant {
         match self.scope {
             Scope::Public => budget.deadline(),
-            Scope::CandidateGateway(until) => until.min(budget.deadline()),
+            Scope::CandidateGateway { until, .. } => until.min(budget.deadline()),
         }
     }
     fn admit(&self, raw: &str, budget: &SelectionBudget) -> Result<Url> {
         budget.check()?;
         match self.scope {
             Scope::Public => initial(raw),
-            Scope::CandidateGateway(until) => {
+            Scope::CandidateGateway { until, .. } => {
                 if std::time::Instant::now() >= until {
                     return Err(TrustError::Interrupted);
                 }
@@ -179,9 +182,20 @@ impl HttpsTransport {
             let remaining = self
                 .deadline(budget)
                 .saturating_duration_since(std::time::Instant::now());
+            // Keep the canonical URL for admission and response identity. Only
+            // the candidate client sends the actual request to private loopback.
+            let mut destination = current.clone();
+            if let Scope::CandidateGateway { port, .. } = self.scope {
+                destination
+                    .set_host(Some("127.0.0.1"))
+                    .map_err(|_| TrustError::Refused)?;
+                destination
+                    .set_port(Some(port))
+                    .map_err(|_| TrustError::Refused)?;
+            }
             let mut outgoing = self
                 .client
-                .get(current.clone())
+                .get(destination)
                 .header(header::ACCEPT, request.accept())
                 .header(header::ACCEPT_ENCODING, "identity")
                 .timeout(remaining);

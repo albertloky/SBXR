@@ -50,8 +50,7 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 
 	t.Cleanup(gateway.close)
 
-	request := httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/albertloky/SBXR/releases/latest", nil)
-	request.Host = "api.github.com"
+	request := httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/repos/albertloky/SBXR/releases/latest", nil)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"tag_name":"v2.0.1"`) || !strings.Contains(response.Body.String(), `"sbxr_qualification"`) {
@@ -67,8 +66,7 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 		t.Fatal("latest response changed signed qualification bytes")
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/latest/download/install.sh", nil)
-	request.Host = "github.com"
+	request = httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/albertloky/SBXR/releases/latest/download/install.sh", nil)
 	response = httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "v2.0.0 install.sh" {
@@ -77,16 +75,14 @@ func TestQualificationGatewayServesOnlyManifestBoundReleaseRequests(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, "v2.0.0", "install.sh"), []byte("changed-content!!"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	request = httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/latest/download/install.sh", nil)
-	request.Host = "github.com"
+	request = httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/albertloky/SBXR/releases/latest/download/install.sh", nil)
 	response = httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError || response.Body.Len() != 0 {
 		t.Fatalf("changed install response = %d %q", response.Code, response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/albertloky/SBXR/issues/262", nil)
-	request.Host = "api.github.com"
+	request = httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/repos/albertloky/SBXR/issues/262", nil)
 	response = httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound || response.Body.Len() != 0 {
@@ -116,8 +112,7 @@ func TestQualificationGatewayServesOneV3Candidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer gateway.close()
-	request := httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/latest/download/install.sh", nil)
-	request.Host = "github.com"
+	request := httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/albertloky/SBXR/releases/latest/download/install.sh", nil)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "v3 install.sh" {
@@ -196,7 +191,7 @@ func testQualificationGatewaySubscriptionCandidate(t *testing.T, scope string) {
 	}
 	defer gateway.close()
 	response := httptest.NewRecorder()
-	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/albertloky/SBXR/releases/latest", nil))
+	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/repos/albertloky/SBXR/releases/latest", nil))
 	var latest struct {
 		Qualification struct{ Manifest, Bundle []byte } `json:"sbxr_qualification"`
 	}
@@ -204,7 +199,7 @@ func testQualificationGatewaySubscriptionCandidate(t *testing.T, scope string) {
 		t.Fatal("signed bytes changed")
 	}
 	response = httptest.NewRecorder()
-	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://github.com/albertloky/SBXR/releases/download/"+tag+"/release-index.json", nil))
+	gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/albertloky/SBXR/releases/download/"+tag+"/release-index.json", nil))
 	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), index) {
 		t.Fatal("bound index unavailable")
 	}

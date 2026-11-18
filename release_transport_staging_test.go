@@ -12,7 +12,7 @@ import (
 var transportStagingFiles = []string{
 	"qualification.bundle", "sbxr-release", "gateway.crt", "gateway.key", "ca.crt",
 	"v3-qualification-transport.sh", "staging-owned", "transport-owned", "unit",
-	"deadline", "runtime-deadline", "hosts.before", "hosts.after",
+	"deadline", "runtime-deadline",
 }
 
 var transportStagingAssets = []string{
@@ -119,7 +119,7 @@ func TestQualificationTransportStagingRemovesOnlyKnownOwnedTreeAndAllowsPartialR
 		t.Run(test.name, func(t *testing.T) {
 			parent, root := makeTransportStaging(t, test.withAssets)
 			if test.partial {
-				for _, name := range []string{"gateway.key", "hosts.after", "assets/v3.1.95/install.sh"} {
+				for _, name := range []string{"gateway.key", "runtime-deadline", "assets/v3.1.95/install.sh"} {
 					if err := os.Remove(filepath.Join(root, name)); err != nil {
 						t.Fatal(err)
 					}

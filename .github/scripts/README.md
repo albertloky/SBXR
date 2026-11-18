@@ -162,7 +162,7 @@ helpers remain available for current callers.
 
 The candidate transport persists an absolute cutoff in its existing `deadline`
 file, with a `runtime-deadline` sixty seconds earlier for process shutdown and
-rollback. `up [UTC_UNIX_EPOCH]` accepts an earlier approved cutoff; it cannot
+cleanup. `up [UTC_UNIX_EPOCH]` accepts an earlier approved cutoff; it cannot
 extend the signed `attended_finish_by` plus thirty minutes or the existing
 six-hour ceiling. Without attendance the legacy six-hour bound remains. The
 workflow requires the separate `security_cutoff_unix` input and passes it unchanged
@@ -176,19 +176,15 @@ For an approval at A with journeys ending by A+2h30 and cleanup by A+3h, use
 that attendance value and an absolute cutoff no later than A+3h. Preparation
 counts inside the window. Restart reads the stored runtime deadline unchanged.
 
-At cutoff the existing service terminates its gateway and descendants, escalates
-to KILL after five seconds, and runs bounded rollback of only its exact NAT
-rule, hosts line and matching CA source. Startup and shutdown are bounded too.
-The hook takes a lock on the existing `transport-owned` marker and rejects a
-replaced marker after waiting. It retains staging, keys and unit files because
-an operator may still be reading them; it neither drives product removal nor
-restores Mac/Karing state. Automatic routing rollback is not proof of complete
-run cleanup. Failures leave the unit failed and emit
-`SBXR-TRANSPORT-ROLLBACK-FAILED` in its journal; successful route restoration emits
-`SBXR-TRANSPORT-ROUTES-RESTORED`. Failure never extends the approved window.
+The stopped gateway can no longer deliver test files. Its private TLS
+certificate is valid only for loopback. The packaged installer and the Rust
+candidate client connect directly to that address. System certificates, hosts
+and firewall settings stay in place. At the stored runtime deadline the
+service stops its gateway and escalates to KILL after five seconds if needed.
+The operator retains staging until the active readers finish.
 
-Normal `down` runs after the coordinator's readers have finished. It waits for
-the owned service to stop before taking the same lock, then restores routes,
+Normal `down` waits for the owned service to stop, locks the original
+ownership marker, checks that no earlier system-wide redirect remains,
 unlinks only the exact owned enablement link/unit, and validates the entire
 known staging tree before deleting its leaves. Unknown files, links, hardlinks
 or directories writable by group/others refuse deletion. The manifest and ownership marker are

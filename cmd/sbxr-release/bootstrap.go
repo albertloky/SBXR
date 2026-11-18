@@ -185,6 +185,11 @@ interrupted() {
 trap interrupted HUP INT TERM
 trap cleanup EXIT
 
+QUALIFICATION_GATEWAY=0
+if [ "$#" -eq 1 ] && [ "$1" = '--qualification-gateway' ]; then
+  QUALIFICATION_GATEWAY=1
+  shift
+fi
 [ "$#" -eq 0 ] || host_refused 'host/arguments expected=none'
 [ "$("$ROOT/usr/bin/id" -u 2>/dev/null)" = '0' ] || host_refused 'host/uid expected=root observed=mismatch'
 [ "$("$ROOT/usr/bin/uname" -s 2>/dev/null)" = 'Linux' ] || host_refused 'host/kernel expected=Linux observed=mismatch'
@@ -508,7 +513,12 @@ download() {
   if [ -z "$url" ]; then
     url="https://github.com/$REPOSITORY/releases/download/$TAG/$name"
   fi
-  response=$("$ROOT/usr/bin/curl" --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --max-redirs 4 --max-filesize "$limit" --proto '=https' --proto-redir '=https' --output "$destination" --write-out $'%{url_effective}\n%{http_code}' "$url" 2>/dev/null)
+  local -a fetch_options=(--location --max-redirs 4)
+  if [ "${QUALIFICATION_GATEWAY:-0}" -eq 1 ]; then
+    url="https://127.0.0.1:9443/$REPOSITORY/releases/download/$TAG/$name"
+    fetch_options=(--disable --noproxy '*' --cacert "$ROOT/root/sbxr-qualification-v3/ca.crt" --location --max-redirs 0)
+  fi
+  response=$("$ROOT/usr/bin/curl" "${fetch_options[@]}" --fail --silent --show-error --connect-timeout 10 --max-time 120 --max-filesize "$limit" --proto '=https' --proto-redir '=https' --output "$destination" --write-out $'%{url_effective}\n%{http_code}' "$url" 2>/dev/null)
   status=$?
   effective=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '1p')
   http=$(printf '%s\n' "$response" | "$ROOT/usr/bin/sed" -n '2p')

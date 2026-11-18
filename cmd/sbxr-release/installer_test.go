@@ -9,8 +9,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"text/template"
 	"time"
 
 	hostadapter "github.com/albertloky/SBXR/internal/proxyinstallation/adapter/host"
@@ -122,6 +125,108 @@ func TestGeneratedInstallerInstallsQualifiedReleaseWithoutATerminal(t *testing.T
 		t.Fatalf("install output = %q", body)
 	}
 	assertInstalledFixture(t, fixture.root, fixture.executable)
+}
+
+// Exercise the shipped Rust installer template with real curl and TLS. Only
+// the filesystem root and loopback port are substituted for the test.
+func TestRustInstallerDownloadsFromPrivateGateway(t *testing.T) {
+	fixture := newInstallerFixture(t)
+	server := httptest.NewUnstartedServer(nil)
+	defer server.Close()
+	origin := "https://" + server.Listener.Addr().String()
+	stage := filepath.Join(fixture.root, "root/sbxr-qualification-v3")
+	if err := os.MkdirAll(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	curl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	curlPath := filepath.Join(fixture.root, "usr/bin/curl")
+	if err := os.Remove(curlPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(curl, curlPath); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile("../../tooling/rust-package/templates/install.sh.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(string(body), "https://127.0.0.1:9443/", origin+"/")
+	var rendered bytes.Buffer
+	err = template.Must(template.New("installer").Parse(script)).Execute(&rendered, map[string]string{
+		"Root": fixture.root, "Repository": softwarelifecycle.Repository, "Tag": "v2.0.0", "Version": "2.0.0",
+		"Commit": strings.Repeat("a", 40), "Sequence": "17", "AMD64ExecutableSHA256": fmt.Sprintf("%x", sha256.Sum256(fixture.executable)),
+		"ARM64ExecutableSHA256": strings.Repeat("a", 64), "TunnelUnitSHA256": hostadapter.TunnelUnitSHA256(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(path string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tag := "v2.0.0"
+	assetRoot := filepath.Join(stage, "assets")
+	if err := os.MkdirAll(filepath.Join(assetRoot, tag), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var assets []decisionAsset
+	var indexHash string
+	for _, name := range gatewayAssetNames {
+		data := rendered.Bytes()
+		if name != "install.sh" {
+			data, err = os.ReadFile(filepath.Join(fixture.root, "fixtures", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		hash := fmt.Sprintf("%x", sha256.Sum256(data))
+		assets = append(assets, decisionAsset{Name: name, Size: int64(len(data)), SHA256: hash})
+		if name == "release-index.json" {
+			indexHash = hash
+		}
+		write(filepath.Join(assetRoot, tag, name), data)
+	}
+	commit := strings.Repeat("a", 40)
+	release := map[string]any{"tag": tag, "commit": commit, "sequence": 17, "assets": assets, "release_identity": map[string]string{"repository": softwarelifecycle.Repository, "tag": tag, "commit": commit, "release_index_sha256": indexHash}}
+	manifest, err := json.Marshal(map[string]any{"schema": "sbxr-qualification-manifest-v1", "repository": softwarelifecycle.Repository, "releases": []any{release}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := newQualificationGateway(manifest, json.RawMessage(`{"bundle":true}`), assetRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.close()
+	server.Config.Handler = gateway
+	server.StartTLS()
+	write(filepath.Join(stage, "ca.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))
+	write(filepath.Join(stage, "qualification-manifest.json"), manifest)
+	write(filepath.Join(stage, "transport-owned"), []byte("test"))
+	write(filepath.Join(stage, "runtime-deadline"), []byte(fmt.Sprint(time.Now().Add(2*time.Minute).Unix())))
+	driver, err := os.ReadFile("../../.github/scripts/v3-qualification-transport.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolated := strings.NewReplacer("root=/root/sbxr-qualification-v3", "root="+fmt.Sprintf("%q", stage), "https://127.0.0.1:9443/", origin+"/", "/usr/bin/bash", "/bin/bash").Replace(string(driver))
+	driverPath := filepath.Join(stage, "v3-qualification-transport.sh")
+	write(driverPath, []byte(isolated))
+	command := exec.Command("bash", driverPath, "install", tag)
+	command.Env = append(os.Environ(), "PATH="+filepath.Join(fixture.root, "usr/bin")+":"+os.Getenv("PATH"), "HTTPS_PROXY=http://127.0.0.1:1", "NO_PROXY=")
+	if out, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("private HTTPS installer: %v %s", err, out)
+	}
+	assertInstalledFixture(t, fixture.root, fixture.executable)
+	// A separate client must still reject the test certificate.
+	if err := exec.Command(curl, "--disable", "--noproxy", "*", "--fail", "--silent", server.URL).Run(); err == nil {
+		t.Fatal("ordinary curl trusted the temporary certificate")
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 60 {
+		t.Fatalf("expected a certificate refusal: %v", err)
+	}
 }
 
 func TestPasteableInstallCommandRestoresOnlyTheReleaseCommittedForRemoval(t *testing.T) {

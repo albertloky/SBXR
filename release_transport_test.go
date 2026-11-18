@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -39,81 +38,6 @@ func TestQualificationRoutingInspectionFailsClosed(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestQualificationHostsRestorationPreservesOriginalAndUnrelatedEdits(t *testing.T) {
-	script, err := filepath.Abs(".github/scripts/v3-qualification-transport.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, changed := range []bool{false, true} {
-		t.Run(strconv.FormatBool(changed), func(t *testing.T) {
-			dir := t.TempDir()
-			before := "127.0.0.1 localhost"
-			after := before + "\n127.0.0.2 api.github.com github.com # sbxr-qualification-v3\n"
-			current, wanted := after, before
-			if changed {
-				current += "192.0.2.1 unrelated\n"
-				wanted = before + "\n192.0.2.1 unrelated\n"
-			}
-			for name, body := range map[string]string{"hosts.before": before, "hosts.after": after, "hosts": current, "iptables": "#!/bin/sh\nexit 1\n", "update-ca-certificates": "#!/bin/sh\ntouch \"$SBXR_TEST_ROOT/refreshed\"\n"} {
-				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			command := exec.Command("bash", "-c", `source "$1"; root="$2"; hosts="$root/hosts"; ca="$root/absent-ca"; route_down`, "hosts-check", script, dir)
-			command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "SBXR_TEST_ROOT="+dir)
-			// The production runner uses GNU sed; macOS requires its empty suffix.
-			if changed {
-				if output, err := exec.Command("uname", "-s").Output(); err == nil && strings.TrimSpace(string(output)) == "Darwin" {
-					wrapper := "#!/bin/sh\nif test \"$1\" = -i; then shift; exec /usr/bin/sed -i '' \"$@\"; fi\nexec /usr/bin/sed \"$@\"\n"
-					if err := os.WriteFile(filepath.Join(dir, "sed"), []byte(wrapper), 0700); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if output, err := command.CombinedOutput(); err != nil {
-				t.Fatalf("restore: %v %s", err, output)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "refreshed")); err != nil {
-				t.Fatal("absent CA source skipped trust-store refresh", err)
-			}
-			got, err := os.ReadFile(filepath.Join(dir, "hosts"))
-			if err != nil || string(got) != wanted {
-				t.Fatalf("hosts restore = %q, %v", got, err)
-			}
-		})
-	}
-}
-
-func TestQualificationTransportCleanupRefusesDanglingCAWithoutRemovingIt(t *testing.T) {
-	script, err := filepath.Abs(".github/scripts/v3-qualification-transport.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	createDanglingTransportLink("ca", "missing-ca")(t, root)
-	for name, body := range map[string]string{
-		"hosts":                  "127.0.0.1 localhost\n",
-		"hosts.after":            "127.0.0.1 localhost\n",
-		"hosts.before":           "127.0.0.1 localhost\n",
-		"iptables":               "#!/bin/sh\nexit 1\n",
-		"update-ca-certificates": "#!/bin/sh\nexit 0\n",
-	} {
-		mode := os.FileMode(0600)
-		if name != "hosts" {
-			mode = 0700
-		}
-		if err := os.WriteFile(filepath.Join(root, name), []byte(body), mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	command := exec.Command("bash", "-c", `source "$1"; root="$2"; hosts="$root/hosts"; ca="$root/ca"; route_down; echo incorrectly-cleaned`, "cleanup-check", script, root)
-	command.Env = append(os.Environ(), "PATH="+root+":"+os.Getenv("PATH"))
-	if output, err := command.CombinedOutput(); err == nil || len(output) != 0 {
-		t.Fatalf("dangling CA cleanup was accepted: %v %s", err, output)
-	}
-	assertDanglingTransportLink("ca", "missing-ca")(t, root)
 }
 
 func TestQualificationTransportOwnershipMarkerMustBeRegularNonLink(t *testing.T) {

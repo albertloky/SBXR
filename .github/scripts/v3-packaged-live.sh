@@ -140,7 +140,7 @@ prove_status() {
 install_candidate() {
   local WORK=${WORK:-/run/sbxr-qualification}
   local output=$WORK/install-output
-  curl -fsS https://github.com/albertloky/SBXR/releases/latest/download/install.sh | /usr/bin/setsid --wait /usr/bin/bash >"$output" 2>&1
+  /usr/bin/setsid --wait /usr/bin/bash /root/sbxr-qualification-v3/v3-qualification-transport.sh install "$TAG" >"$output" 2>&1 || return 1
   scan_vps_capture "$output"
   rm -f "$output"
   test -x /usr/local/bin/sbxr

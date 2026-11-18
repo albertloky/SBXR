@@ -5,15 +5,7 @@ use rustix::fs::{self, AtFlags, FileType, Mode, OFlags, Stat};
 use std::{fs::File, io::Read, path::Path};
 const DIRECTORY: &str = "/root/sbxr-qualification-v3";
 const CA_FILE: &str = "ca.crt";
-// Exact address owned by the retained transport's reviewed NAT route. Keep the
-// logical URL/SNI/hostname api.github.com; never consult fallback public DNS.
-const ROUTE: (&str, std::net::SocketAddr) = (
-    "api.github.com",
-    std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
-        std::net::Ipv4Addr::new(127, 0, 0, 2),
-        443,
-    )),
-);
+const PORT: u16 = 9443;
 const MAX_CA_BYTES: usize = 32 << 10;
 
 /// Read-only delivery transport. This does not prove candidate authenticity,
@@ -48,8 +40,11 @@ impl CandidateGatewayTransport {
         budget: &SelectionBudget,
     ) -> Result<Self> {
         let roots = protected_roots(directory, uid, digest, budget)?;
-        let mut inner = HttpsTransport::configured(roots, Some(vec![ROUTE]))?;
-        inner.scope = Scope::CandidateGateway(budget.deadline());
+        let mut inner = HttpsTransport::configured(roots, None)?;
+        inner.scope = Scope::CandidateGateway {
+            until: budget.deadline(),
+            port: PORT,
+        };
         budget.check()?;
         Ok(Self { inner })
     }

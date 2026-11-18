@@ -29,8 +29,11 @@ change or credential rotation. Ordinary qualification still checks latest Karing
    restoration deadline. Set `security_cutoff_unix` to that exact finish value.
    Build/sign/queue time consumes this window. Dispatch `candidate.yml` only
    under separate push/dispatch/live authorization.
-3. The existing attested transport uses the same temporary trust, local HTTPS
-   gateway/redirect and public proxy port 443. No HTTP subscription is enabled.
+3. The installer and Rust client use the private HTTPS gateway on loopback port
+   9443. Run the bound transport script’s `install "$TAG"` command under the
+   existing supervisor. It verifies the bootstrap, then runs the installer in private gateway mode.
+   Read the CA from the staging directory. Other programs keep their normal GitHub connection.
+   Port 443 remains available for the product proxy. No HTTP subscription is enabled.
    The diagnostic collector exclusively creates
    `/root/sbxr-diagnostic-run-<run-id>-attempt-<attempt>/`. It snapshots the
    identities, metadata and bytes of `/root/sbxr-qualification-evidence` and
@@ -71,8 +74,8 @@ change or credential rotation. Ordinary qualification still checks latest Karing
    **not proof of restoration or qualification**. The collector independently
    checks the unchanged old evidence, request and namespace identities and
    absence of the SBXR executable/state before returning. The workflow then
-   runs the unchanged guarded transport teardown. Independently verify trust,
-   routing and transport restoration afterward.
+   runs the unchanged guarded transport teardown. Independently verify the gateway stopped and the host trust,
+   routing and hosts file still match the baseline.
 8. Preserve the diagnostic namespace and secret-free receipts as evidence.
    On refusal, timeout or disconnect, retain the actual failure and report any
    unproved restoration. The workflow's existing transport exit trap remains;

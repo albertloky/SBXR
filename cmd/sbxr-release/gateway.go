@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/netip"
 	"os"
 	"path"
 	"slices"
@@ -64,6 +65,10 @@ type qualificationGateway struct {
 func runQualificationGateway(options gatewayOptions) error {
 	if options.manifest == "" || options.bundle == "" || options.assets == "" || options.certificate == "" || options.key == "" || options.listen == "" {
 		return errors.New("qualification gateway refused")
+	}
+	listen, err := netip.ParseAddrPort(options.listen)
+	if err != nil || listen.Addr() != netip.AddrFrom4([4]byte{127, 0, 0, 1}) {
+		return errors.New("qualification gateway requires IPv4 loopback")
 	}
 	manifest, err := os.ReadFile(options.manifest)
 	if err != nil {
@@ -156,11 +161,12 @@ func (gateway *qualificationGateway) ServeHTTP(response http.ResponseWriter, req
 		response.WriteHeader(http.StatusNotFound)
 		return
 	}
-	host := request.Host
-	if name, ok := strings.CutSuffix(host, ":443"); ok {
-		host = name
+	origin, err := netip.ParseAddrPort(request.Host)
+	if err != nil || origin.Addr() != netip.AddrFrom4([4]byte{127, 0, 0, 1}) {
+		response.WriteHeader(http.StatusNotFound)
+		return
 	}
-	if host == "github.com" {
+	if strings.HasPrefix(request.URL.Path, "/"+softwarelifecycle.Repository+"/") {
 		if request.URL.Path == "/"+softwarelifecycle.Repository+"/releases/latest/download/install.sh" {
 			gateway.serveAsset(response, gateway.installRelease().assets["install.sh"])
 			return
@@ -172,7 +178,7 @@ func (gateway *qualificationGateway) ServeHTTP(response http.ResponseWriter, req
 				return
 			}
 		}
-	} else if host == "api.github.com" {
+	} else {
 		if request.URL.Path == "/repos/"+softwarelifecycle.Repository+"/releases/latest" {
 			gateway.waitForLatestRelease()
 			gateway.serveLatest(response)

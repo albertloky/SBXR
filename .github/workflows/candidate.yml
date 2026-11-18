@@ -674,8 +674,8 @@ jobs:
           go build -o handoff/sbxr-release ./cmd/sbxr-release
           cp .github/scripts/v3-qualification-transport.sh handoff/
           openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj '/CN=SBXR Qualification CA' -keyout handoff/ca.key -out handoff/ca.crt
-          openssl req -newkey rsa:3072 -nodes -subj '/CN=api.github.com' -keyout handoff/gateway.key -out handoff/gateway.csr
-          printf '%s\n' 'subjectAltName=DNS:api.github.com,DNS:github.com' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
+          openssl req -newkey rsa:3072 -nodes -subj '/CN=SBXR loopback gateway' -keyout handoff/gateway.key -out handoff/gateway.csr
+          printf '%s\n' 'subjectAltName=IP:127.0.0.1' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
           openssl x509 -req -days 2 -in handoff/gateway.csr -CA handoff/ca.crt -CAkey handoff/ca.key -CAcreateserial -extfile handoff/gateway.ext -out handoff/gateway.crt
           rm handoff/ca.key handoff/gateway.csr handoff/gateway.ext handoff/ca.srl handoff/release.json
       - name: Run the packaged V3 journey
@@ -696,7 +696,7 @@ jobs:
             status=$?
             trap - EXIT
             restored=false
-            # Allow the service stop (30s), rollback hook (30s), and SSH overhead.
+            # Allow time for service stop, staging cleanup and SSH overhead.
             for retry in {1..12}; do
               if python3 .github/scripts/bounded-ssh.py 90 "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then exit 0; fi; test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 || exit 1; test -f /root/sbxr-qualification-v3/staging-owned && test ! -L /root/sbxr-qualification-v3/staging-owned || exit 1; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test ! -e /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then find /root/sbxr-qualification-v3 -depth -delete; else exit 1; fi'; then restored=true; break; fi
               sleep 5

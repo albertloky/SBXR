@@ -149,11 +149,7 @@ fn only_the_retained_fixed_api_routes_are_allowed_without_redirects() {
     let f = Fixture::new();
     let b = SelectionBudget::new();
     let t = f.transport(&b);
-    assert_eq!(ROUTE.0, "api.github.com");
-    assert_eq!(
-        ROUTE.1,
-        "127.0.0.2:443".parse::<std::net::SocketAddr>().unwrap()
-    );
+    assert_eq!(PORT, 9443);
     let prefix = "https://api.github.com/repos/albertloky/SBXR/releases/";
     for path in ["latest", "assets/1", "assets/2", "assets/3", "assets/4"] {
         assert!(t.inner.admit(&format!("{prefix}{path}"), &b).is_ok());
@@ -216,7 +212,10 @@ fn refused_routes_cancelled_and_expired_scopes_never_reach_network() {
         )
         .is_err()
     );
-    t.inner.scope = Scope::CandidateGateway(std::time::Instant::now());
+    t.inner.scope = Scope::CandidateGateway {
+        until: std::time::Instant::now(),
+        port: PORT,
+    };
     assert_eq!(
         t.get(
             &AcquisitionRequest::latest_metadata(),
@@ -374,12 +373,11 @@ fn lifecycle_latest_over_private_tls_requires_scoped_roots_and_still_refuses_can
         let f = Fixture::new();
         let budget = SelectionBudget::new();
         let candidate = if scoped {
-            let mut inner = HttpsTransport::configured(
-                f.roots().unwrap(),
-                Some(vec![("api.github.com", address)]),
-            )
-            .unwrap();
-            inner.scope = Scope::CandidateGateway(budget.deadline());
+            let mut inner = HttpsTransport::configured(f.roots().unwrap(), None).unwrap();
+            inner.scope = Scope::CandidateGateway {
+                until: budget.deadline(),
+                port: address.port(),
+            };
             Some(CandidateGatewayTransport { inner })
         } else {
             None
