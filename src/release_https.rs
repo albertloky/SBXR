@@ -217,7 +217,20 @@ impl HttpsTransport {
                 current = checked(next)?;
                 continue;
             }
-            let link = response.headers().contains_key(header::LINK);
+            let mut links = response.headers().get_all(header::LINK).iter();
+            let link = match (links.next(), links.next()) {
+                (None, _) => false,
+                // GitHub can attach this advisory to a complete attestation response.
+                (Some(value), None)
+                    if matches!(self.scope, Scope::Public)
+                        && current.host_str() == Some("api.github.com")
+                        && current.path().starts_with("/repos/albertloky/SBXR/attestations/sha1:")
+                        && value.as_bytes() == br#"<https://docs.github.com/en/rest/about-the-rest-api/api-versions>; rel="deprecation"; type="text/html""# =>
+                {
+                    false
+                }
+                _ => true,
+            };
             if status != 200 {
                 return Ok(AcquisitionResponse::new(
                     status,

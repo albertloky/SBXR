@@ -201,6 +201,83 @@ fn incomplete_pages_and_chunked_oversize_are_refused() {
 }
 
 #[test]
+fn native_attestations_accept_only_the_single_github_deprecation_advisory() {
+    const DEPRECATION: &str = "Link: <https://docs.github.com/en/rest/about-the-rest-api/api-versions>; rel=\"deprecation\"; type=\"text/html\"\r\n";
+    const NEXT: &str = "Link: <https://api.github.com/next>; rel=next\r\n";
+    let commit = "abb3975c4f1c3fb376ed4a61020d935f8669863b";
+    let proofs = include_str!("../tests/testdata/public_release/attestations.json");
+    for (description, headers, body, accept) in [
+        ("no Link", String::new(), proofs, true),
+        ("GitHub deprecation", DEPRECATION.into(), proofs, true),
+        ("pagination", NEXT.into(), proofs, false),
+        (
+            "mixed fields",
+            format!("{DEPRECATION}{NEXT}"),
+            proofs,
+            false,
+        ),
+        ("repeated advisory", DEPRECATION.repeat(2), proofs, false),
+        (
+            "mixed links in one field",
+            format!(
+                "{}, <https://api.github.com/next>; rel=next\r\n",
+                DEPRECATION.trim_end()
+            ),
+            proofs,
+            false,
+        ),
+        (
+            "malformed relation",
+            DEPRECATION.replace("rel=\"deprecation\"", "rel=\"deprecation"),
+            proofs,
+            false,
+        ),
+        (
+            "unknown relation",
+            DEPRECATION.replace("\"deprecation\"", "\"help\""),
+            proofs,
+            false,
+        ),
+        (
+            "ambiguous relation",
+            DEPRECATION.replace("\"deprecation\"", "\"deprecation next\""),
+            proofs,
+            false,
+        ),
+        (
+            "advisory with missing proof",
+            DEPRECATION.into(),
+            r#"{"attestations":[]}"#,
+            false,
+        ),
+    ] {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (address, handle) = server(response.into_bytes(), false);
+        let mut transport = transport(vec![("api.github.com", address)]);
+        let result = crate::artifact_trust::acquire_native_attestations(
+            &mut transport,
+            commit,
+            &SelectionBudget::new(),
+        );
+        handle.join().unwrap();
+        if accept {
+            assert_eq!(
+                result
+                    .unwrap_or_else(|e| panic!("{description}: {e}"))
+                    .bundles()
+                    .len(),
+                3
+            );
+        } else {
+            assert!(matches!(result, Err(TrustError::Refused)), "{description}");
+        }
+    }
+}
+
+#[test]
 fn unresolved_dns_is_cancelled_before_any_socket_or_late_success() {
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Pending(Arc<AtomicBool>);
