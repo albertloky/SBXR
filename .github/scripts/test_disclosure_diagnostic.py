@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).parent
 spec = importlib.util.spec_from_file_location("diagnostic", HERE / "disclosure-diagnostic.py")
@@ -27,6 +28,8 @@ class DiagnosticTest(unittest.TestCase):
         self.now = int(time.time())
         self.transport = self.root / "sbxr-qualification-v3"
         self.transport.mkdir(mode=0o700)
+        self.runtime = self.transport / "runtime-deadline"
+        diag.write_bytes_new(self.runtime, f"{self.now+9740}\n".encode())
         self.manifest = self.transport / "qualification-manifest.json"
         self.value = {"schema":"sbxr-qualification-manifest-v3", "v3_attempt":{
             "attempt_id":"run-123-attempt-1", "scenario_limit_seconds":1800, "required_scenarios":["mvp-install"],
@@ -154,18 +157,108 @@ else:
                 self.prepare()
         self.assertFalse(list(self.root.glob("sbxr-diagnostic-*")))
 
-    def test_one_node_stops_at_signed_test_cutoff_with_remaining_cleanup_time(self):
+    def one_node_window(self):
         attempt = self.value["v3_attempt"]
         attempt["diagnostic"]["mode"] = "karing-one-node"
         attempt["scenario_limit_seconds"] = 2700
         self.manifest.write_bytes(diag.canonical(self.value))
-        cutoff = attempt["diagnostic"]["test_until_unix"]
-        with self.assertRaises(ValueError):
-            self.prepare(cutoff)
-        handoff = self.prepare(cutoff - 90)
+        return attempt["diagnostic"]
+
+    def test_one_node_requires_full_activity_after_staging_delay(self):
+        window = self.one_node_window()
+        cutoff = window["test_until_unix"]
+        latest = cutoff - 1200
+        diag.check_admission(self.manifest, str(window["finish_unix"]), latest)
+        for late in (latest + 1, cutoff - 426):
+            with self.subTest(late=late), self.assertRaises(ValueError):
+                self.prepare(late)
+        self.assertFalse(list(self.root.glob("sbxr-diagnostic-*")))
+        handoff = self.prepare(latest)
         self.assertEqual(handoff["test_until_unix"], cutoff)
+        self.assertEqual(handoff["deadline_unix"], cutoff + 1500)
         self.assertEqual(self.status(cutoff), "restore-now")
-        self.assertGreaterEqual(handoff["deadline_unix"] - cutoff, 1500)
+
+    def test_one_node_rechecks_time_after_inventory_before_creating_request(self):
+        window = self.one_node_window()
+        latest = window["test_until_unix"] - 1200
+        time_after_inventory = latest
+        retained = diag.retained
+
+        def delayed_inventory(root):
+            nonlocal time_after_inventory
+            result = retained(root)
+            time_after_inventory += 1
+            return result
+
+        with patch.object(diag, "retained", side_effect=delayed_inventory), self.assertRaises(ValueError):
+            diag.prepare(self.root, self.manifest, latest, current_time=lambda: time_after_inventory,
+                         **self.clock_args())
+        self.assertFalse(list(self.root.glob("sbxr-diagnostic-*")))
+
+    def test_one_node_requires_full_budget_before_protected_runtime_cutoff(self):
+        self.one_node_window()
+        runtime = self.now + 2700
+        self.runtime.write_text(f"{runtime-1}\n")
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertFalse(list(self.root.glob("sbxr-diagnostic-*")))
+        self.runtime.write_text(f"{runtime}\n")
+        handoff = self.prepare()
+        self.assertEqual(handoff["deadline_unix"], runtime)
+        self.assertEqual(handoff["test_until_unix"], self.now + 1200)
+
+    def test_runner_cli_refuses_short_or_malformed_protected_budget(self):
+        window = self.one_node_window()
+        protected = self.now + 2700 + 60
+        diag.check_admission(self.manifest, str(protected), self.now)
+        for cutoff in (str(protected-1), "0", "2700x", "0001"):
+            with self.subTest(cutoff=cutoff), self.assertRaises(ValueError):
+                diag.check_admission(self.manifest, cutoff, self.now)
+        valid = self.manifest.read_bytes()
+        for malformed in (
+                b"{",
+                b'{"v3_attempt":null}',
+                b'{"v3_attempt":[]}',
+                valid.replace(b'"mode":"karing-one-node",', b""),
+                valid.replace(b'"mode":"karing-one-node"', b'"mode":"other"'),
+                valid.replace(b'"mode":"karing-one-node"', b'"mode":"karing-one-node","mode":"karing-one-node"')):
+            self.manifest.write_bytes(malformed)
+            with self.assertRaises(ValueError):
+                diag.check_admission(self.manifest, str(window["finish_unix"]), self.now)
+        self.manifest.write_bytes(valid)
+        command = [sys.executable, "-B", str(HERE / "disclosure-diagnostic.py"), "check-admission",
+                   "--manifest", str(self.manifest), "--security-cutoff-unix"]
+        accepted = subprocess.run([*command, str(window["finish_unix"])], capture_output=True)
+        refused = subprocess.run([*command, str(self.now + 2000)], capture_output=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual((accepted.stdout, accepted.stderr), (b"", b""))
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout, b"")
+        self.assertEqual(refused.stderr, b"Diagnostic handoff refused; preserve evidence and inspect state.\n")
+        self.manifest.write_bytes(b'{"v3_attempt":null}')
+        refused = subprocess.run([*command, str(window["finish_unix"])], capture_output=True)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout, b"")
+        self.assertEqual(refused.stderr, b"Diagnostic handoff refused; preserve evidence and inspect state.\n")
+        self.assertFalse(list(self.root.glob("sbxr-diagnostic-*")))
+
+    def test_one_node_rejects_missing_and_malformed_runtime_file(self):
+        self.one_node_window()
+        for body in (b"0\n", b"123 456\n", b"1\n2\n", b"\xff"):
+            self.runtime.write_bytes(body)
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                self.prepare()
+        self.runtime.unlink()
+        with self.assertRaises(OSError):
+            self.prepare()
+        self.assertFalse(list(self.root.glob("sbxr-diagnostic-*")))
+
+    def test_legacy_diagnostic_retains_positive_activity_rule_without_runtime_file(self):
+        self.runtime.unlink()
+        window = self.value["v3_attempt"]["diagnostic"]
+        diag.check_admission(self.manifest, "0", self.now)
+        handoff = self.prepare(window["test_until_unix"] - 1)
+        self.assertEqual(handoff["test_until_unix"], window["test_until_unix"])
 
     def test_notice_never_proves_qualification_and_product_absence_required(self):
         self.prepare()

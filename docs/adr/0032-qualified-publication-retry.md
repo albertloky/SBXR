@@ -558,3 +558,25 @@ The release-index SHA-256 is
 f3ba111127897f96844e52dedad7b7e5b85445d8999154dfe5a3e7d758273e98.
 Future admission requires all twenty-two matching drafts and absent release
 and burn refs. The retired tag, sequence and release ID remain reserved.
+
+## Retained q225 identity — 2026-11-19
+
+Retire signed-unqualified draft v3.1.151, build 225, release 451382653,
+from source 197497a92b8957cc2f29529edb3ba3a1a3952147 and workflow 44526156427,
+attempt 1. Signing and attestation succeeded. The one-node diagnostic
+could no longer fit its required test allowance before the signed
+14:40 UTC activity cutoff on November 19. The signed restoration deadline
+was 15:40 UTC. A second GitHub review started the gateway and opened a
+diagnostic request at 14:32:54 UTC with 7 minutes and 6 seconds for activity.
+The request expired at 15:17:54 UTC and the collector refused at 15:17:57 UTC.
+The workflow completed its guarded transport teardown and retained diagnostic handoff
+artifact 14543988549. No operator test or qualification result was recorded.
+
+Keep the unpublished draft, its four exact assets and signed evidence in
+place. The qualification manifest SHA-256 is
+e86b024c5356cdead620a9389296cf8aa5816b3c643884ba895572ac0c052bc6.
+The release-index SHA-256 is
+b4d54791aa71a2d5487e5798f0c8417fa421b0821b53130c3959a2e5ecf160d9.
+Future admission requires all twenty-three matching drafts and absent
+release and burn refs. The retired tag, sequence and release ID remain
+reserved.

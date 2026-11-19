@@ -690,6 +690,9 @@ jobs:
         run: |
           set -euo pipefail
           bash .github/scripts/validate-security-cutoff.sh "$SECURITY_CUTOFF_UNIX"
+          chmod 0600 handoff/qualification-manifest.json
+          python3 .github/scripts/disclosure-diagnostic.py check-admission \
+            --manifest handoff/qualification-manifest.json --security-cutoff-unix "$SECURITY_CUTOFF_UNIX"
           if ! jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then
             jq '.stages.integrated_verification = "Running" | .stages.codex_live_acceptance = "Running"' candidate-failure-state.json > candidate-failure-state.next
             mv candidate-failure-state.next candidate-failure-state.json

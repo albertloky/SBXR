@@ -12,6 +12,27 @@ import (
 	"time"
 )
 
+func TestCandidateChecksDiagnosticBudgetBeforeRemoteTransport(t *testing.T) {
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, step, found := strings.Cut(string(body), "      - name: Run the packaged V3 journey\n")
+	if !found {
+		t.Fatal("missing packaged journey step")
+	}
+	step, _, _ = strings.Cut(step, "\n      - ")
+	check := strings.Index(step, `python3 .github/scripts/disclosure-diagnostic.py check-admission`)
+	if check < 0 {
+		t.Fatal("missing local diagnostic budget check")
+	}
+	for _, effect := range []string{`install -m 0600 /dev/null ssh.key`, "trap cleanup_v3_transport EXIT", `ssh "`} {
+		if index := strings.Index(step, effect); index < check {
+			t.Fatalf("local diagnostic budget check must precede %q", effect)
+		}
+	}
+}
+
 func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {

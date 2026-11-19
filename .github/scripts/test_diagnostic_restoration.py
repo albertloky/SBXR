@@ -97,6 +97,9 @@ class DiagnosticRestoration(unittest.TestCase):
         self.manifest.chmod(0o600)
         clock = (HERE / "mvp-observe.py").read_bytes()
         stage = dict(clock=clock, clock_sha256=collector.digest(clock)) if mode else {}
+        if mode:
+            collector.write_bytes_new(self.manifest.with_name("runtime-deadline"),
+                                      f"{self.now+2700}\n".encode())
         handoff = collector.prepare(self.root, self.manifest, self.now, **stage)
         self.directory = Path(handoff["directory"])
         self.q = json.loads((self.directory / "request.json").read_bytes())

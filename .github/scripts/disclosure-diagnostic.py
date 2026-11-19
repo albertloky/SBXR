@@ -83,9 +83,7 @@ def retained(root):
     return found
 
 
-def context(root, manifest, now):
-    raw = read(manifest)
-    value = json.loads(raw, object_pairs_hook=pairs)
+def diagnostic_scope(value):
     attempt = value["v3_attempt"]
     window = attempt["diagnostic"]
     if type(window) is not dict:
@@ -99,7 +97,6 @@ def context(root, manifest, now):
             window["start_unix"] <= 0 or
             window["test_until_unix"] != window["start_unix"] + 7200 or
             window["finish_unix"] != window["start_unix"] + 10800 or
-            not window["start_unix"] <= now < window["finish_unix"] or
             attempt["required_scenarios"] != ["mvp-install"] or
             attempt.get("attended_finish_by") or attempt.get("owner_exception") or attempt.get("proxy_profile") or
             attempt.get("karing_response_limit_seconds", 0) != 0 or
@@ -108,24 +105,73 @@ def context(root, manifest, now):
     identity = attempt["attempt_id"]
     if not re.fullmatch(r"run-[1-9][0-9]*-attempt-[1-9][0-9]*", identity):
         raise ValueError("diagnostic identity differs")
+    return identity, window
+
+
+def context(root, manifest, now):
+    raw = read(manifest)
+    identity, window = diagnostic_scope(json.loads(raw, object_pairs_hook=pairs))
+    if not window["start_unix"] <= now < window["finish_unix"]:
+        raise ValueError("diagnostic scope differs")
     return root / ("sbxr-diagnostic-" + identity), digest(raw), window
 
 
-def prepare(root, manifest, now, *, clock=None, clock_sha256=None):
-    target, binding, window = context(root, manifest, now)
+def parse_deadline(value):
+    if not re.fullmatch(r"[1-9][0-9]{0,9}", value):
+        raise ValueError("diagnostic protected deadline differs")
+    return int(value)
+
+
+def request_times(window, now, runtime_deadline=None):
     one_node = window.get("mode") == "karing-one-node"
     limit, reserve = (2700, 1500) if one_node else (1800, 900)
-    check = "diagnostic-karing-one-node" if one_node else "diagnostic-observation"
     deadline = min(now + limit, window["finish_unix"] - 60)
+    if one_node:
+        deadline = min(deadline, runtime_deadline)
     test_until = min(deadline - reserve, window["test_until_unix"])
-    if test_until <= now:
+    if test_until - now < (limit - reserve if one_node else 1):
         raise ValueError("insufficient diagnostic/restoration time")
+    return limit, deadline, test_until
+
+
+def check_admission(manifest, security_cutoff, now):
+    value = json.loads(read(manifest), object_pairs_hook=pairs)
+    if type(value) is not dict or type(value.get("v3_attempt")) is not dict:
+        raise ValueError("diagnostic scope differs")
+    window = value["v3_attempt"].get("diagnostic")
+    if window is None:
+        return
+    _, window = diagnostic_scope(value)
+    if window.get("mode") != "karing-one-node":
+        return
+    if now < window["start_unix"]:
+        raise ValueError("diagnostic scope differs")
+    # Transport stores the explicit approved cutoff minus its one-minute
+    # teardown margin. The host rechecks the actual stored runtime deadline.
+    request_times(window, now, parse_deadline(security_cutoff) - 60)
+
+
+def prepare(root, manifest, now, *, clock=None, clock_sha256=None, current_time=None):
+    target, binding, window = context(root, manifest, now)
+    one_node = window.get("mode") == "karing-one-node"
+    check = "diagnostic-karing-one-node" if one_node else "diagnostic-observation"
     if one_node:
         if type(clock) is not bytes or not 0 < len(clock) <= 65536 or digest(clock) != clock_sha256:
             raise ValueError("diagnostic recorder differs")
     elif clock is not None or clock_sha256 is not None:
         raise ValueError("diagnostic recorder not declared")
     before = retained(root)
+    runtime_deadline = None
+    if one_node:
+        runtime = read(manifest.with_name("runtime-deadline")).decode("ascii").removesuffix("\n")
+        runtime_deadline = parse_deadline(runtime)
+        # Evidence inventory may consume the last seconds of the allowance.
+        if current_time is not None:
+            request_start = current_time()
+            if request_start < now:
+                raise ValueError("diagnostic clock moved backwards")
+            now = request_start
+    limit, deadline, test_until = request_times(window, now, runtime_deadline)
     target.mkdir(mode=0o700)  # Refuses an existing directory, including symlinks.
     request = {"deadline_unix": deadline, "diagnostic_test_until_unix": test_until,
                "not_before": dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -173,12 +219,21 @@ def status(root, manifest, state_sha256, now):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("prepare", "status"))
+    parser.add_argument("operation", choices=("prepare", "status", "check-admission"))
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--security-cutoff-unix")
     parser.add_argument("--state-sha256")
-    parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--manifest-sha256")
     parser.add_argument("--clock-base64")
     parser.add_argument("--clock-sha256")
     args = parser.parse_args()
+    if args.operation == "check-admission":
+        if args.manifest is None or args.security_cutoff_unix is None:
+            parser.error("check-admission requires the manifest and security cutoff")
+        check_admission(args.manifest, args.security_cutoff_unix, int(time.time()))
+        return
+    if args.manifest_sha256 is None:
+        parser.error("a staged manifest digest is required")
     if os.geteuid() != 0:
         raise ValueError("root required")
     root = Path("/root")
@@ -188,7 +243,8 @@ def main():
     now = int(time.time())
     if args.operation == "prepare":
         clock = base64.b64decode(args.clock_base64, validate=True) if args.clock_base64 is not None else None
-        print(canonical(prepare(root, manifest, now, clock=clock, clock_sha256=args.clock_sha256)).decode())
+        print(canonical(prepare(root, manifest, now, clock=clock,
+                                clock_sha256=args.clock_sha256, current_time=lambda: int(time.time()))).decode())
     else:
         print(status(root, manifest, args.state_sha256, now))
 

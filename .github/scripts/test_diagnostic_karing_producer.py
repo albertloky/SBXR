@@ -69,7 +69,7 @@ class KaringProducer(unittest.TestCase):
         transport = self.fs / "root/sbxr-qualification-v3"
         transport.mkdir(parents=True)
         self.runtime = transport / "runtime-deadline"
-        self.runtime.write_text(str(self.now+2600)+"\n")
+        self.runtime.write_text(str(self.now+2700)+"\n")
         self.runtime.chmod(0o600)
         self.exe = self.fs / "usr/local/bin/sbxr"
         self.exe.parent.mkdir(parents=True)
