@@ -526,3 +526,19 @@ The release-index SHA-256 is
 c0898423020a77fd05a691304e9282c8a42b0cf52b63f79fdf9f4fa77e04434b.
 Future admission requires all twenty matching drafts and absent release and
 burn refs. The retired tag, sequence and release ID remain reserved.
+
+## Retained q223 identity — 2026-11-19
+
+Retire signed-unqualified draft v3.1.149, build 223, release 450895501,
+from source e96888ed8e11a47b16ee89aefb1f8491d17a59c6 and workflow 44456189920.
+The preparation closed and removed the private gateway without installing the
+product or running a Karing test. The short request's test allowance ended at
+05:19:43 UTC. The signed outer test cutoff was 06:04:53 UTC.
+
+Keep the draft, its four exact assets and signed evidence in place. The
+qualification manifest SHA-256 is
+db2921412d322a7c029d92651f1c5246bc634491d4365df8b694fe93c5e9705c.
+The release-index SHA-256 is
+e2f0ac89f33ba7c234f0a488513dd9f0fb7d8ac56e6e8c50bcfd30f5b874f12b.
+Future admission requires all twenty-one matching drafts and absent release
+and burn refs. The retired tag, sequence and release ID remain reserved.
