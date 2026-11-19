@@ -95,7 +95,7 @@ jobs:
           test "$V3_ATTEMPT" = "$(jq -cS . <<<"$V3_ATTEMPT")"
           preflight_operation='execute verify-public-latest'
           public_latest_execution='did not complete'
-          cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > current-source-verification.json
+          cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest --http-diagnostics "$RUNNER_TEMP/candidate-preflight-http.json" > current-source-verification.json
           public_latest_execution='completed'
           preflight_operation='require accepted public-latest outcome'
           jq -e '.outcome == "accepted"' current-source-verification.json >/dev/null 2>&1
@@ -170,6 +170,13 @@ jobs:
           path: |
             current-source-verification.json
             candidate-preflight-diagnostics.txt
+          if-no-files-found: ignore
+          retention-days: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ always() && steps.preflight.outcome == 'failure' }}
+        with:
+          name: candidate-preflight-http-diagnostics
+          path: ${{ runner.temp }}/candidate-preflight-http.json
           if-no-files-found: ignore
           retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -44,7 +44,8 @@ fn run() -> Result<serde_json::Value> {
             "arm64-executable-sha256",
             "output",
         ],
-        "verify-public-latest" | "probe-public-latest" => &[],
+        "verify-public-latest" => &["http-diagnostics"],
+        "probe-public-latest" => &[],
         "verify-public-release" => &["tag"],
         "index" => &["tag", "commit", "sequence", "directory", "output"],
         "verify-package" => &["directory", "architecture"],
@@ -64,7 +65,7 @@ fn run() -> Result<serde_json::Value> {
             return Err(PackageError("arguments"));
         }
     }
-    if options.len() != allowed.len() {
+    if command != "verify-public-latest" && options.len() != allowed.len() {
         return Err(PackageError("arguments"));
     }
     let sequence = || {
@@ -130,30 +131,25 @@ fn run() -> Result<serde_json::Value> {
                 )
                 .map_err(|_| PackageError("arguments"))?;
             }
-            let transport = sbxr::release_https::HttpsTransport::new()
-                .map_err(|_| PackageError("public-transport"))?;
-            let mut transport = public_diagnostics::DiagnosticTransport::new(transport);
-            let budget = sbxr::artifact_trust::SelectionBudget::new();
-            let result = if command == "verify-public-latest" {
-                sbxr::release_acquisition::AuthenticatedArchive::acquire_latest(
-                    &mut transport,
-                    Architecture::Amd64,
-                    &budget,
-                )
+            if let Some(path) = options.get("http-diagnostics") {
+                let transport = sbxr::release_https::PublicProbeTransport::new()
+                    .map_err(|_| PackageError("public-transport"))?;
+                let mut transport = public_diagnostics::DiagnosticTransport::new(transport);
+                let output = verify_public(&mut transport, None);
+                Ok(public_diagnostics::retain_http_receipt(
+                    output,
+                    Path::new(path),
+                    transport.inner().diagnostic(),
+                ))
             } else {
-                sbxr::release_acquisition::AuthenticatedArchive::acquire_public_tag(
+                let transport = sbxr::release_https::HttpsTransport::new()
+                    .map_err(|_| PackageError("public-transport"))?;
+                let mut transport = public_diagnostics::DiagnosticTransport::new(transport);
+                Ok(verify_public(
                     &mut transport,
-                    value(&options, "tag")?,
-                    Architecture::Amd64,
-                    &budget,
-                )
-            };
-            let failed = result.is_err();
-            let mut output = public_result(result);
-            if failed {
-                output["acquisition_diagnostic"] = transport.diagnostic();
+                    options.get("tag").map(String::as_str),
+                ))
             }
-            Ok(output)
         }
         "inspect-archive" => {
             let arch = architecture(&options)?;
@@ -240,6 +236,26 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+fn verify_public<T: sbxr::artifact_trust::AcquisitionTransport>(
+    transport: &mut public_diagnostics::DiagnosticTransport<T>,
+    tag: Option<&str>,
+) -> serde_json::Value {
+    use sbxr::{artifact_trust::SelectionBudget, release_acquisition::AuthenticatedArchive};
+    let budget = SelectionBudget::new();
+    let result = match tag {
+        Some(tag) => {
+            AuthenticatedArchive::acquire_public_tag(transport, tag, Architecture::Amd64, &budget)
+        }
+        None => AuthenticatedArchive::acquire_latest(transport, Architecture::Amd64, &budget),
+    };
+    let failed = result.is_err();
+    let mut output = public_result(result);
+    if failed {
+        output["acquisition_diagnostic"] = transport.diagnostic();
+    }
+    output
 }
 
 fn public_result(

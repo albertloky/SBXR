@@ -49,6 +49,9 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 		{"accepted", accepted, "", "completed", "accepted", 0, 0},
 		{"clean-install-only", accepted, "", "completed", "accepted", 0, 0},
 		{"refused", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
+		{"primary-limit", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
+		{"retry-hint", unavailable, "require accepted public-latest outcome", "completed", "unavailable", 0, 1},
+		{"redirected-refusal", refused, "require accepted public-latest outcome", "completed", "refused", 0, 1},
 		{"unavailable", unavailable, "require accepted public-latest outcome", "completed", "unavailable", 0, 1},
 		{"execution-failed", "", "execute verify-public-latest", "did not complete", "empty", 42, 42},
 		{"execution-failed-with-result", refused, "execute verify-public-latest", "did not complete", "refused", 42, 42},
@@ -70,6 +73,10 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			directory := t.TempDir()
+			runnerTemp := filepath.Join(t.TempDir(), "runner temp")
+			if err := os.Mkdir(runnerTemp, 0700); err != nil {
+				t.Fatal(err)
+			}
 			cutoffHelper, err := os.ReadFile(".github/scripts/validate-security-cutoff.sh")
 			if err != nil {
 				t.Fatal(err)
@@ -85,12 +92,26 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 			if fixture.name == "cutoff-missing" {
 				cutoff = ""
 			}
+			httpReceipt := ""
+			switch fixture.name {
+			case "primary-limit":
+				httpReceipt = `{"stage":"latest_metadata","destination":"github_api","redirect_count":0,"http_status":403,"rate_limit_exhausted":true,"retry_after_present":false}`
+			case "retry-hint":
+				httpReceipt = `{"stage":"native_attestations","destination":"github_api","redirect_count":0,"http_status":429,"rate_limit_exhausted":false,"retry_after_present":true}`
+			case "redirected-refusal":
+				httpReceipt = `{"stage":"release_archive","destination":"github_release_cdn","redirect_count":1,"http_status":403,"rate_limit_exhausted":null,"retry_after_present":false}`
+			case "accepted", "later-failure":
+				httpReceipt = `{"stage":"release_archive","destination":"github_release_cdn","redirect_count":1,"http_status":200,"rate_limit_exhausted":null,"retry_after_present":false}`
+			}
 			// Substitute only external commands. Bash, jq, redirection, traps,
 			// filesystem writes and the workflow's assertions run unchanged.
 			for name, source := range map[string]string{
 				"cargo": `#!/usr/bin/env bash
 set -euo pipefail
-test "$*" = 'run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest'
+test "$#" -eq 10
+test "${10}" = "$RUNNER_TEMP/candidate-preflight-http.json"
+test "$*" = "run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest --http-diagnostics $RUNNER_TEMP/candidate-preflight-http.json"
+if test -n "$HTTP_RECEIPT"; then printf '%s' "$HTTP_RECEIPT" > "$RUNNER_TEMP/candidate-preflight-http.json"; fi
 printf 'called\n' >> verifier-called
 if test "$FIXTURE" = missing; then
   rm current-source-verification.json
@@ -146,9 +167,9 @@ exit "$VERIFIER_STATUS"
 				"GITHUB_REPOSITORY=fixture/repo",
 				"SECURITY_CUTOFF_UNIX=" + cutoff,
 				"PATH=" + directory + ":" + os.Getenv("PATH"),
-				"V3_CHECKLIST=unused", "V3_ATTEMPT=" + attempt, "GH_TOKEN=" + token,
+				"V3_CHECKLIST=unused", "V3_ATTEMPT=" + attempt, "GH_TOKEN=" + token, "RUNNER_TEMP=" + runnerTemp,
 				"SIGNED_URL=https://release-assets.githubusercontent.com/fixture?" + signedQuery,
-				"RESULT=" + fixture.result, "FIXTURE=" + fixture.name,
+				"RESULT=" + fixture.result, "FIXTURE=" + fixture.name, "HTTP_RECEIPT=" + httpReceipt,
 				"VERIFIER_STATUS=" + strconv.Itoa(fixture.verifierStatus),
 			}
 			output, err := command.CombinedOutput()
@@ -182,6 +203,14 @@ exit "$VERIFIER_STATUS"
 			} else if resultErr != nil || string(result) != fixture.result {
 				t.Errorf("available verification result was not preserved: %v %s", resultErr, result)
 			}
+			httpDiagnostic, httpErr := os.ReadFile(filepath.Join(runnerTemp, "candidate-preflight-http.json"))
+			if httpReceipt == "" {
+				if !os.IsNotExist(httpErr) {
+					t.Error("unexpected HTTP diagnostic file")
+				}
+			} else if httpErr != nil || string(httpDiagnostic) != httpReceipt {
+				t.Error("bounded HTTP diagnostic was not retained")
+			}
 			diagnostic, diagnosticErr := os.ReadFile(filepath.Join(directory, "candidate-preflight-diagnostics.txt"))
 			if fixture.name != "diagnostic-write-failure" && diagnosticErr != nil {
 				t.Errorf("preflight diagnostics were not retained: %v", diagnosticErr)
@@ -196,7 +225,7 @@ exit "$VERIFIER_STATUS"
 					}
 				}
 			}
-			for _, text := range []string{string(output), string(diagnostic), string(result)} {
+			for _, text := range []string{string(output), string(diagnostic), string(result), string(httpDiagnostic)} {
 				for _, secret := range []string{token, signedQuery, "release-assets.githubusercontent.com/fixture?"} {
 					if strings.Contains(text, secret) {
 						t.Error("preflight exposed a secret or signed URL query")
@@ -213,10 +242,13 @@ func TestCandidatePreflightRetainsDiagnosticsWithoutChangingDecisionArtifact(t *
 		t.Fatal(err)
 	}
 	preflight, _, _ := strings.Cut(string(body), "\n  rust-native:")
-	var diagnosticUpload, decisionUpload string
+	var diagnosticUpload, httpUpload, decisionUpload string
 	for _, step := range strings.Split(preflight, "\n      - ") {
 		if strings.Contains(step, "name: candidate-preflight-diagnostics\n") {
 			diagnosticUpload = step
+		}
+		if strings.Contains(step, "name: candidate-preflight-http-diagnostics\n") {
+			httpUpload = step
 		}
 		if strings.Contains(step, "name: candidate-preflight-decision-chain\n") {
 			decisionUpload = step
@@ -227,7 +259,18 @@ func TestCandidatePreflightRetainsDiagnosticsWithoutChangingDecisionArtifact(t *
 			t.Errorf("early-failure diagnostic upload lacks %q", want)
 		}
 	}
-	if !strings.Contains(decisionUpload, "if-no-files-found: error") || strings.Contains(decisionUpload, "if:") || strings.Contains(decisionUpload, "current-source-verification.json") {
+	for _, want := range []string{
+		"uses: actions/upload-artifact@",
+		"if: ${{ always() && steps.preflight.outcome == 'failure' }}",
+		"path: ${{ runner.temp }}/candidate-preflight-http.json",
+		"if-no-files-found: ignore",
+		"retention-days: 1",
+	} {
+		if !strings.Contains(httpUpload, want) {
+			t.Errorf("isolated HTTP diagnostic upload lacks %q", want)
+		}
+	}
+	if !strings.Contains(decisionUpload, "if-no-files-found: error") || strings.Contains(decisionUpload, "if:") || strings.Contains(decisionUpload, "current-source-verification.json") || strings.Contains(decisionUpload, "candidate-preflight-http.json") {
 		t.Error("success-only decision-chain artifact contract changed")
 	}
 	for _, forbidden := range []string{"continue-on-error:", "set -x", "BASH_COMMAND", "printenv"} {

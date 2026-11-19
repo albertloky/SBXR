@@ -2,6 +2,29 @@
 use sbxr::artifact_trust::{
     AcquisitionRequest, AcquisitionResponse, AcquisitionTransport, SelectionBudget, TrustError,
 };
+use sbxr::release_https::ProbeObservation;
+use std::path::Path;
+
+// The typed observation exposes only the bounded fields from the public transport.
+// Receipt failures must not affect the verifier's output or decision.
+pub(crate) fn retain_http_receipt(
+    output: serde_json::Value,
+    path: &Path,
+    observation: Option<&ProbeObservation>,
+) -> serde_json::Value {
+    retain_serialized_receipt(output, path, observation.map(serde_json::to_vec))
+}
+
+fn retain_serialized_receipt(
+    output: serde_json::Value,
+    path: &Path,
+    receipt: Option<serde_json::Result<Vec<u8>>>,
+) -> serde_json::Value {
+    if let Some(Ok(bytes)) = receipt {
+        let _ = sbxr_rust_package::write_exclusive(path, &bytes);
+    }
+    output
+}
 
 pub(crate) struct DiagnosticTransport<T> {
     inner: T,
@@ -16,6 +39,10 @@ impl<T> DiagnosticTransport<T> {
     }
     pub(crate) fn diagnostic(&self) -> serde_json::Value {
         self.last.clone()
+    }
+
+    pub(crate) fn inner(&self) -> &T {
+        &self.inner
     }
 }
 impl<T: AcquisitionTransport> AcquisitionTransport for DiagnosticTransport<T> {
@@ -88,6 +115,55 @@ mod tests {
             assert!(!transport.diagnostic().to_string().contains("private"));
         }
     }
+    #[test]
+    fn exclusive_receipt_write_preserves_the_actual_verifier_result() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+        let directory =
+            std::env::temp_dir().join(format!("sbxr-http-receipt-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(self.0.join("receipt.json"));
+                let _ = fs::remove_dir(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(directory.clone());
+        let path = directory.join("receipt.json");
+        let expected = serde_json::json!({
+            "outcome":"refused", "release_identity":null, "sequence":null,
+            "acquisition_diagnostic":{"request_category":"latest_metadata","transport_outcome":"response","http_status":403}
+        });
+        let receipt = serde_json::json!({
+            "stage":"latest_metadata","destination":"github_api","redirect_count":0,"http_status":403,
+            "rate_limit_exhausted":true,"retry_after_present":false
+        });
+        let output = crate::verify_public(&mut DiagnosticTransport::new(Response(403)), None);
+        assert_eq!(output, expected);
+        assert_eq!(
+            retain_serialized_receipt(output.clone(), &path, Some(serde_json::to_vec(&receipt))),
+            expected
+        );
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            retain_serialized_receipt(
+                output,
+                &path,
+                Some(serde_json::to_vec(&serde_json::Value::Null))
+            ),
+            expected
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+
     struct Failure(TrustError);
     impl AcquisitionTransport for Failure {
         fn get(
