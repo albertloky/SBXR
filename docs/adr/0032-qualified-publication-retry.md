@@ -542,3 +542,19 @@ The release-index SHA-256 is
 e2f0ac89f33ba7c234f0a488513dd9f0fb7d8ac56e6e8c50bcfd30f5b874f12b.
 Future admission requires all twenty-one matching drafts and absent release
 and burn refs. The retired tag, sequence and release ID remain reserved.
+
+## Retained q224 identity — 2026-11-19
+
+Retire draft v3.1.150, build 224, release 451038149, from source
+2718e77049ddc15b2013c5425591dca9ef083322 and workflow 44478371554.
+The approved diagnostic window expired. During attempt 1, the signing job
+failed at the public Latest recheck before creating the qualification manifest.
+GitHub recorded the attestation step and acceptance job as skipped. No signed
+qualification manifest was retained. Use the existing q217 reservation label
+`unknown` for signing authority and omit the qualification manifest digest.
+
+Keep the draft, its four exact assets and the failed run evidence in place.
+The release-index SHA-256 is
+f3ba111127897f96844e52dedad7b7e5b85445d8999154dfe5a3e7d758273e98.
+Future admission requires all twenty-two matching drafts and absent release
+and burn refs. The retired tag, sequence and release ID remain reserved.
