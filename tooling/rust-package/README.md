@@ -245,6 +245,8 @@ The actual bootstrap continues to set umask 077 internally. No production mode
 check was changed or relaxed; the intended 0644 refusal is tested explicitly.
 
 For a read-only hosted investigation, manually dispatch `verify.yml` with
-`public_verifier_probe=true`. It runs the unchanged public verifier on an Ubuntu
-runner and retains `public-verification.json`, including refusals. Normal CI jobs
-still run; the probe has no release, signing, VPS or cleanup authority.
+`public_verifier_probe=true`. It runs the same public verification checks on an
+Ubuntu runner. The `public-verification.json` receipt contains the outcome and
+the last request's stage, destination class, redirect count, HTTP status, and
+rate-limit indicators. Normal CI jobs still run. The probe has no release,
+signing, VPS or cleanup authority.

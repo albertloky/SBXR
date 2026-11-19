@@ -1,10 +1,12 @@
 //! Certificate-verified, bounded public HTTPS acquisition. No credentials,
 //! executable handling or host effects. Redirect authorization precedes each GET.
 mod gateway;
+mod probe;
 use crate::artifact_trust::{
     AcquisitionRequest, AcquisitionResponse, AcquisitionTransport, SelectionBudget, TrustError,
 };
 pub use gateway::CandidateGatewayTransport;
+pub use probe::{ProbeObservation, PublicProbeTransport};
 use reqwest::{Client, Url, header};
 use std::{fmt, io::Cursor, sync::Arc, time::Duration};
 type Result<T> = std::result::Result<T, TrustError>;
@@ -175,6 +177,7 @@ impl HttpsTransport {
         &self,
         request: &AcquisitionRequest,
         budget: &SelectionBudget,
+        mut probe: Option<&mut ProbeObservation>,
     ) -> Result<AcquisitionResponse> {
         let mut current = self.admit(request.url(), budget)?;
         for hop in 0..=4 {
@@ -202,9 +205,15 @@ impl HttpsTransport {
             if current.host_str() == Some("api.github.com") {
                 outgoing = outgoing.header("X-GitHub-Api-Version", GITHUB_API_VERSION);
             }
+            if let Some(probe) = probe.as_deref_mut() {
+                probe.start_hop(current.host_str(), hop);
+            }
             let mut response = outgoing.send().await.map_err(|_| TrustError::Unavailable)?;
             self.check_budget(budget)?;
             let status = response.status().as_u16();
+            if let Some(probe) = probe.as_deref_mut() {
+                probe.observe_response(status, response.headers());
+            }
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
                 let next = response
                     .headers()
@@ -266,12 +275,12 @@ impl HttpsTransport {
         }
         Err(TrustError::Refused)
     }
-}
-impl AcquisitionTransport for HttpsTransport {
-    fn get(
-        &mut self,
+
+    fn get_with_probe(
+        &self,
         request: &AcquisitionRequest,
         budget: &SelectionBudget,
+        probe: Option<&mut ProbeObservation>,
     ) -> Result<AcquisitionResponse> {
         self.admit(request.url(), budget)?;
         if tokio::runtime::Handle::try_current().is_ok() {
@@ -279,7 +288,7 @@ impl AcquisitionTransport for HttpsTransport {
         }
         let result=self.runtime.block_on(async {
             tokio::select! {
-                result=self.fetch(request,budget)=>result,
+                result=self.fetch(request,budget,probe)=>result,
                 _=async {loop {if self.check_budget(budget).is_err(){break}tokio::time::sleep(POLL).await;}}=>Err(TrustError::Interrupted),
             }
         });
@@ -287,6 +296,15 @@ impl AcquisitionTransport for HttpsTransport {
         // an ordinary error or late success after this selection was interrupted.
         self.check_budget(budget)?;
         result
+    }
+}
+impl AcquisitionTransport for HttpsTransport {
+    fn get(
+        &mut self,
+        request: &AcquisitionRequest,
+        budget: &SelectionBudget,
+    ) -> Result<AcquisitionResponse> {
+        self.get_with_probe(request, budget, None)
     }
 }
 fn tls_config(roots: rustls::RootCertStore) -> Result<rustls::ClientConfig> {

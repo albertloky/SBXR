@@ -616,12 +616,25 @@ impl NativeAttestations {
     }
 }
 
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PublicRequestStage {
+    LatestMetadata,
+    TaggedMetadata,
+    NativeAttestations,
+    AttestationBundle,
+    ReleaseIndex,
+    ReleaseArchive,
+    OtherReleaseAsset,
+}
+
 /// Only canonical read-only public API requests are constructible here.
 #[derive(Debug)]
 pub struct AcquisitionRequest {
     url: String,
     limit: usize,
     json: bool,
+    pub(crate) stage: PublicRequestStage,
 }
 impl AcquisitionRequest {
     pub(crate) fn latest_metadata() -> Self {
@@ -629,6 +642,7 @@ impl AcquisitionRequest {
             url: format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"),
             limit: crate::release_identity::MAX_INDEX_BYTES,
             json: true,
+            stage: PublicRequestStage::LatestMetadata,
         }
     }
     pub(crate) fn release_metadata(tag: &str) -> Result<Self> {
@@ -638,6 +652,7 @@ impl AcquisitionRequest {
             url: format!("https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}"),
             limit: crate::release_identity::MAX_INDEX_BYTES,
             json: true,
+            stage: PublicRequestStage::TaggedMetadata,
         })
     }
 
@@ -724,6 +739,7 @@ pub fn acquire_native_attestations(
         ),
         limit: MAX_BUNDLE_BYTES,
         json: true,
+        stage: PublicRequestStage::NativeAttestations,
     };
     budget.check()?;
     let response = transport.get(&request, budget)?;
@@ -747,6 +763,13 @@ pub fn acquire_digest_checked_asset(
         url: format!("https://api.github.com/repos/{REPOSITORY}/releases/assets/{asset_id}"),
         limit: size,
         json: false,
+        stage: match proof.name() {
+            "release-index.json" => PublicRequestStage::ReleaseIndex,
+            "sbxr-linux-amd64.tar.gz" | "sbxr-linux-arm64.tar.gz" => {
+                PublicRequestStage::ReleaseArchive
+            }
+            _ => PublicRequestStage::OtherReleaseAsset,
+        },
     };
     budget.check()?;
     let response = transport.get(&request, budget)?;
@@ -821,6 +844,7 @@ fn resolve_bundle(
                 url: url.clone(),
                 limit: MAX_BUNDLE_BYTES,
                 json: false,
+                stage: PublicRequestStage::AttestationBundle,
             };
             let response = transport.get(&request, budget)?;
             let compressed = read_response(response, request.limit, budget)?;

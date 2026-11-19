@@ -44,7 +44,7 @@ fn run() -> Result<serde_json::Value> {
             "arm64-executable-sha256",
             "output",
         ],
-        "verify-public-latest" => &[],
+        "verify-public-latest" | "probe-public-latest" => &[],
         "verify-public-release" => &["tag"],
         "index" => &["tag", "commit", "sequence", "directory", "output"],
         "verify-package" => &["directory", "architecture"],
@@ -98,6 +98,27 @@ fn run() -> Result<serde_json::Value> {
             Ok(
                 serde_json::json!({"outcome":"packaged-local", "architecture":arch.as_str(),
                 "executable_sha256":digest, "archive_sha256":sha256_hex(&archive)}),
+            )
+        }
+        "probe-public-latest" => {
+            use sbxr::{
+                artifact_trust::{SelectionBudget, TrustError},
+                release_acquisition::AuthenticatedArchive,
+                release_https::PublicProbeTransport,
+            };
+            let mut transport =
+                PublicProbeTransport::new().map_err(|_| PackageError("public-transport"))?;
+            let outcome = match AuthenticatedArchive::acquire_latest(
+                &mut transport,
+                Architecture::Amd64,
+                &SelectionBudget::new(),
+            ) {
+                Ok(_) => "accepted",
+                Err(TrustError::Unavailable) => "unavailable",
+                Err(_) => "refused",
+            };
+            Ok(
+                serde_json::json!({"outcome":outcome,"acquisition_diagnostic":transport.diagnostic()}),
             )
         }
         "verify-public-latest" | "verify-public-release" => {

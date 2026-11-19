@@ -278,6 +278,158 @@ fn native_attestations_accept_only_the_single_github_deprecation_advisory() {
 }
 
 #[test]
+fn public_probe_reports_only_bounded_failure_fields() {
+    for (response, status, expected_remaining, retry_hint) in [
+        (
+            "HTTP/1.1 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nRetry-After: 60\r\nSet-Cookie: private-header\r\nContent-Length: 12\r\nConnection: close\r\n\r\nprivate-body",
+            403,
+            Some(true),
+            true,
+        ),
+        (
+            "HTTP/1.1 429 Too Many Requests\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-remaining: private-quota\r\nRetry-After: private-hint\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            429,
+            None,
+            true,
+        ),
+    ] {
+        let (address, handle) = server(response.as_bytes().to_vec(), false);
+        let mut probe =
+            PublicProbeTransport::from_transport(transport(vec![("api.github.com", address)]));
+        let budget = SelectionBudget::new();
+        let result = crate::release_acquisition::AuthenticatedArchive::acquire_latest(
+            &mut probe,
+            crate::release_identity::Architecture::Amd64,
+            &budget,
+        );
+        handle.join().unwrap();
+        let expected_error = if status == 403 {
+            TrustError::Refused
+        } else {
+            TrustError::Unavailable
+        };
+        assert_eq!(result.err(), Some(expected_error));
+        let observed = serde_json::to_value(probe.diagnostic()).unwrap();
+        let expected = serde_json::json!({
+            "stage":"latest_metadata", "destination":"github_api", "redirect_count":0,
+            "http_status":status, "rate_limit_exhausted":expected_remaining, "retry_after_present":retry_hint,
+        });
+        assert!(
+            observed == expected,
+            "unexpected diagnostic fields on HTTP failure"
+        );
+    }
+}
+
+#[test]
+fn public_probe_counts_accepted_redirects_without_recording_locations() {
+    let (cdn, cdn_handle) = server(
+        b"HTTP/1.1 403 Forbidden\r\nRetry-After: private-hint\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        false,
+    );
+    let (api, api_handle) = server(
+        b"HTTP/1.1 302 Found\r\nLocation: https://release-assets.githubusercontent.com/private-path?fixture=private-query\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        false,
+    );
+    let mut probe = PublicProbeTransport::from_transport(transport(vec![
+        ("api.github.com", api),
+        ("release-assets.githubusercontent.com", cdn),
+    ]));
+    let result = probe.get(&request(), &SelectionBudget::new()).unwrap();
+    assert_eq!(result.status(), 403);
+    api_handle.join().unwrap();
+    cdn_handle.join().unwrap();
+    let observed = serde_json::to_value(probe.diagnostic()).unwrap();
+    let expected = serde_json::json!({
+        "stage":"tagged_metadata", "destination":"github_release_cdn", "redirect_count":1,
+        "http_status":403, "rate_limit_exhausted":null, "retry_after_present":true,
+    });
+    assert!(
+        observed == expected,
+        "unexpected diagnostic fields after redirect"
+    );
+
+    let (api, api_handle) = server(
+        b"HTTP/1.1 302 Found\r\nLocation: https://example.invalid/private-path?fixture=private-query\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        false,
+    );
+    let mut probe = PublicProbeTransport::from_transport(transport(vec![("api.github.com", api)]));
+    assert!(matches!(
+        probe.get(&request(), &SelectionBudget::new()),
+        Err(TrustError::Refused)
+    ));
+    api_handle.join().unwrap();
+    let observed = serde_json::to_value(probe.diagnostic()).unwrap();
+    let expected = serde_json::json!({
+        "stage":"tagged_metadata", "destination":"github_api", "redirect_count":0,
+        "http_status":302, "rate_limit_exhausted":null, "retry_after_present":false,
+    });
+    assert!(
+        observed == expected,
+        "unexpected diagnostic fields for a refused redirect"
+    );
+}
+
+#[test]
+fn public_probe_distinguishes_attestation_storage_from_release_downloads() {
+    use crate::{
+        artifact_trust::{NativeAttestations, acquire_digest_checked_asset},
+        release_identity::AssetProof,
+    };
+    let response = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let budget = SelectionBudget::new();
+    let attestation = NativeAttestations::decode(
+        br#"{"attestations":[{"initiator":"github","bundle_url":"https://tmaproduction.blob.core.windows.net/private-path?fixture=private-query"}]}"#,
+        false,
+        &budget,
+    )
+    .unwrap();
+    let (address, handle) = server(response.to_vec(), false);
+    let mut probe = PublicProbeTransport::from_transport(transport(vec![(
+        "tmaproduction.blob.core.windows.net",
+        address,
+    )]));
+    assert_eq!(
+        attestation.acquire_bundle(0, &mut probe, &budget).err(),
+        Some(TrustError::Refused)
+    );
+    handle.join().unwrap();
+    let observed = serde_json::to_value(probe.diagnostic()).unwrap();
+    let expected = serde_json::json!({
+        "stage":"attestation_bundle", "destination":"attestation_storage", "redirect_count":0,
+        "http_status":403, "rate_limit_exhausted":null, "retry_after_present":false,
+    });
+    assert!(
+        observed == expected,
+        "unexpected diagnostic for attestation storage"
+    );
+
+    for (name, stage) in [
+        ("release-index.json", "release_index"),
+        ("sbxr-linux-amd64.tar.gz", "release_archive"),
+    ] {
+        let (address, handle) = server(response.to_vec(), false);
+        let mut probe =
+            PublicProbeTransport::from_transport(transport(vec![("api.github.com", address)]));
+        let proof = AssetProof::new(name, 1, &"0".repeat(64)).unwrap();
+        assert_eq!(
+            acquire_digest_checked_asset(&mut probe, 1, &proof, &budget).err(),
+            Some(TrustError::Refused)
+        );
+        handle.join().unwrap();
+        let observed = serde_json::to_value(probe.diagnostic()).unwrap();
+        let expected = serde_json::json!({
+            "stage":stage, "destination":"github_api", "redirect_count":0,
+            "http_status":403, "rate_limit_exhausted":null, "retry_after_present":false,
+        });
+        assert!(
+            observed == expected,
+            "unexpected diagnostic for release asset"
+        );
+    }
+}
+
+#[test]
 fn unresolved_dns_is_cancelled_before_any_socket_or_late_success() {
     use std::sync::atomic::{AtomicBool, Ordering};
     struct Pending(Arc<AtomicBool>);
