@@ -21,7 +21,7 @@ func TestQ219SignedReservation(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 19 || !reflect.DeepEqual(policy[16], expected) {
+	if len(policy) != 20 || !reflect.DeepEqual(policy[16], expected) {
 		t.Fatal("exact signed build 219 reservation missing")
 	}
 	if fmt.Sprintf("%x", sha256.Sum256(mustJSON(policy[:16]))) != "2d22f822b492e55bdd3abfa5bc0681719c06aaa2a36cb5580f38baba34dde680" {
@@ -43,11 +43,11 @@ func TestQ219SignedReservation(t *testing.T) {
 		f := candidateFacts("v3")
 		f.Candidate.ATag = ""
 		f.Candidate.ASequence = 0
-		f.Candidate.BTag = "v3.1.148"
-		f.Candidate.BSequence = 222
+		f.Candidate.BTag = "v3.1.149"
+		f.Candidate.BSequence = 223
 		f.ReservedIdentities = approvedCandidateReservations()
 		if _, err := evaluateCandidatePreflight(f, mustJSON(f)); err != nil {
-			t.Fatalf("fresh build 222 refused: %v", err)
+			t.Fatalf("fresh build 223 refused: %v", err)
 		}
 		mutate(&f)
 		if _, err := evaluateCandidatePreflight(f, mustJSON(f)); err == nil {

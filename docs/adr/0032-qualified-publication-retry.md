@@ -510,3 +510,19 @@ Workflow 44119602131 was canceled with zero VPS or cleanup steps.
 Preserve draft v3.1.147 (release 448920065), its four assets, and signed
 manifest `68505f68e935c6ef3d3ddd9a54d76e99e56138880276d621c8d720c3a0346f36`.
 It remains unqualified. Build 222 needs its own signed window.
+
+## Retained q222 identity — 2026-11-19
+
+Retire signed-unqualified draft v3.1.148, build 222, release 450141673,
+from source 2b1ae4d6c702e6eff433cd418b5d616428e71852 and workflow 44321290506.
+The installer preflight stopped before product installation and the workflow
+recorded no qualification result. The signed window ended on November 18 at
+17:10:02 UTC.
+
+Keep the draft, its four exact assets and signed evidence in place. The
+qualification manifest SHA-256 is
+774894328bd2a6347ce873c9a1a2e3d750e08941bcc0a60bd6422edb029d9551.
+The release-index SHA-256 is
+c0898423020a77fd05a691304e9282c8a42b0cf52b63f79fdf9f4fa77e04434b.
+Future admission requires all twenty matching drafts and absent release and
+burn refs. The retired tag, sequence and release ID remain reserved.
