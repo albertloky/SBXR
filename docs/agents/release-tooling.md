@@ -17,6 +17,44 @@ checks which commit each caller passes.
 
 For a user-visible product failure, follow the [Rust journey](rust-product.md) as well as the driver that reported it.
 
+## Candidate deployment reviews
+
+After Albert approves the exact review at action time, submit it through GitHub's
+[normal pending-deployment review API](https://docs.github.com/en/rest/actions/workflow-runs#review-pending-deployments-for-a-workflow-run)
+using the existing authenticated reviewer when GitHub confirms eligibility. This
+is the default review path. Keep the existing credentials, permissions and
+environment protections.
+
+1. Read the exact repository, run ID and attempt, source commit, candidate
+   identity, named job ID and current status. In candidate runs, `sign` and
+   `acceptance-vps` are two separate reviews even though both use the
+   `acceptance-vps` environment label. Bind the approval to the specific waiting
+   job and its effects. For live acceptance, verify the signed deadlines and
+   that the full approved work and restoration still fit.
+2. Read the run's [pending deployments](https://docs.github.com/en/rest/actions/workflow-runs#get-pending-deployments-for-a-workflow-run)
+   with the same authenticated reviewer. Require `current_user_can_approve: true`
+   for the exact environment ID and a single unambiguous matching pending job.
+   The review request identifies an environment by ID. Refresh the run's jobs
+   and pending deployments immediately before submitting. A changed or ambiguous
+   state stops the review. Chat approval and GitHub eligibility are both required.
+   Ask Albert to use the exact GitHub job
+   link when the existing reviewer path is unavailable or GitHub requires a
+   human review. An unclear, unapproved or expired action stops here.
+3. Read the review history and exact job state after submission. If the response
+   is uncertain, reconcile both observations before any new submission. An
+   unresolved outcome stops the review. Keep the second gate closed until
+   separately authorized. The normal review does not grant broader
+   live effects, security changes, admin bypass or release publication.
+
+For [build 206](https://github.com/albertloky/SBXR/actions/runs/41165244627) on
+October 31, 2026, Albert approved the review in chat and the operator checked
+the existing account's reviewer eligibility via pending deployments. GitHub
+accepted the review. GitHub's review history records two approvals by that
+account in the shared environment. The [`sign` job](https://github.com/albertloky/SBXR/actions/runs/41165244627/job/124440936729)
+succeeded and the separate [`acceptance-vps` job](https://github.com/albertloky/SBXR/actions/runs/41165244627/job/124444088917)
+later failed. This precedent records the supported review path. Each future
+review still needs its own authorization and eligibility check.
+
 ## Implementation and focused checks
 
 These are separate from installed product behavior. For a missing menu action,
