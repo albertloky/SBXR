@@ -580,3 +580,22 @@ b4d54791aa71a2d5487e5798f0c8417fa421b0821b53130c3959a2e5ecf160d9.
 Future admission requires all twenty-three matching drafts and absent
 release and burn refs. The retired tag, sequence and release ID remain
 reserved.
+
+## Retained q226 identity — 2026-11-20
+
+Retire signed-unqualified draft v3.1.152, build 226, release 452235987,
+from source 73b0c6d6d47d8b9d11c1e6d571bba60f11373a87 and workflow
+44663342311, attempt 1. Signing and attestation succeeded. The signed
+activity cutoff was 04:47 UTC on November 20 and the restoration deadline
+was 05:47 UTC. The Owner approved closing the expired run. GitHub
+recorded the run as cancelled at 05:58:36 UTC while acceptance was still
+waiting. No acceptance step, diagnostic request, or cleanup step ran.
+
+Keep the unpublished draft, its four exact assets and signed evidence in
+place. The qualification manifest SHA-256 is
+9763600934e3444f34bc089992b09a22052e7500b617ae213530439c0e3f2ea4.
+The release-index SHA-256 is
+b93b39ab6edef7a0e9cc24e6ef28f3e834dd875bad8eafee09689d1d965419ca.
+Future admission requires all twenty-four matching drafts and absent
+release and burn refs. The retired tag, sequence and release ID remain
+reserved.
