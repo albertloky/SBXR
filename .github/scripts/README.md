@@ -267,7 +267,7 @@ The two-node profile requires VLESS Vision on TCP 443 with Chrome uTLS, even if
 incorrect wire and native values agree. Default one-node comparisons are unchanged.
 
 `readbacks(..., attempt=...)` uses the same actual primary-store provenance checks
-as the existing one-node procedure: owned protected stable source, exact
+as ordinary one-node VLESS subscription qualification: owned protected stable source, exact
 hash/size/mtime, unique complete profile and distinct private URL/profile captures
 matching the emitted bytes. A separate client process/store is not a qualification
 requirement. Do not take a target, profile policy or attempt from receipt claims.
@@ -470,4 +470,7 @@ The historical `remote_failure_cleanup` helper is not this fresh Rust path.
 
 `disclosure-diagnostic.sh` and `disclosure-diagnostic.py` collect only the signed
 diagnostic handoff in a fresh run-specific namespace. They do not execute product
-actions or produce qualification records. See the [diagnostic procedure](../../docs/acceptance/disclosure-diagnostic.md) for exact caller paths, clocks and restoration limits.
+actions or produce qualification records. See the [disclosure-only procedure](../../docs/acceptance/disclosure-diagnostic.md)
+or the [official one-node Karing test](../../docs/acceptance/karing-one-node-diagnostic.md)
+for the applicable caller paths, clocks and restoration limits. The operator
+records Karing's fresh per-node result separately from RackNerd corroboration.
