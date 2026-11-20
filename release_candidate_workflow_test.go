@@ -131,7 +131,7 @@ func TestCandidatePreflightDiagnosticsAtShellBoundary(t *testing.T) {
 set -euo pipefail
 test "$#" -eq 10
 test "${10}" = "$RUNNER_TEMP/candidate-preflight-http.json"
-test "$*" = "run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest --http-diagnostics $RUNNER_TEMP/candidate-preflight-http.json"
+test "$*" = "run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-candidate-preflight --http-diagnostics $RUNNER_TEMP/candidate-preflight-http.json"
 if test -n "$HTTP_RECEIPT"; then printf '%s' "$HTTP_RECEIPT" > "$RUNNER_TEMP/candidate-preflight-http.json"; fi
 printf 'called\n' >> verifier-called
 if test "$FIXTURE" = missing; then
@@ -254,6 +254,31 @@ exit "$VERIFIER_STATUS"
 				}
 			}
 		})
+	}
+}
+
+func TestCandidatePreflightAuthenticationOptInIsIsolated(t *testing.T) {
+	const command = " -- verify-candidate-preflight "
+	body, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight, later, found := strings.Cut(string(body), "\n  rust-native:")
+	if !found || strings.Count(preflight, command) != 1 || strings.Contains(later, command) {
+		t.Fatal("only the candidate preflight job may opt into authenticated verification")
+	}
+	for _, file := range []string{
+		".github/workflows/stable.yml",
+		".github/workflows/verify.yml",
+		".github/scripts/signing-latest-recheck.sh",
+	} {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), command) {
+			t.Errorf("%s unexpectedly opts into candidate-preflight authentication", file)
+		}
 	}
 }
 

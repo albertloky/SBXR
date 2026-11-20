@@ -44,7 +44,7 @@ fn run() -> Result<serde_json::Value> {
             "arm64-executable-sha256",
             "output",
         ],
-        "verify-public-latest" => &["http-diagnostics"],
+        "verify-public-latest" | "verify-candidate-preflight" => &["http-diagnostics"],
         "probe-public-latest" => &[],
         "verify-public-release" => &["tag"],
         "index" => &["tag", "commit", "sequence", "directory", "output"],
@@ -122,7 +122,7 @@ fn run() -> Result<serde_json::Value> {
                 serde_json::json!({"outcome":outcome,"acquisition_diagnostic":transport.diagnostic()}),
             )
         }
-        "verify-public-latest" | "verify-public-release" => {
+        "verify-public-latest" | "verify-public-release" | "verify-candidate-preflight" => {
             if command == "verify-public-release" {
                 sbxr::release_identity::ReleaseIdentity::new(
                     value(&options, "tag")?,
@@ -132,8 +132,15 @@ fn run() -> Result<serde_json::Value> {
                 .map_err(|_| PackageError("arguments"))?;
             }
             if let Some(path) = options.get("http-diagnostics") {
-                let transport = sbxr::release_https::PublicProbeTransport::new()
-                    .map_err(|_| PackageError("public-transport"))?;
+                let transport = if command == "verify-candidate-preflight" {
+                    let token =
+                        std::env::var("GH_TOKEN").map_err(|_| PackageError("preflight-auth"))?;
+                    sbxr::release_https::PublicProbeTransport::for_candidate_preflight(&token)
+                        .map_err(|_| PackageError("preflight-auth"))?
+                } else {
+                    sbxr::release_https::PublicProbeTransport::new()
+                        .map_err(|_| PackageError("public-transport"))?
+                };
                 let mut transport = public_diagnostics::DiagnosticTransport::new(transport);
                 let output = verify_public(&mut transport, None);
                 Ok(public_diagnostics::retain_http_receipt(

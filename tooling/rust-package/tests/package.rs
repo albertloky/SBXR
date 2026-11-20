@@ -150,6 +150,27 @@ fn cli(arguments: &[&str]) -> std::process::Output {
         .output()
         .unwrap()
 }
+#[test]
+fn candidate_preflight_requires_valid_environment_auth_without_logging_it() {
+    let dir = Directory::new();
+    let receipt = dir.0.join("http.json");
+    for token in [None, Some("synthetic invalid token")] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sbxr-rust-package"));
+        cmd.args(["verify-candidate-preflight", "--http-diagnostics"])
+            .arg(&receipt)
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN");
+        if let Some(token) = token {
+            cmd.env("GH_TOKEN", token);
+        }
+        let output = cmd.output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, b"rust-package/preflight-auth refused\n");
+        assert!(!receipt.exists());
+    }
+}
+
 fn populate(directory: &Path) {
     let mut hashes = Vec::new();
     for architecture in [Architecture::Amd64, Architecture::Arm64] {

@@ -90,6 +90,191 @@ fn tls_headers_and_raw_body_are_real_and_credential_free() {
         !raw.contains("authorization:") && !raw.contains("cookie:") && !raw.contains("referer:")
     );
 }
+const CANDIDATE_PREFLIGHT_TOKEN: &str = "synthetic-preflight-token";
+
+fn candidate_preflight_transport(endpoints: Vec<(&str, SocketAddr)>) -> PublicProbeTransport {
+    PublicProbeTransport::with_candidate_preflight_token(
+        transport(endpoints),
+        CANDIDATE_PREFLIGHT_TOKEN,
+    )
+    .unwrap()
+}
+
+fn assert_candidate_preflight_header(request: Vec<u8>, expected: bool) {
+    let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+    if expected {
+        assert!(request.contains("authorization: bearer synthetic-preflight-token\r\n"));
+    } else {
+        assert!(!request.contains("authorization:"));
+        assert!(!request.contains(CANDIDATE_PREFLIGHT_TOKEN));
+    }
+}
+
+#[test]
+fn candidate_preflight_latest_refusal_is_redacted_and_stays_refused() {
+    let (endpoint, request) = server(
+        b"HTTP/1.1 403 Forbidden\r\nX-RateLimit-Remaining: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        false,
+    );
+    let mut transport = candidate_preflight_transport(vec![("api.github.com", endpoint)]);
+    let result = crate::release_acquisition::AuthenticatedArchive::acquire_latest(
+        &mut transport,
+        crate::release_identity::Architecture::Amd64,
+        &SelectionBudget::new(),
+    );
+    assert!(matches!(result, Err(TrustError::Refused)));
+    assert_candidate_preflight_header(request.join().unwrap(), true);
+    let diagnostic = serde_json::to_value(transport.diagnostic()).unwrap();
+    assert_eq!(diagnostic["http_status"], 403);
+    assert_eq!(diagnostic["rate_limit_exhausted"], true);
+    assert!(!diagnostic.to_string().contains(CANDIDATE_PREFLIGHT_TOKEN));
+    assert!(!diagnostic.to_string().contains("authorization"));
+}
+
+#[test]
+fn candidate_preflight_keeps_bundle_gets_credential_free_and_refuses_pagination() {
+    use crate::artifact_trust::acquire_native_attestations;
+
+    let body = br#"{"attestations":[{"initiator":"github","bundle_url":"https://tmaproduction.blob.core.windows.net/fixture"}]}"#;
+    let response = |link: &str| {
+        [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n{link}\r\n",
+                body.len(),
+            )
+            .as_bytes(),
+            body,
+        ]
+        .concat()
+    };
+    let (api, api_request) = server(response(""), false);
+    let (storage, storage_request) = server(
+        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+        false,
+    );
+    let mut transport = candidate_preflight_transport(vec![
+        ("api.github.com", api),
+        ("tmaproduction.blob.core.windows.net", storage),
+    ]);
+    let budget = SelectionBudget::new();
+    let attestations =
+        acquire_native_attestations(&mut transport, &"a".repeat(40), &budget).unwrap();
+    assert_eq!(
+        attestations
+            .acquire_bundle(0, &mut transport, &budget)
+            .err(),
+        Some(TrustError::Refused)
+    );
+    assert_candidate_preflight_header(api_request.join().unwrap(), true);
+    assert_candidate_preflight_header(storage_request.join().unwrap(), false);
+
+    let (api, api_request) = server(
+        response("Link: <https://api.github.com/fixture?page=2>; rel=\"next\"\r\n"),
+        false,
+    );
+    let mut transport = candidate_preflight_transport(vec![("api.github.com", api)]);
+    assert_eq!(
+        acquire_native_attestations(&mut transport, &"a".repeat(40), &budget).err(),
+        Some(TrustError::Refused)
+    );
+    assert_candidate_preflight_header(api_request.join().unwrap(), true);
+}
+
+#[test]
+fn candidate_preflight_keeps_asset_redirects_credential_free_and_checks_digest() {
+    use crate::artifact_trust::acquire_digest_checked_asset;
+    use crate::release_identity::AssetProof;
+
+    for (name, body, accepted) in [
+        ("release-index.json", b"data", true),
+        ("sbxr-linux-amd64.tar.gz", b"DATA", false),
+    ] {
+        let (api, api_request) = server(
+            b"HTTP/1.1 302 Found\r\nLocation: https://release-assets.githubusercontent.com/fixture?query=synthetic-redirect\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            false,
+        );
+        let (cdn, cdn_request) = server(
+            [
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n".as_slice(),
+                body,
+            ]
+            .concat(),
+            false,
+        );
+        let mut transport = candidate_preflight_transport(vec![
+            ("api.github.com", api),
+            ("release-assets.githubusercontent.com", cdn),
+        ]);
+        let proof = AssetProof::new(name, 4, &crate::records::sha256_hex(b"data")).unwrap();
+        let result =
+            acquire_digest_checked_asset(&mut transport, 1, &proof, &SelectionBudget::new());
+        if accepted {
+            assert_eq!(result.unwrap(), b"data");
+        } else {
+            assert_eq!(result.err(), Some(TrustError::Refused));
+        }
+        assert_candidate_preflight_header(api_request.join().unwrap(), true);
+        assert_candidate_preflight_header(cdn_request.join().unwrap(), false);
+        let receipt = serde_json::to_string(&transport.diagnostic()).unwrap();
+        assert!(!receipt.contains(CANDIDATE_PREFLIGHT_TOKEN));
+        assert!(!receipt.contains("synthetic-redirect"));
+    }
+}
+
+#[test]
+fn candidate_preflight_refuses_unexpected_auth_destinations_and_invalid_tokens() {
+    let latest = AcquisitionRequest::latest_metadata();
+    for (url, expected) in [
+        (
+            "https://api.github.com:443/repos/albertloky/SBXR/releases/latest",
+            true,
+        ),
+        (
+            "http://api.github.com/repos/albertloky/SBXR/releases/latest",
+            false,
+        ),
+        (
+            "https://api.github.com:444/repos/albertloky/SBXR/releases/latest",
+            false,
+        ),
+        (
+            "https://api.github.com.invalid/repos/albertloky/SBXR/releases/latest",
+            false,
+        ),
+        (
+            "https://api.github.com/repos/albertloky/other/releases/latest",
+            false,
+        ),
+        (
+            "https://api.github.com/repos/albertloky/SBXR/releases/latest?other=1",
+            false,
+        ),
+        (
+            "https://api.github.com/repos/albertloky/SBXR/releases/assets/1",
+            false,
+        ),
+        (
+            "https://someone@api.github.com/repos/albertloky/SBXR/releases/latest",
+            false,
+        ),
+    ] {
+        assert_eq!(
+            candidate_preflight_api_request(&latest, &Url::parse(url).unwrap()),
+            expected,
+        );
+    }
+    assert!(!candidate_preflight_api_request(
+        &request(),
+        &Url::parse(request().url()).unwrap(),
+    ));
+    for token in ["", " ", "==", "invalid token", "synthetic\r\nInjected"] {
+        assert!(matches!(
+            PublicProbeTransport::with_candidate_preflight_token(transport(vec![]), token),
+            Err(TrustError::Refused)
+        ));
+    }
+}
+
 #[test]
 fn redirect_policy_and_body_limits_are_enforced() {
     let (last, end) = server(
@@ -458,6 +643,7 @@ fn unresolved_dns_is_cancelled_before_any_socket_or_late_success() {
     .with_no_client_auth();
     let mut t = HttpsTransport {
         scope: Scope::Public,
+        candidate_preflight_auth: None,
         runtime: tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

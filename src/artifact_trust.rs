@@ -670,7 +670,7 @@ impl AcquisitionRequest {
         self.limit
     }
     /// Transports must independently enforce HTTPS, reject userinfo and
-    /// nondefault ports, and cap redirects at four. No request carries credentials.
+    /// nondefault ports, and cap redirects at four. Redirects carry no credentials.
     pub fn permits_redirect(&self, url: &str, hops: usize) -> bool {
         if hops > 4 {
             return false;

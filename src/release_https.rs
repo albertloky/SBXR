@@ -1,5 +1,6 @@
-//! Certificate-verified, bounded public HTTPS acquisition. No credentials,
-//! executable handling or host effects. Redirect authorization precedes each GET.
+//! Certificate-verified, bounded public HTTPS acquisition without host effects.
+//! The repository-tool preflight can opt into narrowly scoped API authentication.
+//! Redirect authorization precedes each GET. Redirects are credential-free.
 mod gateway;
 mod probe;
 use crate::artifact_trust::{
@@ -16,6 +17,8 @@ pub struct HttpsTransport {
     runtime: tokio::runtime::Runtime,
     client: Client,
     scope: Scope,
+    #[cfg(any(test, feature = "candidate-preflight-auth"))]
+    candidate_preflight_auth: Option<header::HeaderValue>,
 }
 /// Native lifecycle delivery selection after current-process authentication.
 /// Candidate delivery does not change acquire_latest's stable proof requirements.
@@ -103,6 +106,8 @@ impl HttpsTransport {
             runtime,
             client,
             scope: Scope::Public,
+            #[cfg(any(test, feature = "candidate-preflight-auth"))]
+            candidate_preflight_auth: None,
         })
     }
     /// Fixed sandbox-safe public IPv4 probe. Uses asynchronous DNS and the same
@@ -204,6 +209,14 @@ impl HttpsTransport {
                 .timeout(remaining);
             if current.host_str() == Some("api.github.com") {
                 outgoing = outgoing.header("X-GitHub-Api-Version", GITHUB_API_VERSION);
+            }
+            #[cfg(any(test, feature = "candidate-preflight-auth"))]
+            if hop == 0
+                && matches!(self.scope, Scope::Public)
+                && candidate_preflight_api_request(request, &current)
+                && let Some(auth) = &self.candidate_preflight_auth
+            {
+                outgoing = outgoing.header(header::AUTHORIZATION, auth.clone());
             }
             if let Some(probe) = probe.as_deref_mut() {
                 probe.start_hop(current.host_str(), hop);
@@ -307,6 +320,52 @@ impl AcquisitionTransport for HttpsTransport {
         self.get_with_probe(request, budget, None)
     }
 }
+#[cfg(any(test, feature = "candidate-preflight-auth"))]
+fn candidate_preflight_api_request(request: &AcquisitionRequest, url: &Url) -> bool {
+    use crate::artifact_trust::PublicRequestStage;
+    use crate::release_identity::REPOSITORY;
+
+    if url.scheme() != "https"
+        || url.host_str() != Some("api.github.com")
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return false;
+    }
+    let Some(path) = url
+        .path()
+        .strip_prefix("/repos/")
+        .and_then(|path| path.strip_prefix(REPOSITORY))
+        .and_then(|path| path.strip_prefix('/'))
+    else {
+        return false;
+    };
+    match request.stage {
+        PublicRequestStage::LatestMetadata => path == "releases/latest" && url.query().is_none(),
+        PublicRequestStage::NativeAttestations => {
+            url.query() == Some("predicate_type=release&per_page=100")
+                && path
+                    .strip_prefix("attestations/sha1:")
+                    .is_some_and(|commit| {
+                        commit.len() == 40
+                            && commit
+                                .bytes()
+                                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                    })
+        }
+        PublicRequestStage::ReleaseIndex | PublicRequestStage::ReleaseArchive => {
+            url.query().is_none()
+                && path.strip_prefix("releases/assets/").is_some_and(|id| {
+                    id.parse::<u64>()
+                        .is_ok_and(|value| value != 0 && value.to_string() == id)
+                })
+        }
+        _ => false,
+    }
+}
+
 fn tls_config(roots: rustls::RootCertStore) -> Result<rustls::ClientConfig> {
     Ok(rustls::ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),

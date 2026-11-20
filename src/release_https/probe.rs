@@ -88,6 +88,37 @@ impl PublicProbeTransport {
         HttpsTransport::new().map(Self::from_transport)
     }
 
+    #[cfg(feature = "candidate-preflight-auth")]
+    pub fn for_candidate_preflight(token: &str) -> Result<Self> {
+        Self::with_candidate_preflight_token(HttpsTransport::new()?, token)
+    }
+
+    #[cfg(any(test, feature = "candidate-preflight-auth"))]
+    pub(super) fn with_candidate_preflight_token(
+        mut inner: HttpsTransport,
+        token: &str,
+    ) -> Result<Self> {
+        use super::TrustError;
+        use zeroize::Zeroizing;
+
+        // Validate the HTTP Bearer alphabet without relying on a token prefix.
+        let body = token.trim_end_matches('=');
+        if body.is_empty()
+            || !body.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
+            })
+        {
+            return Err(TrustError::Refused);
+        }
+        let value = Zeroizing::new(format!("Bearer {token}"));
+        let mut auth =
+            header::HeaderValue::from_bytes(value.as_bytes()).map_err(|_| TrustError::Refused)?;
+        auth.set_sensitive(true);
+        inner.candidate_preflight_auth = Some(auth);
+        Ok(Self::from_transport(inner))
+    }
+
     pub(super) fn from_transport(inner: HttpsTransport) -> Self {
         Self { inner, last: None }
     }
