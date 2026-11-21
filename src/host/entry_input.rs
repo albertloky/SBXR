@@ -227,6 +227,41 @@ impl ProtectedCandidateInput {
         }
         Ok(())
     }
+    // Only native admission with the authenticated handoff may apply this result.
+    pub(in crate::host) fn verify_one_node_purge_host(
+        &self,
+        host: &ProtectedFs,
+        time: u64,
+    ) -> Result<bool, HostError> {
+        let manifest =
+            trust::json_object(&self.files[0].bytes, self.files[0].limit).map_err(refused)?;
+        let attempt = &manifest["v3_attempt"];
+        let diagnostic = &attempt["diagnostic"];
+        if diagnostic["mode"] != "karing-one-node" {
+            return Ok(false);
+        }
+        self.verify(time)?;
+        let start = diagnostic["start_unix"]
+            .as_u64()
+            .ok_or(HostError::Foreign)?;
+        let finish = diagnostic["finish_unix"]
+            .as_u64()
+            .ok_or(HostError::Foreign)?;
+        if !(start..finish).contains(&time) {
+            return Err(HostError::Foreign);
+        }
+        let read_identity = |mode| host.raw("etc/machine-id", Mode::from_raw_mode(mode), 64);
+        let (identity, evidence) = read_identity(0o444)
+            .or_else(|_| read_identity(0o644))?
+            .ok_or(HostError::Foreign)?;
+        if identity.is_empty()
+            || evidence.gid != host.gid
+            || attempt["vps_identity_sha256"] != sha256_hex(&identity)
+        {
+            return Err(HostError::Foreign);
+        }
+        Ok(true)
+    }
     pub(in crate::host) fn selection_deadline(&self) -> Instant {
         self.until
     }

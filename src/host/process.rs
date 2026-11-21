@@ -184,9 +184,7 @@ impl CommandRunner for NativeReadOnly {
             let (program, args) = query.argv();
             let before = super::linux::verify_probe_executable(program)?;
             let output = run_observed(
-                program,
-                args,
-                "/",
+                fixed_command(program, args, "/"),
                 Duration::from_secs(5),
                 OUTPUT_LIMIT,
                 stop,
@@ -343,19 +341,48 @@ pub(super) fn run_in(
     stop: &Cancellation,
 ) -> Result<CommandOutput, HostError> {
     run_observed(
-        program,
-        args,
-        cwd,
+        fixed_command(program, args, cwd),
         timeout,
         limit,
         stop,
         &mut ProcessObservation::default(),
     )
 }
+fn fixed_command(program: &str, args: &[&str], cwd: &str) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .current_dir(cwd);
+    command
+}
+pub(super) const PROXY_PURGE: [&str; 3] = ["purge", "-y", "sing-box=1.14.3"];
+
+fn qualification_purge_command() -> Command {
+    let mut command = fixed_command("/usr/bin/apt-get", &PROXY_PURGE, "/");
+    // Noble's original Ubuntu mode overrides list-only unless a UI is explicit.
+    command
+        .env("NEEDRESTART_MODE", "l")
+        .env("NEEDRESTART_UI", "NeedRestart::UI::stdio");
+    command
+}
+pub(super) fn run_qualification_purge(
+    timeout: Duration,
+    stop: &Cancellation,
+) -> Result<CommandOutput, HostError> {
+    run_observed(
+        qualification_purge_command(),
+        timeout,
+        OUTPUT_LIMIT,
+        stop,
+        &mut ProcessObservation::default(),
+    )
+}
 fn run_observed(
-    program: &str,
-    args: &[&str],
-    cwd: &str,
+    mut command: Command,
     timeout: Duration,
     limit: usize,
     stop: &Cancellation,
@@ -370,13 +397,7 @@ fn run_observed(
     let observer = dns_observer::Scope::begin(observation.observer_query);
     observation.location = ProcessLocation::Spawn;
     let _spawn = super::timing::span(super::timing::Phase::Spawn);
-    let mut child = Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("LANG", "C")
-        .env("LC_ALL", "C")
-        .current_dir(cwd)
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

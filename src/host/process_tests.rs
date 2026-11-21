@@ -276,9 +276,7 @@ fn query_diagnostic_drain_preserves_cancel_limit_and_would_block() {
     );
     assert!(matches!(
         run_observed(
-            "/never-executed",
-            &[],
-            "/",
+            fixed_command("/never-executed", &[], "/"),
             Duration::from_secs(5),
             64,
             &stop,
@@ -329,4 +327,34 @@ fn query_diagnostic_distinguishes_observed_exit_from_pending_leader() {
         assert_eq!(row["process"].as_object().unwrap().len(), 6);
         assert!(text.lines().all(|line| line.len() < 512));
     }
+}
+
+#[test]
+fn qualification_purge_child_adds_only_two_fixed_values() {
+    let qualified = qualification_purge_command();
+    let ordinary = fixed_command("/usr/bin/apt-get", &["purge", "-y", "sing-box=1.14.3"], "/");
+    assert_eq!(qualified.get_program(), ordinary.get_program());
+    assert_eq!(
+        qualified.get_args().collect::<Vec<_>>(),
+        ordinary.get_args().collect::<Vec<_>>()
+    );
+    assert_eq!(qualified.get_current_dir(), ordinary.get_current_dir());
+    let env = |command: &Command| {
+        command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_str().unwrap().to_owned(),
+                    value.unwrap().to_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let baseline = env(&ordinary);
+    assert!(!baseline.contains_key("NEEDRESTART_MODE"));
+    assert!(!baseline.contains_key("NEEDRESTART_UI"));
+    let mut expected = baseline;
+    expected.insert("NEEDRESTART_MODE".into(), "l".into());
+    expected.insert("NEEDRESTART_UI".into(), "NeedRestart::UI::stdio".into());
+    assert_eq!(env(&qualified), expected);
 }

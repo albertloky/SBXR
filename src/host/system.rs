@@ -33,6 +33,12 @@ impl CommandSpec {
     pub fn mutation(&self) -> bool {
         self.mutation
     }
+    fn is_proxy_package_purge(&self) -> bool {
+        self.mutation
+            && self.program == "/usr/bin/apt-get"
+            && self.directory == Path::new("/")
+            && self.arguments == process::PROXY_PURGE
+    }
     fn fixed(program: &'static str, args: &[&str], mutation: bool) -> Self {
         Self {
             program,
@@ -52,11 +58,32 @@ pub trait Transport {
 }
 pub struct NativeTransport {
     lock: Option<Arc<HostLock>>,
+    standard_removal: Option<Arc<super::admission::Snapshot>>,
 }
 impl NativeTransport {
     pub fn new() -> Result<Self, HostError> {
         super::linux::require_native_environment()?;
-        Ok(Self { lock: None })
+        Ok(Self {
+            lock: None,
+            standard_removal: None,
+        })
+    }
+    pub(super) fn for_standard(
+        admission: &super::admission::NativeAdmission,
+    ) -> Result<Self, HostError> {
+        let mut transport = Self::new()?;
+        transport.standard_removal = Some(admission.retain_snapshot());
+        Ok(transport)
+    }
+
+    fn list_only_purge(&self, command: &CommandSpec) -> Result<bool, HostError> {
+        if command.is_proxy_package_purge()
+            && let Some(admission) = &self.standard_removal
+        {
+            admission.one_node_package_purge()
+        } else {
+            Ok(false)
+        }
     }
 }
 impl Transport for NativeTransport {
@@ -104,18 +131,23 @@ impl Transport for NativeTransport {
         let completion = Cancellation::new();
         let managed = command.mutation || command.program == "/usr/bin/sing-box";
         let cancellation = if managed { &completion } else { stop };
-        let result = process::run_in(
-            command.program,
-            &args,
-            command.directory.to_str().ok_or(HostError::Unsafe)?,
-            command.timeout.unwrap_or(if managed {
-                Duration::from_secs(300)
-            } else {
-                Duration::from_secs(5)
-            }),
-            process::OUTPUT_LIMIT,
-            cancellation,
-        )?;
+        let timeout = command.timeout.unwrap_or(if managed {
+            Duration::from_secs(300)
+        } else {
+            Duration::from_secs(5)
+        });
+        let result = if self.list_only_purge(command)? {
+            process::run_qualification_purge(timeout, cancellation)?
+        } else {
+            process::run_in(
+                command.program,
+                &args,
+                command.directory.to_str().ok_or(HostError::Unsafe)?,
+                timeout,
+                process::OUTPUT_LIMIT,
+                cancellation,
+            )?
+        };
         if before != super::linux::verify_probe_executable(command.program)? {
             return Err(HostError::Unsafe);
         }
@@ -487,11 +519,7 @@ impl<T: Transport> CommandRunner for SystemRunner<T> {
                 {
                     self.checked("/usr/bin/apt-mark", &["unhold", "sing-box"], stop)?;
                 }
-                self.checked(
-                    "/usr/bin/apt-get",
-                    &["purge", "-y", "sing-box=1.14.3"],
-                    stop,
-                )
+                self.checked("/usr/bin/apt-get", &process::PROXY_PURGE, stop)
             }
             RemovePackageIdentity => self.remove_identity(stop),
             ValidateConfiguration => {

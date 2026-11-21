@@ -269,3 +269,87 @@ fn reviewed_identity_sequence_raw_manifest_and_cancellation_are_independent_chec
     budget.cancel();
     assert_eq!(input.authenticate(&budget), Err(HostError::Cancelled));
 }
+
+#[test]
+fn qualification_purge_policy_leaves_ordinary_candidate_revalidation_to_existing_guard() {
+    let stage = Fixture::new();
+    let input = stage.candidate();
+    let host = Fixture::absent();
+    stage.write("staging-owned", b"1234-2\n", 0o644);
+    assert!(input.verify(stage.time).is_err());
+    assert!(
+        !input
+            .verify_one_node_purge_host(&host.root(), stage.time)
+            .unwrap()
+    );
+}
+
+#[test]
+fn qualification_purge_scope_requires_one_node_clock_and_protected_machine_id() {
+    let stage = Fixture::new();
+    let host = Fixture::absent();
+    let fs = host.root();
+    assert!(
+        !stage
+            .candidate()
+            .verify_one_node_purge_host(&fs, stage.time)
+            .unwrap()
+    );
+
+    let machine_id = b"cef24d406ee24aa8833611a6fd7de3e3\n";
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&crate::release_acquisition::fixture_candidate_manifest()).unwrap();
+    let attempt = &mut manifest["v3_attempt"];
+    attempt["diagnostic"] = serde_json::json!({
+        "mode": "karing-one-node",
+        "start_unix": stage.time - 7300,
+        "test_until_unix": stage.time - 100,
+        "finish_unix": stage.time + 3500
+    });
+    attempt["required_scenarios"] = serde_json::json!(["mvp-install"]);
+    attempt["scenario_limit_seconds"] = serde_json::json!(2700);
+    attempt["vps_identity_sha256"] = serde_json::json!(sha256_hex(machine_id));
+    stage.write(
+        "qualification-manifest.json",
+        &serde_json::to_vec(&manifest).unwrap(),
+        0o600,
+    );
+    let input = stage.candidate();
+    assert!(input.authenticate(&SelectionBudget::new()).is_err());
+    assert!(input.verify_one_node_purge_host(&fs, stage.time).is_err());
+
+    let etc = host.path.join("etc");
+    std::fs::create_dir(&etc).unwrap();
+    let identity = etc.join("machine-id");
+    let write = |bytes: &[u8]| {
+        std::fs::write(&identity, bytes).unwrap();
+        std::fs::set_permissions(&identity, std::fs::Permissions::from_mode(0o644)).unwrap();
+    };
+    write(b"wrong\n");
+    assert!(input.verify_one_node_purge_host(&fs, stage.time).is_err());
+    write(machine_id);
+    assert!(input.verify_one_node_purge_host(&fs, stage.time).unwrap());
+    assert!(
+        input
+            .verify_one_node_purge_host(&fs, stage.time + 3499)
+            .unwrap()
+    );
+    assert!(
+        input
+            .verify_one_node_purge_host(&fs, stage.time - 7301)
+            .is_err()
+    );
+    assert!(
+        input
+            .verify_one_node_purge_host(&fs, stage.time + 3500)
+            .is_err()
+    );
+
+    std::fs::rename(&identity, etc.join("original")).unwrap();
+    symlink(etc.join("original"), &identity).unwrap();
+    assert!(input.verify_one_node_purge_host(&fs, stage.time).is_err());
+    std::fs::remove_file(&identity).unwrap();
+    write(machine_id);
+    stage.write("staging-owned", b"1234-2\n", 0o644);
+    assert!(input.verify_one_node_purge_host(&fs, stage.time).is_err());
+}

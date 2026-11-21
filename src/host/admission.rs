@@ -95,6 +95,12 @@ impl Snapshot {
     pub(in crate::host) fn record(&self) -> &InstalledRecord {
         &self.record
     }
+    pub(super) fn one_node_package_purge(&self) -> Result<bool, HostError> {
+        match &self.candidate_input {
+            Some(input) => input.verify_one_node_purge_host(&self.fs, super::entry_input::now()?),
+            None => Ok(false),
+        }
+    }
     pub(in crate::host) fn root(&self) -> &Path {
         self.fs.path()
     }

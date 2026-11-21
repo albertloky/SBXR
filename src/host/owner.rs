@@ -102,7 +102,11 @@ impl<'a> NativeOwnerSources<'a> {
             }
             if r.recovery_direction() == RecoveryDirection::Cleanup {
                 (
-                    self.offline_host(SetupMaterial::tunnel_cleanup(&r)?, r.public_ipv4())?,
+                    self.offline_host(
+                        SetupMaterial::tunnel_cleanup(&r)?,
+                        r.public_ipv4(),
+                        super::system::NativeTransport::new()?,
+                    )?,
                     None,
                 )
             } else {
@@ -170,6 +174,7 @@ impl<'a> NativeOwnerSources<'a> {
             return self.offline_host(
                 super::linux::SetupMaterial::for_cleanup(record)?,
                 record.public_ipv4(),
+                super::system::NativeTransport::for_standard(self.proof)?,
             );
         }
         let require_bind = !record.as_ref().is_some_and(|r| {
@@ -205,7 +210,7 @@ impl<'a> NativeOwnerSources<'a> {
             )?
         };
         let runner = super::system::SystemRunner::native(
-            super::system::NativeTransport::new()?,
+            super::system::NativeTransport::for_standard(self.proof)?,
             &material.configuration_sha256(),
         )?;
         super::linux::LinuxHost::native_authenticated_unreleased(
@@ -217,14 +222,13 @@ impl<'a> NativeOwnerSources<'a> {
         &self,
         material: super::linux::SetupMaterial,
         public_ipv4: &str,
+        transport: super::system::NativeTransport,
     ) -> Result<
         super::linux::LinuxHost<super::system::SystemRunner<super::system::NativeTransport>>,
         HostError,
     > {
-        let runner = super::system::SystemRunner::native(
-            super::system::NativeTransport::new()?,
-            &material.configuration_sha256(),
-        )?;
+        let runner =
+            super::system::SystemRunner::native(transport, &material.configuration_sha256())?;
         super::linux::LinuxHost::native_offline_authenticated_unreleased(
             runner,
             material,
@@ -251,9 +255,11 @@ impl<'a> NativeOwnerSources<'a> {
         }
         let record = current.as_ref().or(finalizer.as_ref());
         let material = super::linux::SetupMaterial::for_removal(record)?;
-        Ok(super::linux::StandardRemovalHost::new(
-            self.offline_host(material, record.map(|r| r.public_ipv4()).unwrap_or(""))?,
-        )?
+        Ok(super::linux::StandardRemovalHost::new(self.offline_host(
+            material,
+            record.map(|r| r.public_ipv4()).unwrap_or(""),
+            super::system::NativeTransport::for_standard(self.proof)?,
+        )?)?
         .with_auxiliary(super::linux::TunnelRemovalRuntime::new(
             self.runtime()?,
             super::tunnel_native::Connector::native_unreleased()?,

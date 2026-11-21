@@ -39,3 +39,26 @@ fn native_transport_and_runner_refuse_mac_before_effects() {
         ))
     }
 }
+
+#[test]
+fn qualification_purge_matches_only_the_fixed_guarded_mutation() {
+    let purge = ["/usr/bin/apt-get", "purge", "-y", "sing-box=1.14.3"];
+    let fixed = CommandSpec::fixed(purge[0], &purge[1..], true);
+    assert!(fixed.is_proxy_package_purge());
+    let transport = NativeTransport {
+        lock: None,
+        standard_removal: None,
+    };
+    assert!(!transport.list_only_purge(&fixed).unwrap());
+    let mut wrong_directory = fixed;
+    wrong_directory.directory = "/var/lib/sbxr".into();
+    assert!(!wrong_directory.is_proxy_package_purge());
+    for unqualified in [
+        CommandSpec::fixed(purge[0], &purge[1..], false),
+        CommandSpec::fixed(purge[0], &["update"], true),
+        CommandSpec::fixed(purge[0], &["purge", "-y", "openssh-server"], true),
+        CommandSpec::fixed("/usr/bin/dpkg", &purge[1..], true),
+    ] {
+        assert!(!unqualified.is_proxy_package_purge());
+    }
+}
