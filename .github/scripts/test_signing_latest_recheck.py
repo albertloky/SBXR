@@ -20,6 +20,11 @@ class SigningDiagnostics(unittest.TestCase):
             ('refused', '{"outcome":"refused"}', 0, 1, 'refused', 'not-completed'),
             *[(name, json.dumps({'outcome':'refused','private':SECRET}), 0, 1, 'refused', 'not-completed')
               for name in HTTP_RECEIPTS],
+            ('malformed-http', '{"outcome":"refused"}', 0, 1, 'refused', 'not-completed'),
+            ('invalid-range-http', '{"outcome":"refused"}', 0, 1, 'refused', 'not-completed'),
+            ('fractional-http', '{"outcome":"refused"}', 0, 1, 'refused', 'not-completed'),
+            ('duplicate-http', '{"outcome":"refused"}', 0, 1, 'refused', 'not-completed'),
+            ('untrusted-http', '{"outcome":"refused"}', 0, 1, 'refused', 'not-completed'),
             ('unavailable', '{"outcome":"unavailable"}', 0, 1, 'unavailable', 'not-completed'),
             ('process', '', 42, 42, 'empty', 'not-started'),
             ('process-result', ACCEPTED, 42, 42, 'accepted', 'not-started'),
@@ -41,7 +46,7 @@ set -eu
 test "$#" -eq 10
 test "${*:1:8}" = 'run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest'
 test "$9" = --http-diagnostics
-test "${10}" = "${RUNNER_TEMP:-.}/signing-latest-http.json"
+test "${10}" = "${RUNNER_TEMP:-.}/signing-latest-http.raw"
 if test -n "$HTTP_RECEIPT"; then printf '%s' "$HTTP_RECEIPT" > "${10}"; fi
 if test "$CASE" = missing; then rm current-source-verification.json; else printf '%s' "$RESULT"; fi
 if test "$CASE" = terminated; then kill -TERM "$$"; fi
@@ -56,11 +61,25 @@ exit "$VERIFIER_STATUS"
                 if name.startswith('write-failure'):
                     (diagnostic_dir/'signing-latest-diagnostics.json').mkdir()
                 expected_receipt = HTTP_RECEIPTS.get(name)
+                raw_http = json.dumps(expected_receipt) if expected_receipt is not None else ''
+                if name == 'malformed-http':
+                    raw_http = '{"stage":' + SECRET
+                if name == 'invalid-range-http':
+                    raw_http = json.dumps(dict(HTTP_RECEIPTS['quota'], redirect_count=5, http_status=600))
+                if name == 'fractional-http':
+                    raw_http = json.dumps(HTTP_RECEIPTS['quota']).replace(
+                        '"redirect_count": 0', '"redirect_count": 1.000000000000000000000000001'
+                    )
+                if name == 'duplicate-http':
+                    raw_http = '{"stage":"' + SECRET + '",' + json.dumps(HTTP_RECEIPTS['quota'])[1:]
+                if name == 'untrusted-http':
+                    raw_http = json.dumps(dict(HTTP_RECEIPTS['quota'], private=SECRET))
+                expected_state = 'invalid' if name.endswith('-http') else 'recorded' if expected_receipt else 'missing'
                 env=dict(
                     os.environ, PATH=directory+os.pathsep+os.environ['PATH'], CASE=name, RESULT=result,
                     VERIFIER_STATUS=str(verifier_status), GH_TOKEN=SECRET, V3_ATTEMPT=SECRET,
                     RUNNER_TEMP=str(runner_temp),
-                    HTTP_RECEIPT=json.dumps(expected_receipt) if expected_receipt is not None else '',
+                    HTTP_RECEIPT=raw_http,
                 )
                 if name == 'accepted':
                     env.pop('RUNNER_TEMP')
@@ -74,8 +93,13 @@ exit "$VERIFIER_STATUS"
                     raw_receipt = receipt.read_text()
                     self.assertNotIn(SECRET,raw_receipt)
                     self.assertEqual(json.loads(raw_receipt),expected_receipt)
+                    self.assertEqual(receipt.stat().st_mode & 0o777,0o600)
                 if outcome is not None:
                     raw=(diagnostic_dir/'signing-latest-diagnostics.json').read_text()
                     self.assertNotIn(SECRET,raw)
-                    self.assertEqual(json.loads(raw),{'schema':'sbxr-signing-latest-diagnostics-v1','verifier_exit':verifier_status,'verifier_outcome':outcome,'baseline_comparison':comparison,'exit_status':status})
+                    summary = json.loads(raw)
+                    self.assertEqual(summary['http_receipt'], expected_state)
+                    self.assertEqual({k:v for k,v in summary.items() if k != 'http_receipt'},
+                                     {'schema':'sbxr-signing-latest-diagnostics-v2','verifier_exit':verifier_status,
+                                      'verifier_outcome':outcome,'baseline_comparison':comparison,'exit_status':status})
 if __name__=='__main__': unittest.main()
