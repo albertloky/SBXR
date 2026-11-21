@@ -635,3 +635,19 @@ The release-index SHA-256 is
 e3444151ab3294e8f47e90ffc99d82a835bf6c94d30442805c79364853b47600.
 Future admission requires all twenty-six matching drafts and absent release
 and burn refs. The retired tag, sequence and release ID remain reserved.
+
+## Retained q229 identity — 2026-11-21
+
+Retire draft v3.1.155, build 229, release 453483664, from source
+7fdf2dc6c5c0319b3ebc072ea0d83196e262e635 and workflow 44870708966,
+attempt 1. The Owner approved signing. The sign job completed its read-only VPS
+readiness check and failed at the anonymous public Latest recheck before
+creating the qualification manifest. Attestation, acceptance and cleanup were
+skipped. The filtered diagnostic recorded a refusal and no HTTP cause. Use the
+existing `unknown` reservation label and omit the qualification manifest digest.
+
+Keep the unpublished draft, its four exact assets and run evidence in place.
+The release-index SHA-256 is
+7c252746ef5e51484e6f8446321867ca404a872b22ecc6b40b20c727809b9c84.
+Future admission requires all twenty-seven matching drafts and absent release
+and burn refs. The retired tag, sequence and release ID remain reserved.
