@@ -4,6 +4,7 @@
 set -euo pipefail
 verifier_exit=0
 baseline_comparison=not-started
+diagnostics_dir="${RUNNER_TEMP:-.}"
 report_exit() {
   local status="$1" outcome
   trap - EXIT
@@ -21,11 +22,12 @@ report_exit() {
   jq -n --arg outcome "$outcome" --arg comparison "$baseline_comparison" \
     --argjson verifier_exit "$verifier_exit" --argjson status "$status" \
     '{schema:"sbxr-signing-latest-diagnostics-v1",verifier_exit:$verifier_exit,verifier_outcome:$outcome,baseline_comparison:$comparison,exit_status:$status}' \
-    | tee signing-latest-diagnostics.json >&2
+    | tee "$diagnostics_dir/signing-latest-diagnostics.json" >&2
   exit "$status"
 }
 trap 'report_exit "$?"' EXIT
-if cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest > current-source-verification.json; then
+if cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest \
+  --http-diagnostics "$diagnostics_dir/signing-latest-http.json" > current-source-verification.json; then
   verifier_exit=0
 else
   verifier_exit=$?

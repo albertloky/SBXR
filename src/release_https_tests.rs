@@ -477,6 +477,12 @@ fn public_probe_reports_only_bounded_failure_fields() {
             None,
             true,
         ),
+        (
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nx-ratelimit-remaining: 7\r\nContent-Length: 12\r\nConnection: close\r\n\r\nprivate-body",
+            200,
+            Some(false),
+            false,
+        ),
     ] {
         let (address, handle) = server(response.as_bytes().to_vec(), false);
         let mut probe =
@@ -488,10 +494,10 @@ fn public_probe_reports_only_bounded_failure_fields() {
             &budget,
         );
         handle.join().unwrap();
-        let expected_error = if status == 403 {
-            TrustError::Refused
-        } else {
+        let expected_error = if status == 429 {
             TrustError::Unavailable
+        } else {
+            TrustError::Refused
         };
         assert_eq!(result.err(), Some(expected_error));
         let observed = serde_json::to_value(probe.diagnostic()).unwrap();
@@ -520,13 +526,23 @@ fn public_probe_counts_accepted_redirects_without_recording_locations() {
         ("api.github.com", api),
         ("release-assets.githubusercontent.com", cdn),
     ]));
-    let result = probe.get(&request(), &SelectionBudget::new()).unwrap();
-    assert_eq!(result.status(), 403);
-    api_handle.join().unwrap();
-    cdn_handle.join().unwrap();
+    let proof =
+        crate::release_identity::AssetProof::new("sbxr-linux-amd64.tar.gz", 1, &"0".repeat(64))
+            .unwrap();
+    let result = crate::artifact_trust::acquire_digest_checked_asset(
+        &mut probe,
+        1,
+        &proof,
+        &SelectionBudget::new(),
+    );
+    assert_eq!(result.err(), Some(TrustError::Refused));
+    for request in [api_handle.join().unwrap(), cdn_handle.join().unwrap()] {
+        let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+        assert!(!request.contains("authorization:"));
+    }
     let observed = serde_json::to_value(probe.diagnostic()).unwrap();
     let expected = serde_json::json!({
-        "stage":"tagged_metadata", "destination":"github_release_cdn", "redirect_count":1,
+        "stage":"release_archive", "destination":"github_release_cdn", "redirect_count":1,
         "http_status":403, "rate_limit_exhausted":null, "retry_after_present":true,
     });
     assert!(

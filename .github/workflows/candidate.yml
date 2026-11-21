@@ -594,7 +594,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: candidate-signing-diagnostics
-          path: signing-latest-diagnostics.json
+          path: |
+            ${{ runner.temp }}/signing-latest-diagnostics.json
+            ${{ runner.temp }}/signing-latest-http.json
           if-no-files-found: ignore
           retention-days: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

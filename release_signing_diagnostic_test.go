@@ -29,7 +29,6 @@ func TestSigningDiagnosticsWorkflowBoundary(t *testing.T) {
 		"bash .github/scripts/signing-latest-recheck.sh",
 		"if: ${{ always() && steps.signing-manifest.outcome == 'failure' }}",
 		"name: candidate-signing-diagnostics\n",
-		"path: signing-latest-diagnostics.json\n",
 		"if-no-files-found: ignore",
 		"retention-days: 1",
 	} {
@@ -42,8 +41,9 @@ func TestSigningDiagnosticsWorkflowBoundary(t *testing.T) {
 		t.Fatal("missing diagnostic upload")
 	}
 	upload, _, _ = strings.Cut(upload, "\n      - ")
-	if strings.Count(upload, "path:") != 1 || !strings.Contains(upload, "          path: signing-latest-diagnostics.json\n") || strings.Contains(upload, "current-source-verification.json") {
-		t.Fatal("diagnostic upload must contain only filtered result")
+	const paths = "          path: |\n            ${{ runner.temp }}/signing-latest-diagnostics.json\n            ${{ runner.temp }}/signing-latest-http.json\n          if-no-files-found: ignore"
+	if strings.Count(upload, "path:") != 1 || !strings.Contains(upload, paths) {
+		t.Fatal("diagnostic upload must contain only the filtered result and typed HTTP receipt")
 	}
 	for _, forbidden := range []string{"continue-on-error:", "set -x", "BASH_COMMAND", "printenv"} {
 		if strings.Contains(sign, forbidden) {
