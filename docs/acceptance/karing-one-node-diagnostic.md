@@ -1,31 +1,63 @@
 # One-node Karing diagnostic
 
-For this one-node diagnostic, the official SBXR Karing test passes when Karing displays a
-fresh, successful latency result in milliseconds for the exact Standard VLESS/REALITY node
-imported from Albert's disposable RackNerd VPS. An import confirmation or cached latency does not pass the test. Independent
-direct-route proof is outside the Karing pass criterion. Keep the current VPN connection
-selected and preserve TUN settings as described in
-[ADR 0021](../adr/0021-karing-latency-with-current-connection.md).
+## Karing pass criterion
 
-Record the RackNerd-side corroboration separately from the Karing result. The overall
-procedure remains a separately approved diagnostic. Release Qualification has its own
-requirements. BandwagonHost, VMess/Cloudflare, HTTP subscriptions, credential rotation
-and stable publication are outside this procedure.
+The official SBXR Karing test passes when Karing displays a fresh, successful
+latency in milliseconds for the exact temporary Standard VLESS/REALITY node
+imported from the disposable RackNerd test VPS. Run the URL-delay test on that
+node. An import confirmation or cached result does not count. Record any
+RackNerd-side corroboration separately. Direct-route proof and provider-console
+availability are outside the Karing pass criterion. Release Qualification has
+its own requirements.
+
+## Operational preflight
+
+Use the verified, isolated RackNerd VPS for test work only. Leave production
+BandwagonHost untouched. Confirm direct authenticated SSH with the pinned host
+key and review the planned setup and rollback against a fresh baseline. Verify
+that the approved work preserves administrative access. The provider console
+is a recovery option. For an ordinary bounded run whose scope preserves
+administrative access, opening the console is optional. If the preflight shows
+that a planned action could interrupt administrative access, stop before that
+action and confirm a usable, supported independent recovery path and the
+authority to use it.
+
+Keep the current VPN selection, TUN settings and both Karing automatic backups
+as they are. Record the installed Karing identity for the run without pinning
+a version. Add and remove only the single temporary profile. See
+[ADR 0021](../adr/0021-karing-latency-with-current-connection.md) for preserving
+the selected connection. VMess/Cloudflare, HTTP subscriptions, credential
+rotation and stable publication are outside this procedure.
 
 ## Declare and bind
 
-Use the existing diagnostic branch of `candidate.yml`. The opt-in is the exact signed value `diagnostic.mode = "karing-one-node"`, with `scenario_limit_seconds = 2700`, `required_scenarios = ["mvp-install"]`, no attended wait and no Owner exception. Keep the existing signed 2-hour test and 3-hour restoration limits from the approved UTC start. The single request allows at most 45 minutes, with 25 minutes reserved for restoration. Earlier signed, protected runtime or Owner cutoffs tighten these limits. Budget up to 14 minutes for server work and disclosure, 5 minutes for the client, 1 minute of coordination margin, 20 minutes for product/client restoration, and 5 minutes for gateway teardown and final checks. These are operator stop allocations. The existing workflow EXIT trap can make up to twelve bounded SSH teardown attempts; it can outlast the final five-minute allocation. At the deadline stop ordinary/operator effects and report incomplete verification. Observe the independent workflow recovery and reconcile the resulting state; its retries cannot extend operator authority or establish restoration by themselves. Actual actions require positive margin for all remaining work. Budget from the request's creation, including staging or coordination after that point. Queue and signing count against the outer window. Before any acceptance SSH, the runner checks that the full 20 minutes for activity and 25 minutes for restoration fit within the signed and protected deadlines. The staged collector checks again against RackNerd's protected runtime deadline before creating a request.
+Use the existing diagnostic branch of `candidate.yml`. The opt-in is the exact signed value `diagnostic.mode = "karing-one-node"`, with `scenario_limit_seconds = 2700`, `required_scenarios = ["mvp-install"]`, no attended wait and no Owner exception. Keep the existing signed 2-hour test and 3-hour restoration limits from the approved UTC start. The single request allows at most 45 minutes, with 25 minutes reserved for restoration. Earlier signed, protected runtime or Owner cutoffs tighten these limits. Budget up to 14 minutes for server work and disclosure, 5 minutes for the client, 1 minute of coordination margin, 20 minutes for product/client restoration, and 5 minutes for gateway teardown and final checks. These are operator stop allocations. The existing workflow EXIT trap can make up to twelve bounded SSH teardown attempts; it can outlast the final five-minute allocation. At the deadline stop ordinary/operator effects and report incomplete verification. Observe the independent workflow recovery and reconcile the resulting state; its retries cannot extend operator authority or establish restoration by themselves. Actual actions require positive margin for all remaining work. Budget from the request's creation, including staging or coordination after that point. Queue and signing count against the outer window.
 
 The original diagnostic, with no mode field, keeps the disclosure discard, 30-minute request and 15-minute M1 restoration reserve. Build 221 expired without a live VPS step. Use a fresh candidate, declaration and original evidence-preserving collector. The old machine-wide GitHub redirection is a stop condition. Verify the loopback gateway on 127.0.0.1:9443, a separate ordinary process's normal GitHub trust/route and baseline hosts, trust and NAT before product setup, and again on teardown. Keep public TCP 443 available for Standard and TCP 8443 closed.
 
-Obtain separate live approval for the exact signed candidate, RackNerd host/key, client/build, private file import, single test destination and UTC deadlines. Use the existing signed-candidate, supported installation and guarded removal callers pinned to this request, with 1500 seconds reserved throughout ordinary work. Any push, signing or dispatch needs its own authority. Confirm direct authenticated SSH and independent supported recovery access, root-owned staging identity, expected service/package effects, outside evidence, installed Karing identity and secret-copy inventory. Resolve any backup, sync or network route that would send test traffic or data through an unapproved system before admitting the test. No changes to DNS, routing, TUN, provider firewall, global CA or selected server are part of this test.
+Obtain separate live approval for the exact signed candidate, RackNerd
+host/key, client/build, private file import, single test destination and UTC
+deadlines. Confirm root-owned staging identity, expected service/package
+effects, outside evidence, installed Karing identity and secret-copy inventory.
+Resolve any backup, sync or network route that would send test traffic or data
+through an unapproved system before admitting the test. Leave DNS, routing,
+TUN, provider firewall, global CA and the selected server as they are. Any
+push, signing or dispatch needs its own authority.
 
-When the Owner chooses to keep automatic backups enabled, observe the backup
-destination and inventory before Save. Karing can archive the full profile
-store, including the temporary node and credential, and rotate its local
-backups. Preserve those archives. Verify the active store and outside rejection
-after removal, and report retained or uncertain backup copies separately from
-active client and host restoration.
+The [candidate runner](../../.github/workflows/candidate.yml) requires successful
+signing and a separate protected live review. It checks the approved cutoff and
+the 20-minute activity and 25-minute restoration budgets before staging over
+host-key-pinned SSH, with a second budget check on RackNerd before the request
+is created. The runner does not check provider-console availability. Use the
+supported installation and guarded removal callers pinned to this request,
+with the 1500-second restoration reserve throughout ordinary work.
+
+Inspect the automatic backup destination and inventory before Save. Karing can
+archive the full profile store, including the temporary node and credential,
+and rotate local backups. Preserve the archives and report retained or
+uncertain backup copies separately. The restoration steps verify removal of
+the temporary active profile, outside rejection and return to the host and
+client baselines.
 
 ## Operator sequence
 
@@ -65,6 +97,9 @@ active client and host restoration.
 
 5. Add `--baseline-sha256 "$baseline_sha" --receipt-sha256 "$receipt_sha"` to the native arguments for subsequent calls. Run `before-save` after the receiver succeeds. Require an absent candidate and active client window. Use Karing's local file importer, that exact path and remark, no diversion rules or automatic testing/removal, and **one Save**. Use `inspect` to re-read the native store and full expected node fields even after an error or missing acknowledgement. Never select the new server. Only a fully attributed one-node group after an acknowledged Save may advance. Pin its group UUID from this readback. If Save was uncertain, take the cleanup path regardless of what the subsequent read shows.
 6. Run `before-test` with the retained `--group-id "$group_id"`, then initiate one fresh per-node URL-delay request to the already approved destination. Keep selection, connected and TUN state under observation. Stop on tool failure, silence, ambiguity or expiry. Record only the Karing outcome (displayed milliseconds on success), actual time and run binding. Record independently correlated RackNerd evidence separately, or mark RackNerd corroboration unverified if the evidence is missing. A generic connection count is insufficient for unique correlation. The 5-minute client window starts at handoff completion and includes Save, native readback and probe. No manual wait extends it. The readback helpers never click. The operator witnesses and records the single Save, test and Remove; re-running a readback does not license another click.
+
+## Restoration
+
 7. Stop ordinary work. For restoration, follow the **1200-second host-and-client sequence** in the [budget table](bounded-operator-cleanup.md#selected-complete-cleanup-envelopes); leave the final 300 seconds for transport and independent verification. Steps 7–9 describe the client and host checks. Perform the supported product removal in the table’s order, before spending the client UI slot. Use the earlier of the authenticated cleanup deadline, protected runtime and approved finish, minus 300 seconds, as the product/client cutoff. Recheck current ownership and legal direction. The table’s removal row allows one 360-second menu action, 30 seconds of remote supervision and 10 seconds of local supervision. With the ordinary unsealed recorder still bound, the outer runner uses `--timeout 390 --reserve 620` and the maintained menu driver uses `safety-cleanup`, the observed legal action, `--timeout 360 --cleanup-reserve 660` and the same product/client cutoff. The two layers protect the same remaining work. Stop on ambiguity or insufficient margin. For an absent candidate profile, verify baseline and independent side-file checks. For a complete group or an attributed empty shell, use `before-remove --group-id "$group_id" --expected-state "$observed_state"` (the pinned state is `empty` or `complete`) with the same current flags/pins. Only a positive exact-group decision permits one UI Remove. Both before-Save and before-test readbacks require more than 30 seconds left on the receipt’s fixed client clock; timing does not prevent an operator from clicking late, so stop the UI action at that deadline. Follow with `after-remove --group-id "$group_id"`, even for a missing acknowledgement. Wrong path, extra group/node, changed original, changed selection or ambiguous ID means stop client mutations. Preserve the exact unresolved result. No second Remove, store overwrite or app reset. The helper is a readback tool. It does not click, prove a UI click, or delete a native record.
 8. After the last required native comparison, use the receiver's `discard` on the **single** verified local URI and retain the nonsecret receipt. The exact file is checked by digest, device/inode, permissions and link count. A refusal, a lost pin or an unidentified partial file is an outstanding cleanup item. Do not reconstruct authority from the file being removed. If removing the URI is independently safe but client restoration is unproved, preserve that outcome in the report.
 

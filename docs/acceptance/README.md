@@ -9,8 +9,8 @@ under [ADR-0028](../adr/0028-clean-install-only.md). No source upgrade or subscr
 certificate issuance is required. Preparation and local tests do not prove a live pass.
 
 Use the [official one-node Karing test](karing-one-node-diagnostic.md) for the
-separately approved diagnostic. Its runbook defines the fresh per-node result
-and the separate RackNerd evidence and restoration checks.
+separately approved diagnostic on disposable RackNerd. The runbook separates
+the fresh per-node result, operator preflight, RackNerd evidence and restoration.
 
 The [bounded operator preparation](bounded-operator-cleanup.md) makes action caps,
 cleanup reserves and early-stop thresholds explicit, with separate limits for
