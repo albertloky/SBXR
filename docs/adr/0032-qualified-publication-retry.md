@@ -618,3 +618,20 @@ The release-index SHA-256 is
 Future admission requires all twenty-five matching drafts and absent
 release and burn refs. The retired tag, sequence and release ID remain
 reserved.
+
+## Retained q228 identity — 2026-11-21
+
+Retire draft v3.1.154, build 228, release 453091507, from source
+ae4005f39e7e509cbe7bab489cb8367be4448634 and workflow 44793775813,
+attempt 1. The November 20 activity cutoff was 20:32:24 UTC and the
+restoration deadline was 21:32:24 UTC. The Owner approved closing the expired
+run. GitHub recorded normal cancellation at 04:16:03 UTC on November 21.
+The signing job had no executed steps or review. The acceptance and cleanup jobs
+had no executed steps. No signed qualification manifest was produced. Use the
+existing `unknown` reservation label and omit the qualification manifest digest.
+
+Keep the unpublished draft, its four exact assets and the run evidence in place.
+The release-index SHA-256 is
+e3444151ab3294e8f47e90ffc99d82a835bf6c94d30442805c79364853b47600.
+Future admission requires all twenty-six matching drafts and absent release
+and burn refs. The retired tag, sequence and release ID remain reserved.
