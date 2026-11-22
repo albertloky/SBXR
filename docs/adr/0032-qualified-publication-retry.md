@@ -728,3 +728,18 @@ a6e634922685923448b6911f1267cb4fd5fd8850d1db3454c0053c0bae461b69.
 Future admission requires all thirty-one matching drafts and absent
 release and burn refs. The retired tag, sequence and release ID remain
 reserved.
+
+## Retained q234 identity — 2026-11-22
+
+Retire draft v3.1.160, build 234, release 454438007, from source
+`72ddf4587dfc17f7de18f194907ba8bac2cb905d` and workflow 45019124957,
+attempt 1. The [signing job](https://github.com/albertloky/SBXR/actions/runs/45019124957/job/137210860281)
+failed while creating the qualification manifest. GitHub skipped manifest
+upload and attestation. Live acceptance had zero steps. Use the existing
+q224 signing authority label `unknown` and omit the manifest digest.
+
+Keep the unpublished draft, its four exact assets and the failed run
+evidence in place. The release-index SHA-256 is
+`474d62eafaa661d0c5b73c1836f4f627068aa0157154c8485ef133d0942a9546`.
+Future admission requires all thirty-two matching drafts and absent release
+and burn refs. The retired tag, sequence and release ID remain reserved.
