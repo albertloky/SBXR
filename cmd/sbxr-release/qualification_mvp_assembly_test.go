@@ -246,7 +246,7 @@ func collectorTiming(t *testing.T, directory, draft, action string, accept bool)
 		t.Fatal(err)
 	}
 	deadline := jsonObject(t, request)["deadline_unix"].(float64)
-	script := "set -euo pipefail\numask 077\nremote=(bash -c)\ndirectory=" + shellQuote(directory) + "\ndeadline=" + fmt.Sprintf("%.0f", deadline) + "\n" + helpers + block
+	script := "set -euo pipefail\numask 077\nremote=(bash -c)\nfresh_attempt=\ndirectory=" + shellQuote(directory) + "\ndeadline=" + fmt.Sprintf("%.0f", deadline) + "\n" + helpers + block
 	script = strings.ReplaceAll(script, "/root/mvp-observation-draft.json", draft)
 	if action == "clock" {
 		script += "\ntest \"$active_deadline\" -eq \"$deadline\"\n"

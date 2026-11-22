@@ -45,14 +45,14 @@ func assertLive89WorkflowPartition(t *testing.T, workflow string) map[string]liv
 	t.Helper()
 	jobs := live89WorkflowJobs(t, workflow)
 	guard := "!fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review"
-	normal := "!inputs.inventory_only && (" + guard + ")"
+	normal := "!cancelled() && !inputs.inventory_only && needs.sign.result == 'success' && ((!inputs.fresh_window && needs.preflight.result == 'success' && " + guard + ") || (inputs.fresh_window && needs.preflight.result == 'skipped'))"
 	needs := []string{"preflight", "drafts", "sign", "acceptance-vps", "owner-exception"}
 	condition := "always() && !fromJSON(inputs.v3_attempt || '{}').diagnostic && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success'"
 	if jobs["acceptance-vps"].If != "${{ "+normal+" }}" {
 		t.Fatal("ordinary live entry must exclude archival correction")
 	}
 	needs = append(needs, "live89-correction")
-	condition += " && needs.live89-correction.result != 'success'))"
+	condition += " && needs.live89-correction.result != 'success')) && !inputs.fresh_window"
 	actual := slices.Clone(jobs["cleanup-unqualified"].Needs)
 	slices.Sort(actual)
 	slices.Sort(needs)

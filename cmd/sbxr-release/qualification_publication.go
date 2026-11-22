@@ -29,6 +29,15 @@ type stableCandidateRun struct {
 	Path       string `json:"path"`
 }
 
+type stableFreshWindowObservation struct {
+	AcceptanceConclusion string             `json:"acceptance_conclusion"`
+	OriginRun            stableCandidateRun `json:"origin_run"`
+	OriginSignConclusion string             `json:"origin_sign_conclusion"`
+	RunAttempt           int                `json:"run_attempt"`
+	WindowAttested       bool               `json:"window_attested"`
+	WindowSHA256         string             `json:"window_sha256"`
+}
+
 type stableReleaseObservation struct {
 	Assets          []decisionAsset         `json:"assets"`
 	Body            string                  `json:"body"`
@@ -43,24 +52,25 @@ type stableReleaseObservation struct {
 }
 
 type stablePreflightFacts struct {
-	AcceptanceDecision  json.RawMessage            `json:"acceptance_decision"`
-	AcceptanceFacts     json.RawMessage            `json:"acceptance_facts"`
-	Archive             stableArchiveObservation   `json:"archive"`
-	BurnedIdentities    []burnedIdentity           `json:"burned_identities"`
-	CandidateRun        stableCandidateRun         `json:"candidate_run"`
-	ChecklistSHA256     string                     `json:"checklist_sha256"`
-	LatestReleaseID     *int64                     `json:"latest_release_id"`
-	LatestTag           *string                    `json:"latest_tag"`
-	MainReview          *stableMainReview          `json:"main_review,omitempty"`
-	ManifestAttested    bool                       `json:"manifest_attested"`
-	ObservedAt          string                     `json:"observed_at"`
-	PublicationRecovery *stablePublicationRecovery `json:"publication_recovery,omitempty"`
-	Releases            []stableReleaseObservation `json:"releases"`
-	RemoteMain          string                     `json:"remote_main"`
-	Schema              string                     `json:"schema"`
-	SignedManifest      json.RawMessage            `json:"signed_manifest"`
-	Stage               string                     `json:"stage"`
-	SubscriptionHistory *v3ReleaseHistory          `json:"subscription_history,omitempty"`
+	AcceptanceDecision  json.RawMessage               `json:"acceptance_decision"`
+	AcceptanceFacts     json.RawMessage               `json:"acceptance_facts"`
+	Archive             stableArchiveObservation      `json:"archive"`
+	BurnedIdentities    []burnedIdentity              `json:"burned_identities"`
+	CandidateRun        stableCandidateRun            `json:"candidate_run"`
+	ChecklistSHA256     string                        `json:"checklist_sha256"`
+	FreshWindow         *stableFreshWindowObservation `json:"fresh_window,omitempty"`
+	LatestReleaseID     *int64                        `json:"latest_release_id"`
+	LatestTag           *string                       `json:"latest_tag"`
+	MainReview          *stableMainReview             `json:"main_review,omitempty"`
+	ManifestAttested    bool                          `json:"manifest_attested"`
+	ObservedAt          string                        `json:"observed_at"`
+	PublicationRecovery *stablePublicationRecovery    `json:"publication_recovery,omitempty"`
+	Releases            []stableReleaseObservation    `json:"releases"`
+	RemoteMain          string                        `json:"remote_main"`
+	Schema              string                        `json:"schema"`
+	SignedManifest      json.RawMessage               `json:"signed_manifest"`
+	Stage               string                        `json:"stage"`
+	SubscriptionHistory *v3ReleaseHistory             `json:"subscription_history,omitempty"`
 }
 
 type stableMainReview struct {
@@ -272,6 +282,8 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	}
 	var records []acceptanceRecord
 	var boundaryDocument json.RawMessage
+	var fresh *freshQualificationEvidence
+	var qualificationEvaluatedAt string
 	switch envelope.Stage {
 	case acceptanceVPSResultStage:
 		var acceptanceFacts acceptanceVPSResultFacts
@@ -286,7 +298,9 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
 	case v3PackagedLiveResultStage, "owner-exception-result", live89CorrectionStage:
 		var acceptanceFacts struct {
-			QualificationBoundaryFacts json.RawMessage `json:"qualification_boundary_facts"`
+			QualificationBoundaryFacts json.RawMessage             `json:"qualification_boundary_facts"`
+			FreshWindow                *freshQualificationEvidence `json:"fresh_window,omitempty"`
+			EvaluationTime             string                      `json:"evaluation_time"`
 		}
 		if json.Unmarshal(facts.AcceptanceFacts, &acceptanceFacts) != nil {
 			return refused("acceptance-facts")
@@ -297,6 +311,8 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 			return refused("acceptance-decision")
 		}
 		records, boundaryDocument = acceptance.Records, acceptanceFacts.QualificationBoundaryFacts
+		fresh = acceptanceFacts.FreshWindow
+		qualificationEvaluatedAt = acceptanceFacts.EvaluationTime
 	default:
 		return refused("acceptance-stage")
 	}
@@ -312,7 +328,7 @@ func evaluateStablePreflight(facts stablePreflightFacts, document []byte) (stabl
 	if facts.ChecklistSHA256 != manifest.AcceptanceVPSChecklistSHA256 {
 		return refused("checklist")
 	}
-	if facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) {
+	if !stableQualificationRunMatches(facts, manifest, fresh, qualificationEvaluatedAt, observedAt) {
 		return refused("candidate-run")
 	}
 	if review := facts.MainReview; review != nil && (review.CandidateCommit != manifest.Workflow.Commit || !validCommit(review.ReviewedMain) || !validSHA256(review.DivergenceSHA256) || strings.TrimSpace(review.Rationale) == "" || (review.SecurityAssessment != "unreviewed" && review.SecurityAssessment != "no-security-fixes-missing" && review.SecurityAssessment != "security-fixes-missing")) {

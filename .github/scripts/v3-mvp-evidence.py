@@ -228,6 +228,28 @@ def assemble(options):
     if type(manifest) is not dict or type(manifest.get("v3_attempt")) is not dict:
         refuse("manifest lacks a V3 attempt")
     attempt = manifest["v3_attempt"]
+    fresh = None
+    manifest_digest = digest(manifest_raw)
+    previous_root = manifest_digest
+    if options.fresh_window is not None:
+        fresh, _ = load(options.fresh_window, "fresh window", 8 * 1024 * 1024)
+        decision = fresh["window_decision"]
+        window = decision["window"]
+        previous_root = digest(canonical(decision))
+        match = re.fullmatch(r"[1-9][0-9]*", fresh["workflow"]["run_id"])
+        if (not match or fresh["run_attempt"] != 1 or window["run_attempt"] != 1 or
+                window["workflow"] != fresh["workflow"] or window["manifest_sha256"] != manifest_digest or
+                request.get("qualification_window_sha256") != previous_root):
+            refuse("request fresh-window binding differs")
+        admitted = timestamp(fresh["admitted_at"], "fresh admission")
+        request_started = timestamp(request.get("not_before"), "collector start")
+        deadline = window["finish_unix"] - 60 if request.get("scenario_id") == "mvp-removal" else window["test_until_unix"]
+        if (request_started < admitted or int(admitted.timestamp()) < window["start_unix"] or
+                type(request.get("deadline_unix")) is not int or request["deadline_unix"] > deadline):
+            refuse("request is outside the new approved clock")
+        attempt = {**attempt, "attempt_id": f"run-{match[0]}-attempt-1"}
+    elif "qualification_window_sha256" in request:
+        refuse("fresh request lacks independent window evidence")
     required = attempt.get("required_scenarios")
     if required != scenario_order(attempt) or len(previous) >= len(required):
         refuse("manifest scenario order differs")
@@ -268,7 +290,7 @@ def assemble(options):
         references.append({"record": record, "sha256": digest(canonical(record))})
 
     version = "v3" if manifest.get("schema") == "sbxr-qualification-manifest-v3" else "v2"
-    prior_digest = digest(manifest_raw) if not previous else digest(canonical(previous[-1]))
+    prior_digest = previous_root if not previous else digest(canonical(previous[-1]))
     states = {
         "mvp-install": ("Not installed", "Running"),
         "mvp-subscription": ("Running", "Running"),
@@ -326,7 +348,7 @@ def assemble(options):
         "detailed_evidence_sha256": digest(canonical(evidence)),
         "evaluation_time": validated,
         "observed_at": validated,
-        "prior_decision_sha256": digest(manifest_raw),
+        "prior_decision_sha256": previous_root,
         "qualification_boundary_facts": boundary,
         "qualification_manifest": manifest,
         "qualification_manifest_attested": True,
@@ -335,6 +357,8 @@ def assemble(options):
         "schema": "sbxr-release-qualification-facts-v1",
         "stage": "v3-scenario-result",
     }
+    if fresh is not None:
+        result["fresh_window"] = fresh
     encoded = canonical(result)
     output = Path(options.output)
     descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -353,6 +377,7 @@ def main():
             return 1
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
+    parser.add_argument("--fresh-window")
     parser.add_argument("--boundary", required=True)
     parser.add_argument("--request", required=True)
     parser.add_argument("--previous", required=True)

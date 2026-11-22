@@ -78,10 +78,19 @@ jobs:
           run_sha="$(jq -r .head_sha candidate-run.json)"
 
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID/artifacts" --paginate --slurp | jq 'map(.artifacts) | add' > artifacts.json
-          jq -e --arg signed signed-qualification-manifest --arg acceptance "installer-updater-acceptance-$QUALIFICATION_RUN_ID" '([.[] | select(.name == $signed and .expired == false)] | length) == 1 and ([.[] | select(.name == $acceptance and .expired == false)] | length) == 1' artifacts.json >/dev/null
-          mkdir -m 0700 candidate verified
-          gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir candidate/signed
-          gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "installer-updater-acceptance-$QUALIFICATION_RUN_ID" --dir candidate/acceptance
+          if jq -e 'any(.[]; .name == "fresh-qualification-window")' artifacts.json >/dev/null; then
+            bash .github/scripts/read-fresh-qualification.sh "$QUALIFICATION_RUN_ID" replay-fresh
+            test -s replay-fresh/fresh-window-observation.json
+            mkdir -m 0700 candidate verified
+            mv replay-fresh/origin candidate/signed
+            mv replay-fresh/acceptance candidate/acceptance
+            run_sha="$(jq -er '.origin_run.head_sha|select(test("^[a-f0-9]{40}$"))' replay-fresh/fresh-window-observation.json)"
+          else
+            jq -e --arg signed signed-qualification-manifest --arg acceptance "installer-updater-acceptance-$QUALIFICATION_RUN_ID" '([.[] | select(.name == $signed and .expired == false)] | length) == 1 and ([.[] | select(.name == $acceptance and .expired == false)] | length) == 1' artifacts.json >/dev/null
+            mkdir -m 0700 candidate verified
+            gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir candidate/signed
+            gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "installer-updater-acceptance-$QUALIFICATION_RUN_ID" --dir candidate/acceptance
+          fi
           cp candidate/signed/qualification-manifest.json verified/
           cd verified
           gh attestation download qualification-manifest.json --repo "$GITHUB_REPOSITORY" --limit 1
@@ -154,6 +163,10 @@ jobs:
             jq -cS --slurpfile releases current-release-history.json --slurpfile latest current-source-verification.json '. + {subscription_history:{complete:true,public_latest:$latest[0],releases:$releases[0]}}' verified/stable-preflight-facts.json | tr -d '\n' > current-history-facts.json
             mv current-history-facts.json verified/stable-preflight-facts.json
           fi
+          if test -f replay-fresh/fresh-window-observation.json; then
+            jq -cjS --slurpfile fresh replay-fresh/fresh-window-observation.json '.fresh_window=$fresh[0]'               verified/stable-preflight-facts.json > verified/stable-preflight-facts.next
+            mv verified/stable-preflight-facts.next verified/stable-preflight-facts.json
+          fi
           remote_main="$(jq -r .remote_main verified/stable-preflight-facts.json)"
           if test "$run_sha" != "$remote_main"; then
             reviewed_main="${REVIEWED_MAIN:-$remote_main}"
@@ -178,7 +191,7 @@ jobs:
             tag="$(jq -r .tag <<<"$action")"
             jq -jr .body <<<"$action" > "verified/records/$tag.md"
           done < <(jq -c '.actions[]' verified/stable-preflight-decision.json)
-          jq '{candidate:.candidate_run.head_sha,current_main:.remote_main,main_review,releases:[.releases[]|{tag,commit,assets}]}' verified/stable-preflight-facts.json >> "$GITHUB_STEP_SUMMARY"
+          jq '{candidate:(.fresh_window.origin_run.head_sha // .candidate_run.head_sha),current_main:.remote_main,main_review,releases:[.releases[]|{tag,commit,assets}]}' verified/stable-preflight-facts.json >> "$GITHUB_STEP_SUMMARY"
           if test "$publish" != true; then printf '%s\n' 'Pending divergence review; qualification preserved. No publication or burn.' >> "$GITHUB_STEP_SUMMARY"; fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -568,7 +581,12 @@ jobs:
           cp -R public stable-evidence/
           if test "$(jq -r .mode verified/qualification-manifest.json)" = v3; then
             cp stable-v3-finalization-facts.json stable-v3-finalization-decision.json stable-evidence/
-            jq -nS --slurpfile final stable-v3-finalization-decision.json --arg schema sbxr-stable-publication-evidence-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg qualification "$(jq -r .workflow.run_url verified/qualification-manifest.json)" --arg latest "$(jq -r '.releases[-1].tag' verified/qualification-manifest.json)" --arg facts_sha256 "$(sha256sum stable-v3-finalization-facts.json | cut -d' ' -f1)" --arg decision_sha256 "$(sha256sum stable-v3-finalization-decision.json | cut -d' ' -f1)" --arg prior_decision_sha256 "$(jq -r .prior_decision_sha256 stable-v3-finalization-decision.json)" '{schema:$schema,workflow_run:$workflow,qualification_run:$qualification,latest_tag:$latest,public_verification:$final[0].public_verification,v3_packaged_live:$final[0].v3_packaged_live,complete_removal:$final[0].complete_removal,finalization_facts_sha256:$facts_sha256,finalization_decision_sha256:$decision_sha256,prior_decision_sha256:$prior_decision_sha256,secret_safe_result:(if $final[0].v3_packaged_live == "Passed" then "Passed" else "Automated scans passed; live capture coverage not proved" end)}' > stable-evidence/result.json
+            provenance="$(jq -er .workflow.run_url verified/qualification-manifest.json)"
+            qualification="$(jq -er --arg provenance "$provenance" '
+              if .fresh_window == null then $provenance
+              else .acceptance_facts.fresh_window.workflow.run_url | select(type=="string" and .!=$provenance)
+              end' verified/stable-preflight-facts.json)"
+            jq -nS --slurpfile final stable-v3-finalization-decision.json --arg schema sbxr-stable-publication-evidence-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg qualification "$qualification" --arg provenance "$provenance" --arg latest "$(jq -r '.releases[-1].tag' verified/qualification-manifest.json)" --arg facts_sha256 "$(sha256sum stable-v3-finalization-facts.json | cut -d' ' -f1)" --arg decision_sha256 "$(sha256sum stable-v3-finalization-decision.json | cut -d' ' -f1)" --arg prior_decision_sha256 "$(jq -r .prior_decision_sha256 stable-v3-finalization-decision.json)" '{schema:$schema,workflow_run:$workflow,qualification_run:$qualification,latest_tag:$latest,public_verification:$final[0].public_verification,v3_packaged_live:$final[0].v3_packaged_live,complete_removal:$final[0].complete_removal,finalization_facts_sha256:$facts_sha256,finalization_decision_sha256:$decision_sha256,prior_decision_sha256:$prior_decision_sha256,secret_safe_result:(if $final[0].v3_packaged_live == "Passed" then "Passed" else "Automated scans passed; live capture coverage not proved" end)} + (if $provenance != $qualification then {artifact_provenance_run:$provenance} else {} end)' > stable-evidence/result.json
           else
             cp stable-no-update-facts.json stable-no-update-decision.json stable-evidence/
             jq -nS --arg schema sbxr-stable-publication-evidence-v1 --arg workflow "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg qualification "$(jq -r .workflow.run_url verified/qualification-manifest.json)" --arg latest "$(jq -r '.releases[-1].tag' verified/qualification-manifest.json)" --arg public_verification "$(jq -r .public_verification stable-no-update-decision.json)" --arg stable_no_update "$(jq -r .stable_no_update stable-no-update-decision.json)" --arg stable_no_update_facts_sha256 "$(sha256sum stable-no-update-facts.json | cut -d' ' -f1)" --arg stable_no_update_decision_sha256 "$(sha256sum stable-no-update-decision.json | cut -d' ' -f1)" --arg prior_decision_sha256 "$(jq -r .prior_decision_sha256 stable-no-update-decision.json)" '{schema:$schema,workflow_run:$workflow,qualification_run:$qualification,latest_tag:$latest,public_verification:$public_verification,stable_no_update:$stable_no_update,stable_no_update_facts_sha256:$stable_no_update_facts_sha256,stable_no_update_decision_sha256:$stable_no_update_decision_sha256,prior_decision_sha256:$prior_decision_sha256,secret_safe_result:"Passed"}' > stable-evidence/result.json
@@ -621,9 +639,16 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$QUALIFICATION_RUN_ID" > candidate-run.json
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > stable-run.json
           mkdir -m 0700 failure failure/burned failure/rechecked
-          gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir failure
+          bash .github/scripts/read-fresh-qualification.sh "$QUALIFICATION_RUN_ID" replay-fresh
+          if test -f replay-fresh/fresh-window-observation.json; then
+            cp replay-fresh/origin/qualification-manifest.json failure/qualification-manifest.json
+            artifact_commit="$(jq -er .origin_run.head_sha replay-fresh/fresh-window-observation.json)"
+          else
+            gh run download "$QUALIFICATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --name signed-qualification-manifest --dir failure
+            artifact_commit="$(jq -er .head_sha candidate-run.json)"
+          fi
           manifest=failure/qualification-manifest.json
-          gh attestation verify "$manifest" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$(jq -r .head_sha candidate-run.json)" >/dev/null
+          gh attestation verify "$manifest" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$artifact_commit" >/dev/null
           git config user.name github-actions
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch --force --tags origin
@@ -660,6 +685,11 @@ jobs:
           publication_stage=prepublication-failure
           if gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name stable-publication-stage --dir failure/stage 2>/dev/null; then publication_stage="$(cat failure/stage/publication-stage)"; fi
           jq -cnS --slurpfile burned failure/burned.json --slurpfile candidate candidate-run.json --slurpfile finalization stable-run.json --slurpfile manifest "$manifest" --slurpfile observations failure/observations.json --arg observed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg operation '${{ inputs.operation }}' --arg publication_stage "$publication_stage" '{burned_identities:$burned[0],candidate_commit_ancestor:true,candidate_run:{conclusion:$candidate[0].conclusion,created_at:$candidate[0].created_at,event:$candidate[0].event,head_sha:$candidate[0].head_sha,id:($candidate[0].id|tostring),path:$candidate[0].path},finalization_run:{created_at:$finalization[0].created_at,head_sha:$finalization[0].head_sha,id:($finalization[0].id|tostring),path:$finalization[0].path,url:$finalization[0].html_url},manifest_attested:true,observations:$observations[0],observed_at:$observed_at,operation:$operation,publication_stage:$publication_stage,schema:"sbxr-release-qualification-facts-v1",signed_manifest:$manifest[0],stage:"stable-failure-finalization"}' | tr -d '\n' > failure/stable-failure-facts.json
+          if test -f replay-fresh/fresh-window-observation.json; then
+            jq -cjS --slurpfile observation replay-fresh/fresh-window-observation.json               --slurpfile result replay-fresh/acceptance/acceptance-vps-result-facts.json               --slurpfile decision replay-fresh/acceptance/acceptance-vps-result-decision.json '
+                .fresh_qualification={acceptance_decision:$decision[0],acceptance_facts:$result[0],observation:$observation[0]}'               failure/stable-failure-facts.json > failure/stable-failure-facts.next
+            mv failure/stable-failure-facts.next failure/stable-failure-facts.json
+          fi
           go run ./cmd/sbxr-release qualification < failure/stable-failure-facts.json > failure/stable-failure-decision.json
           facts_sha256="$(sha256sum failure/stable-failure-facts.json | cut -d' ' -f1)"
           prior_decision_sha256="$(sha256sum "$manifest" | cut -d' ' -f1)"

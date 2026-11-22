@@ -40,13 +40,14 @@ type v3SafetyCleanup struct {
 }
 
 type v3ScenarioFailureFacts struct {
-	Failure                     v3ScenarioFailure `json:"failure"`
-	QualificationBoundaryFacts  json.RawMessage   `json:"qualification_boundary_facts"`
-	QualificationManifest       json.RawMessage   `json:"qualification_manifest"`
-	QualificationManifestSigned bool              `json:"qualification_manifest_attested"`
-	SafetyCleanup               v3SafetyCleanup   `json:"safety_cleanup"`
-	Schema                      string            `json:"schema"`
-	Stage                       string            `json:"stage"`
+	Failure                     v3ScenarioFailure           `json:"failure"`
+	FreshWindow                 *freshQualificationEvidence `json:"fresh_window,omitempty"`
+	QualificationBoundaryFacts  json.RawMessage             `json:"qualification_boundary_facts"`
+	QualificationManifest       json.RawMessage             `json:"qualification_manifest"`
+	QualificationManifestSigned bool                        `json:"qualification_manifest_attested"`
+	SafetyCleanup               v3SafetyCleanup             `json:"safety_cleanup"`
+	Schema                      string                      `json:"schema"`
+	Stage                       string                      `json:"stage"`
 }
 
 type v3ScenarioFailureDecision struct {
@@ -79,12 +80,21 @@ func evaluateV3ScenarioFailure(facts v3ScenarioFailureFacts, document []byte) (v
 	}
 	failure, attempt, release := facts.Failure, manifest.V3Attempt, manifest.Releases[0]
 	observed, timeOK := qualificationTime(failure.ObservedAt)
+	runURL := manifest.Workflow.RunURL
+	if facts.FreshWindow != nil {
+		w, ok := freshQualificationBinding(facts.FreshWindow, manifest, facts.QualificationManifest, facts.QualificationBoundaryFacts)
+		if !ok || !timeOK || observed.Unix() > w.FinishUnix || facts.FreshWindow.TransportRestoredAt != "" {
+			return refused()
+		}
+		freshAttempt := freshResultAttempt(*attempt, facts.FreshWindow)
+		attempt, runURL = &freshAttempt, facts.FreshWindow.Workflow.RunURL
+	}
 	started, _ := qualificationTime(attempt.StartedAt)
 	states := []string{"Unknown", "Not installed", "Not set up", "Running", "Problem detected", "Setup incomplete", "Change incomplete", "Removal incomplete"}
 	if !timeOK || observed.Before(started) || failure.Schema != "sbxr-v3-scenario-failure-"+attemptVersion(attempt) || failure.AttemptID != attempt.AttemptID || failure.VPSID != attempt.VPSID || !reflect.DeepEqual(failure.Candidate, release) || !slices.Contains(attempt.RequiredScenarios, failure.ScenarioID) || !independentID(failure.OperationID, "operation") || failure.ExpectedResult != "expected-safety-and-final-state-proved" || !slices.Contains([]string{"unexpected-failure", "timeout", "unexplained-drift", "evidence-refused"}, failure.ActualResult) || !slices.Contains([]string{"unknown", "observed", "before-commitment", "after-commitment", "refusal"}, failure.Boundary) || !slices.Contains(states, failure.HostState) || !slices.Contains(states, facts.SafetyCleanup.HostState) || !slices.Contains([]string{"not-started", "completed", "incomplete"}, facts.SafetyCleanup.Status) {
 		return refused()
 	}
-	burn := burnedIdentity{Commit: release.Commit, OriginalTag: release.Tag, QualificationRunURL: manifest.Workflow.RunURL, Reason: "post-sign-qualification-failure", RecordedAt: failure.ObservedAt, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Sequence: release.Sequence}
+	burn := burnedIdentity{Commit: release.Commit, OriginalTag: release.Tag, QualificationRunURL: runURL, Reason: "post-sign-qualification-failure", RecordedAt: failure.ObservedAt, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Sequence: release.Sequence}
 	return v3ScenarioFailureDecision{Burn: burn, BurnRequired: true, FactsSHA256: documentSHA256(document), Failure: failure, Outcome: "failed", SafetyCleanup: facts.SafetyCleanup, Schema: qualificationDecisionSchema, Stage: facts.Stage, StopTestMutations: true}, nil
 }
 
@@ -136,18 +146,19 @@ type v3RecurringEvidence struct {
 }
 
 type v3RecurringResultFacts struct {
-	DetailedEvidence            v3RecurringEvidence    `json:"detailed_evidence"`
-	DetailedEvidenceSHA256      string                 `json:"detailed_evidence_sha256"`
-	EvaluationTime              string                 `json:"evaluation_time"`
-	ObservedAt                  string                 `json:"observed_at"`
-	PriorDecisionSHA256         string                 `json:"prior_decision_sha256"`
-	QualificationBoundaryFacts  json.RawMessage        `json:"qualification_boundary_facts"`
-	QualificationManifest       json.RawMessage        `json:"qualification_manifest"`
-	QualificationManifestSigned bool                   `json:"qualification_manifest_attested"`
-	Releases                    []qualificationRelease `json:"releases"`
-	Runner                      acceptanceVPSRunner    `json:"runner"`
-	Schema                      string                 `json:"schema"`
-	Stage                       string                 `json:"stage"`
+	DetailedEvidence            v3RecurringEvidence         `json:"detailed_evidence"`
+	DetailedEvidenceSHA256      string                      `json:"detailed_evidence_sha256"`
+	EvaluationTime              string                      `json:"evaluation_time"`
+	FreshWindow                 *freshQualificationEvidence `json:"fresh_window,omitempty"`
+	ObservedAt                  string                      `json:"observed_at"`
+	PriorDecisionSHA256         string                      `json:"prior_decision_sha256"`
+	QualificationBoundaryFacts  json.RawMessage             `json:"qualification_boundary_facts"`
+	QualificationManifest       json.RawMessage             `json:"qualification_manifest"`
+	QualificationManifestSigned bool                        `json:"qualification_manifest_attested"`
+	Releases                    []qualificationRelease      `json:"releases"`
+	Runner                      acceptanceVPSRunner         `json:"runner"`
+	Schema                      string                      `json:"schema"`
+	Stage                       string                      `json:"stage"`
 }
 
 type v3RecurringAcceptanceRecord struct {
@@ -203,7 +214,7 @@ func recurringManifest(facts v3RecurringResultFacts) (qualificationManifest, err
 	}
 	manifest, err := evaluateQualificationBoundary(boundary)
 	encoded, marshalErr := marshalCanonical(manifest)
-	if err != nil || marshalErr != nil || !facts.QualificationManifestSigned || (manifest.Schema != "sbxr-qualification-manifest-v2" && manifest.Schema != "sbxr-qualification-manifest-v3") || manifest.V3Attempt == nil || manifest.V3Attempt.Diagnostic != nil || manifest.Mode != "v3" || (manifest.SourceState != "v3-recurring" && manifest.SourceState != "v3-subscription-clean") || len(manifest.Releases) != 1 || !bytes.Equal(encoded, facts.QualificationManifest) || facts.PriorDecisionSHA256 != documentSHA256(encoded) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || facts.Runner != manifest.V3Attempt.Runner {
+	if err != nil || marshalErr != nil || !facts.QualificationManifestSigned || (manifest.Schema != "sbxr-qualification-manifest-v2" && manifest.Schema != "sbxr-qualification-manifest-v3") || manifest.V3Attempt == nil || manifest.V3Attempt.Diagnostic != nil || manifest.Mode != "v3" || (manifest.SourceState != "v3-recurring" && manifest.SourceState != "v3-subscription-clean") || len(manifest.Releases) != 1 || !bytes.Equal(encoded, facts.QualificationManifest) || (facts.FreshWindow == nil && facts.PriorDecisionSHA256 != documentSHA256(encoded)) || !reflect.DeepEqual(facts.Releases, manifest.Releases) || facts.Runner != manifest.V3Attempt.Runner {
 		return qualificationManifest{}, errors.New("recurring qualification refused")
 	}
 	return manifest, nil
@@ -235,6 +246,16 @@ func recurringSecret(document []byte) bool {
 
 func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualificationManifest, complete bool) bool {
 	evidence, attempt := facts.DetailedEvidence, manifest.V3Attempt
+	var window qualificationWindow
+	if facts.FreshWindow != nil {
+		var accepted bool
+		window, accepted = freshResultWindow(facts, manifest, complete)
+		if !accepted {
+			return false
+		}
+		freshAttempt := freshResultAttempt(*attempt, facts.FreshWindow)
+		attempt = &freshAttempt
+	}
 	if attempt != nil && attempt.Live89CorrectionReview != nil {
 		// This declaration imports exact archival facts; it cannot fabricate a
 		// fresh ordinary scenario stream or use the live collector.
@@ -243,7 +264,7 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 	encoded, err := marshalCanonical(evidence)
 	observed, observedOK := qualificationTime(facts.ObservedAt)
 	evaluated, evaluatedOK := qualificationTime(facts.EvaluationTime)
-	if attempt == nil || facts.Schema != qualificationFactsSchema || err != nil || facts.DetailedEvidenceSHA256 != documentSHA256(encoded) || evidence.Schema != "sbxr-v3-packaged-live-evidence-"+attemptVersion(attempt) || evidence.AttemptID != attempt.AttemptID || evidence.QualificationManifestSHA256 != facts.PriorDecisionSHA256 || evidence.ObservedAt != facts.ObservedAt || !observedOK || !evaluatedOK || evaluated.Before(observed) || evaluated.Sub(observed) > 5*time.Minute || len(evidence.Scenarios) == 0 || len(evidence.Scenarios) > len(attempt.RequiredScenarios) || complete && len(evidence.Scenarios) != len(attempt.RequiredScenarios) {
+	if attempt == nil || facts.Schema != qualificationFactsSchema || err != nil || facts.DetailedEvidenceSHA256 != documentSHA256(encoded) || evidence.Schema != "sbxr-v3-packaged-live-evidence-"+attemptVersion(attempt) || evidence.AttemptID != attempt.AttemptID || evidence.QualificationManifestSHA256 != documentSHA256(facts.QualificationManifest) || evidence.ObservedAt != facts.ObservedAt || !observedOK || !evaluatedOK || evaluated.Before(observed) || evaluated.Sub(observed) > 5*time.Minute || len(evidence.Scenarios) == 0 || len(evidence.Scenarios) > len(attempt.RequiredScenarios) || complete && len(evidence.Scenarios) != len(attempt.RequiredScenarios) {
 		return false
 	}
 	previousTime, _ := qualificationTime(attempt.StartedAt)
@@ -258,6 +279,15 @@ func validRecurringEvidence(facts v3RecurringResultFacts, manifest qualification
 			limit = 2 * time.Hour
 		}
 		paused, handoffOK := validKaringHandoffs(scenario, *attempt, started, completed, limit)
+		if facts.FreshWindow != nil {
+			deadline := window.TestUntilUnix
+			if scenario.ScenarioID == "mvp-removal" {
+				deadline = window.FinishUnix - windowTransportReserve
+			}
+			if completed.Unix() > deadline || validated.Unix() > window.FinishUnix {
+				return false
+			}
+		}
 		if !handoffOK || !startOK || !completionOK || !validationOK || started.Before(previousTime) || completed.Before(started) || completed.Sub(started)-paused > limit || validated.Before(completed) || validated.Sub(completed) > 5*time.Minute || validated.After(observed) || scenario.PreflightAt != scenario.StartedAt || scenario.PriorScenarioSHA256 != previousDigest || scenario.ScenarioID != attempt.RequiredScenarios[index] || scenario.Schema != "sbxr-v3-scenario-evidence-"+attemptVersion(attempt) || scenario.AttemptID != attempt.AttemptID || scenario.VPSID != attempt.VPSID || scenario.VPSIdentitySHA256 != attempt.VPSIdentitySHA256 || !reflect.DeepEqual(scenario.Candidate, manifest.Releases[0]) || !independentID(scenario.OperationID, "operation") || operations[scenario.OperationID] || scenario.LinkID != "" && !independentID(scenario.LinkID, "link") || scenario.PackagesBefore != packages {
 			return false
 		}
@@ -491,6 +521,12 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		return "", errors.New("diagnostic cannot qualify")
 	}
 	release, attempt := manifest.Releases[0], manifest.V3Attempt
+	evidenceRun := manifest.Workflow.RunURL
+	if facts.FreshWindow != nil {
+		freshAttempt := freshResultAttempt(*attempt, facts.FreshWindow)
+		attempt = &freshAttempt
+		evidenceRun = facts.FreshWindow.Workflow.RunURL
+	}
 	role, code, recordSchema := "Recurring subscription-capable V3 release", "RELEASE-V3-SUBSCRIPTION-QUALIFICATION", "sbxr-acceptance-record-v2"
 	var notApplicable []string
 	if attemptVersion(attempt) == "v3" {
@@ -513,7 +549,7 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 	var body strings.Builder
 	for _, line := range []string{
 		"# SBXR Acceptance Record", "Status: " + status, "Repository: " + release.ReleaseIdentity.Repository, "Tag: " + release.Tag, "Commit: " + release.Commit,
-		"Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + manifest.Workflow.RunURL,
+		"Release index SHA-256: " + release.ReleaseIdentity.ReleaseIndexSHA256, "Sequence: " + strconv.FormatUint(release.Sequence, 10), "Workflow evidence: " + evidenceRun,
 		"Acceptance time: " + facts.EvaluationTime, "Runner: Ubuntu Server 24.04 linux/amd64", "Go toolchain: " + attempt.Runner.GoToolchain, "Public verifier: " + attempt.Runner.PublicVerifier,
 		"Qualification role: " + role, "Detailed evidence SHA-256: " + facts.DetailedEvidenceSHA256,
 		"Stable result code: " + code, "Module Verification: Passed", "Seam Verification: Passed", "Integrated Verification: " + integrated, "Codex Live Acceptance: " + live, "Owner Acceptance: " + owner, "Secret-safe result: " + secretSafe, "Karing macOS: " + karing,
@@ -521,6 +557,10 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		"Unsupported new or renamed renewal route: May execute before detection; historical outcomes unknown",
 	} {
 		body.WriteString(line + "\n")
+	}
+	if facts.FreshWindow != nil {
+		body.WriteString("Artifact provenance: " + manifest.Workflow.RunURL + "\n")
+		body.WriteString("Approved test-window SHA-256: " + facts.PriorDecisionSHA256 + "\n")
 	}
 	if ownerExceptionManifest(manifest) {
 		body.WriteString("Owner exception: " + profile.ID + "\nLive qualification: Incomplete\nClient compatibility: " + profile.Client + "\n")
@@ -582,13 +622,13 @@ func buildRecurringAcceptanceRecord(manifest qualificationManifest, facts v3Recu
 		if mvpRecurringAttempt(*attempt) && strings.HasPrefix(scenario.ScenarioID, "mvp-") {
 			prefix = "Journey: "
 		}
-		body.WriteString(prefix + scenario.ScenarioID + " " + documentSHA256(encoded) + " " + manifest.Workflow.RunURL + "#artifacts\n")
+		body.WriteString(prefix + scenario.ScenarioID + " " + documentSHA256(encoded) + " " + evidenceRun + "#artifacts\n")
 	}
 	encoded, err := marshalCanonical(v3RecurringAcceptanceRecord{
-		AcceptedAt: facts.EvaluationTime, Assets: release.Assets, Attempt: *attempt, DetailedEvidenceSHA256: facts.DetailedEvidenceSHA256, Evidence: []string{manifest.Workflow.RunURL + "#artifacts"},
+		AcceptedAt: facts.EvaluationTime, Assets: release.Assets, Attempt: *attempt, DetailedEvidenceSHA256: facts.DetailedEvidenceSHA256, Evidence: []string{evidenceRun + "#artifacts"},
 		NotApplicable: notApplicable, QualificationRole: role, ReleaseIdentity: release.ReleaseIdentity, Runner: "Ubuntu Server 24.04 linux/amd64", Schema: recordSchema, SecretSafeResult: secretSafe, Sequence: release.Sequence,
 		Software: acceptanceRecordSoftware{GoToolchain: attempt.Runner.GoToolchain, PublicVerifier: attempt.Runner.PublicVerifier}, StableResultCode: code,
-		Stages: acceptanceRecordStages{CodexLiveAcceptance: live, IntegratedVerification: integrated, ModuleVerification: "Passed", OwnerAcceptance: owner, SeamVerification: "Passed"}, WorkflowRun: manifest.Workflow.RunURL,
+		Stages: acceptanceRecordStages{CodexLiveAcceptance: live, IntegratedVerification: integrated, ModuleVerification: "Passed", OwnerAcceptance: owner, SeamVerification: "Passed"}, WorkflowRun: evidenceRun,
 	})
 	if err != nil {
 		return "", err

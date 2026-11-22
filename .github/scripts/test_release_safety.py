@@ -224,6 +224,9 @@ class EvidenceTests(unittest.TestCase):
             if job == 'cleanup-unqualified':
                 self.assertIn('if: ${{ !inputs.inventory_only && (always()) }}\n        run: python3 .github/scripts/candidate-evidence.py', body)
                 self.assertIn("if: ${{ !inputs.inventory_only && (always() && steps.retained_evidence.outcome == 'success') }}", body)
+            elif job == 'drafts':
+                self.assertIn('if: ${{ always() && !inputs.fresh_window }}\n        run: python3 .github/scripts/candidate-evidence.py', body)
+                self.assertIn("if: ${{ always() && !inputs.fresh_window && steps.retained_evidence.outcome == 'success' }}", body)
             else:
                 self.assertIn('if: always()\n        run: python3 .github/scripts/candidate-evidence.py', body)
                 self.assertIn("if: always() && steps.retained_evidence.outcome == 'success'", body)
@@ -358,7 +361,9 @@ class SSHDeadlineTests(unittest.TestCase):
         cleanup = source.split('stop_attempt() {',1)[1].split('trap stop_attempt EXIT',1)[0]
         self.assertIn('remote[2]=10', cleanup)
         self.assertLess(cleanup.index('remote[2]=10'),cleanup.index('cleanup_mvp_observation'))
-        self.assertIn('if python3 .github/scripts/bounded-ssh.py 90', WORKFLOW.read_text())
+        workflow = WORKFLOW.read_text()
+        self.assertIn('timeout=90', workflow)
+        self.assertIn('if python3 .github/scripts/bounded-ssh.py "$timeout"', workflow)
 
     def test_stalled_transport_is_killed_and_reaped_without_retry(self):
         module=load('bounded-ssh')

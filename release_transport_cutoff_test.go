@@ -443,7 +443,7 @@ func TestWorkflowPropagatesExplicitTransportCutoff(t *testing.T) {
 			journey = step.Run
 		}
 	}
-	firstSSH := strings.Index(journey, `ssh "${ssh_options[@]}"`)
+	firstSSH := strings.Index(journey, `bounded-ssh.py 30 "${ssh_options[@]}"`)
 	if i := strings.Index(journey, validation); i < 0 || firstSSH < 0 || i > firstSSH {
 		t.Fatal("cutoff must be checked before host staging")
 	}
@@ -456,6 +456,12 @@ func TestWorkflowPropagatesExplicitTransportCutoff(t *testing.T) {
 	if up == "" {
 		t.Fatal("transport startup command missing")
 	}
+	_, launcher, found := strings.Cut(journey, "stage_transport=(ssh)")
+	launcher, _, endFound := strings.Cut(launcher, `"${stage_transport[@]}"`)
+	if !found || !endFound {
+		t.Fatal("transport launcher missing")
+	}
+	launcher = "stage_transport=(ssh)" + launcher
 	var preflight string
 	for _, step := range workflow.Jobs["preflight"].Steps {
 		preflight += step.Run
@@ -479,7 +485,7 @@ exec bash -c "$command"
 			if err := os.WriteFile(filepath.Join(fixture.bin, "ssh"), []byte(stub), 0700); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("bash", "-c", "set -euo pipefail\nssh_options=()\n"+validation+"\n"+up)
+			cmd := exec.Command("bash", "-c", "set -euo pipefail\nssh_options=()\n"+validation+"\n"+launcher+up)
 			cmd.Env = append(os.Environ(), "PATH="+fixture.bin+":"+os.Getenv("PATH"), "SBXR_CUTOFF_FIXTURE="+fixture.directory, "SBXR_CUTOFF_NOW="+strconv.FormatInt(cutoffFixtureNow, 10), "SECURITY_CUTOFF_UNIX="+cutoff, "ACCEPTANCE_VPS_HOST=fixture")
 			out, err := cmd.CombinedOutput()
 			if cutoff != strconv.FormatInt(cutoffFixtureNow+1200, 10) {

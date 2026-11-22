@@ -93,6 +93,12 @@ func runQualification(input io.Reader, output io.Writer) error {
 			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
 		}
 		decision, err = evaluateCandidateDraftVerification(facts, document)
+	case qualificationWindowStage:
+		var facts qualificationWindowFacts
+		if !decodeCanonical(document, &facts) {
+			return qualificationRefused(envelope.Stage+"/canonical-facts", nil)
+		}
+		decision, err = evaluateQualificationWindow(facts, document)
 	case qualificationBoundaryStage:
 		var facts qualificationBoundaryFacts
 		if !decodeCanonical(document, &facts) {

@@ -43,6 +43,15 @@ submit_result() {
     ((.stage == "v3-scenario-failure" and .failure.scenario_id == $scenario) or
      (.stage == "v3-scenario-result" and .detailed_evidence.scenarios[-1].scenario_id == $scenario))
   ' "$submit_facts" >/dev/null
+  local submit_window
+  submit_window="$(jq -r '.qualification_window_sha256 // empty' <<<"$submit_request_json")"
+  if test -n "$submit_window"; then
+    [[ "$submit_window" =~ ^[0-9a-f]{64}$ ]]
+    jq -ejcS '.fresh_window.window_decision | objects' "$submit_facts" |
+      sha256sum | cut -d' ' -f1 | grep -Fxq "$submit_window"
+  else
+    jq -e '.fresh_window == null' "$submit_facts" >/dev/null
+  fi
   submit_size="$(wc -c < "$submit_facts" | tr -d ' ')"
   test "$submit_size" -gt 0
   test "$submit_size" -le 16777216
@@ -74,6 +83,15 @@ fi
 jq -e '.v3_attempt.diagnostic == null' "$manifest" >/dev/null
 chmod 0600 "$manifest" "$boundary"
 digest="$(sha256sum "$manifest" | cut -d' ' -f1)"
+fresh=handoff/fresh-window-evidence.json
+prior_digest=$digest
+fresh_attempt=
+if test -f "$fresh"; then
+  prior_digest="$(jq -ejcS '.window_decision|objects' "$fresh" | sha256sum | cut -d' ' -f1)"
+  fresh_attempt="$(jq -er '.workflow.run_id | select(test("^[1-9][0-9]*$"))' "$fresh")"
+  fresh_window="$(jq -ecr '.window_decision.window' "$fresh")"
+  jq -e --arg digest "$digest" '.manifest_sha256 == $digest and .run_attempt == 1' <<<"$fresh_window" >/dev/null
+fi
 directory="$(mktemp -d)"
 mkdir -m 0700 handoff/v3-scenarios
 printf '[]' > "$directory/previous.json"
@@ -82,6 +100,7 @@ scenario="$(jq -r '.v3_attempt.required_scenarios[0]' "$manifest")"
 operation=operation-1
 reason=unexpected-failure
 mvp_observation_remote=
+namespace_owned=false
 
 cleanup_mvp_observation() {
   if test -n "$mvp_observation_remote"; then
@@ -120,7 +139,7 @@ stop_attempt() {
   # Each failure-notification/observation cleanup call gets a fresh 10s budget.
   remote[2]=10
   if ! cleanup_mvp_observation; then status=1; fi
-  if test "$status" -ne 0; then
+  if test "$status" -ne 0 && test "$namespace_owned" = true; then
     # Do not fetch raw output or run product cleanup against uncertain state.
     "${remote[@]}" 'if test -e /root/sbxr-qualification-evidence || test -L /root/sbxr-qualification-evidence; then test -d /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence && request=/root/sbxr-qualification-evidence/request.json && test -f "$request" && test ! -L "$request" && printf "%s\n" STOP > "$request"; fi' || true
     mkdir -p handoff/failure-evidence
@@ -128,6 +147,10 @@ stop_attempt() {
       cp "$directory/retained-failure.json" "$directory/failure.json"
     else
       jq -cnS --slurpfile m "$manifest" --slurpfile b "$boundary" --arg scenario "$scenario" --arg operation "$operation" --arg reason "$reason" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{failure:{actual_result:$reason,attempt_id:$m[0].v3_attempt.attempt_id,boundary:"unknown",candidate:$m[0].releases[0],expected_result:"expected-safety-and-final-state-proved",host_state:"Unknown",observed_at:$now,operation_id:$operation,scenario_id:$scenario,schema:(if $m[0].schema == "sbxr-qualification-manifest-v3" then "sbxr-v3-scenario-failure-v3" else "sbxr-v3-scenario-failure-v2" end),vps_id:$m[0].v3_attempt.vps_id},qualification_boundary_facts:$b[0],qualification_manifest:$m[0],qualification_manifest_attested:true,safety_cleanup:{host_state:"Unknown",status:"not-started"},schema:"sbxr-release-qualification-facts-v1",stage:"v3-scenario-failure"}' | tr -d '\n' > "$directory/failure.json"
+    fi
+    if test -n "$fresh_attempt" && test "$reason" != failure-recorded; then
+      jq -cjS --slurpfile fresh "$fresh" --arg id "run-$fresh_attempt-attempt-1"         '.fresh_window=$fresh[0] | .failure.attempt_id=$id' "$directory/failure.json" > "$directory/failure.next"
+      mv "$directory/failure.next" "$directory/failure.json"
     fi
     if "$tool" qualification < "$directory/failure.json" > "$directory/failure-decision.json" && jq -e '.outcome == "failed" and .stop_test_mutations and .burn_required' "$directory/failure-decision.json" >/dev/null; then
       cp "$directory/failure.json" "$directory/failure-decision.json" handoff/failure-evidence/
@@ -141,7 +164,19 @@ trap stop_attempt EXIT
 
 actual_vps="$("${remote[@]}" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && sha256sum /etc/machine-id' | cut -d' ' -f1)"
 test "$actual_vps" = "$(jq -r .v3_attempt.vps_identity_sha256 "$manifest")"
-"${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence && install -d -m 0700 /root/sbxr-qualification-evidence'
+if test -n "$fresh_attempt"; then
+  # The protected runner already checked the window. Use the host's clock and
+  # actual transport bound for the last check before claiming a request path.
+  host_now="$("${remote[@]}" 'date +%s')"
+  runtime_deadline="$("${remote[@]}" 'set -eu; f=/root/sbxr-qualification-v3/runtime-deadline; test -f "$f"; test ! -L "$f"; test -O "$f"; cat "$f"')"
+  [[ "$host_now" =~ ^[1-9][0-9]{0,9}$ && "$runtime_deadline" =~ ^[1-9][0-9]{0,9}$ ]]
+  jq -e --argjson now "$host_now" --argjson runtime "$runtime_deadline" '
+    .start_unix <= $now and $now + 1200 <= .test_until_unix and
+    $now + 2760 <= .finish_unix and $now + 2700 <= $runtime
+  ' <<<"$fresh_window" >/dev/null
+fi
+"${remote[@]}" 'mkdir -m 0700 /root/sbxr-qualification-evidence'
+namespace_owned=true
 
 index=0
 while IFS= read -r next_scenario <&3; do
@@ -152,8 +187,22 @@ while IFS= read -r next_scenario <&3; do
   if test "$scenario" = mvp-subscription; then limit=7200; fi
   started="$(date +%s)"
   deadline=$((started + limit))
+  if test -n "$fresh_attempt"; then
+    phase_cutoff="$(jq -er --arg scenario "$scenario" 'if $scenario=="mvp-removal" then .finish_unix-60 else .test_until_unix end' <<<"$fresh_window")"
+    if test "$runtime_deadline" -lt "$phase_cutoff"; then phase_cutoff=$runtime_deadline; fi
+    if test "$started" -ge "$phase_cutoff" ||
+       { test "$scenario" = mvp-removal && test "$((phase_cutoff - started))" -lt 1500; }; then
+      reason=timeout
+      exit 1
+    fi
+    if test "$deadline" -gt "$phase_cutoff"; then deadline=$phase_cutoff; fi
+  fi
   required_checks=$(mvp_required_checks "$scenario")
   jq -cnS --arg scenario "$scenario" --arg digest "$digest" --arg checks "$required_checks" --argjson limit "$limit" --argjson deadline "$deadline" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{deadline_unix:$deadline,not_before:$now,qualification_manifest_sha256:$digest,required_checks:($checks | split(" ")),scenario_id:$scenario,scenario_limit_seconds:$limit}' | tr -d '\n' > "$directory/request.json"
+  if test -n "$fresh_attempt"; then
+    jq -cjS --arg digest "$prior_digest" '.qualification_window_sha256=$digest' "$directory/request.json" > "$directory/request.next"
+    mv "$directory/request.next" "$directory/request.json"
+  fi
   if jq -e '.v3_attempt.karing_response_limit_seconds == 3600' "$manifest" >/dev/null; then
     jq -cS --slurpfile m "$manifest" '. + {karing_response_limit_seconds:3600,attended_finish_by:$m[0].v3_attempt.attended_finish_by}' "$directory/request.json" | tr -d '\n' > "$directory/request.next"
     mv "$directory/request.next" "$directory/request.json"
@@ -166,7 +215,11 @@ while IFS= read -r next_scenario <&3; do
       test -z "$mvp_observation_remote"
       mvp_observation_remote=/root/sbxr-qualification-evidence/observation.json
       "${remote[@]}" "test ! -L '$mvp_observation_remote' && test \"\$(stat -c '%a:%u:%h:%F' '$mvp_observation_remote')\" = '600:0:1:regular file' && test \"\$(stat -c %s '$mvp_observation_remote')\" -le 1000000 && cat '$mvp_observation_remote'" > "$directory/mvp-observation.json"
-      python3 .github/scripts/v3-mvp-evidence.py --manifest "$manifest" --boundary "$boundary" --request "$directory/request.json" --previous "$directory/previous.json" --observation "$directory/mvp-observation.json" --output "$directory/mvp-facts.json"
+      if test -n "$fresh_attempt"; then
+        python3 .github/scripts/v3-mvp-evidence.py --manifest "$manifest" --boundary "$boundary" --request "$directory/request.json" --previous "$directory/previous.json" --observation "$directory/mvp-observation.json" --output "$directory/mvp-facts.json" --fresh-window "$fresh"
+      else
+        python3 .github/scripts/v3-mvp-evidence.py --manifest "$manifest" --boundary "$boundary" --request "$directory/request.json" --previous "$directory/previous.json" --observation "$directory/mvp-observation.json" --output "$directory/mvp-facts.json"
+      fi
       "$tool" qualification < "$directory/mvp-facts.json" > "$directory/mvp-decision.json"
       jq -e '.outcome == "accepted" and .records == []' "$directory/mvp-decision.json" >/dev/null
       submit_result "$1" "$2" "$3" "$manifest" "$directory/mvp-facts.json"
@@ -184,13 +237,18 @@ while IFS= read -r next_scenario <&3; do
       fi
       active_deadline=$(python3 .github/scripts/mvp-observe.py deadline --request "$directory/request.json" --draft "$directory/mvp-timing-draft.json")
     fi
-    if test "$(date +%s)" -gt "$((active_deadline + 300))"; then reason=timeout; exit 1; fi
+    poll_until=$((active_deadline + 300))
+    if test -n "$fresh_attempt" && test "$phase_cutoff" -lt "$poll_until"; then poll_until=$phase_cutoff; fi
+    if test "$(date +%s)" -gt "$poll_until"; then reason=timeout; exit 1; fi
     sleep 2
   done
 
   reason=evidence-refused
   "${remote[@]}" 'test ! -L /root/sbxr-qualification-evidence/result.json && test "$(stat -c "%a:%u:%h:%F" /root/sbxr-qualification-evidence/result.json)" = "600:0:1:regular file" && test "$(stat -c %s /root/sbxr-qualification-evidence/result.json)" -le 16777216 && cat /root/sbxr-qualification-evidence/result.json' > "$directory/input.json"
   # Validate original bytes before jq so duplicate and unknown keys cannot disappear.
+  if test -n "$fresh_attempt"; then
+    jq -e --slurpfile fresh "$fresh" '.fresh_window == $fresh[0]' "$directory/input.json" >/dev/null
+  fi
   "$tool" qualification < "$directory/input.json" > "$directory/decision.json"
   if jq -e '.stage == "v3-scenario-failure"' "$directory/input.json" >/dev/null; then
     jq -e --slurpfile m "$manifest" --arg scenario "$scenario" '.qualification_manifest == $m[0] and .failure.scenario_id == $scenario' "$directory/input.json" >/dev/null
@@ -200,7 +258,7 @@ while IFS= read -r next_scenario <&3; do
     exit 1
   fi
   "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/observation.json && test ! -L /root/sbxr-qualification-evidence/observation.json'
-  jq -e --arg digest "$digest" --arg scenario "$scenario" --argjson count "$index" --slurpfile previous "$directory/previous.json" '.stage == "v3-scenario-result" and .prior_decision_sha256 == $digest and (.detailed_evidence.scenarios | length) == $count and .detailed_evidence.scenarios[-1].scenario_id == $scenario and .detailed_evidence.scenarios[:-1] == $previous[0]' "$directory/input.json" >/dev/null
+  jq -e --arg digest "$prior_digest" --arg scenario "$scenario" --argjson count "$index" --slurpfile previous "$directory/previous.json" '.stage == "v3-scenario-result" and .prior_decision_sha256 == $digest and (.detailed_evidence.scenarios | length) == $count and .detailed_evidence.scenarios[-1].scenario_id == $scenario and .detailed_evidence.scenarios[:-1] == $previous[0]' "$directory/input.json" >/dev/null
   jq -e '.outcome == "accepted" and .records == []' "$directory/decision.json" >/dev/null
   completed="$(date -u -d "$(jq -r '.detailed_evidence.scenarios[-1].completed_at' "$directory/input.json")" +%s)"
   recorded_start="$(date -u -d "$(jq -r '.detailed_evidence.scenarios[-1].started_at' "$directory/input.json")" +%s)"
@@ -234,8 +292,10 @@ done 3< <(jq -r '.v3_attempt.required_scenarios[]' "$manifest")
 
 "${remote[@]}" 'test ! -e /usr/local/bin/sbxr && test ! -L /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -L /var/lib/sbxr && test -d /root/sbxr-qualification-evidence && test ! -L /root/sbxr-qualification-evidence && test -f /root/sbxr-qualification-evidence/request.json && test ! -L /root/sbxr-qualification-evidence/request.json && rm /root/sbxr-qualification-evidence/request.json && rmdir /root/sbxr-qualification-evidence'
 jq -cS --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.stage = "v3-packaged-live-result" | .evaluation_time = $now' "$directory/input.json" | tr -d '\n' > "$directory/final.json"
-"$tool" qualification < "$directory/final.json" > "$directory/decision.json"
-jq -e '.outcome == "accepted" and (.records | length) == 1' "$directory/decision.json" >/dev/null
 cp "$directory/final.json" handoff/v3-packaged-live-result-facts.json
-cp "$directory/decision.json" handoff/v3-packaged-live-result-decision.json
+if test -z "$fresh_attempt"; then
+  "$tool" qualification < "$directory/final.json" > "$directory/decision.json"
+  jq -e '.outcome == "accepted" and (.records | length) == 1' "$directory/decision.json" >/dev/null
+  cp "$directory/decision.json" handoff/v3-packaged-live-result-decision.json
+fi
 jq -cS '.detailed_evidence' "$directory/input.json" | tr -d '\n' > handoff/v3-packaged-live-evidence.json

@@ -38,11 +38,18 @@ type stableFailureObservation struct {
 	TagCommit        *string                 `json:"tag_commit"`
 }
 
+type stableFreshQualification struct {
+	AcceptanceDecision json.RawMessage              `json:"acceptance_decision"`
+	AcceptanceFacts    json.RawMessage              `json:"acceptance_facts"`
+	Observation        stableFreshWindowObservation `json:"observation"`
+}
+
 type stableFailureFacts struct {
 	BurnedIdentities        []burnedIdentity           `json:"burned_identities"`
 	CandidateCommitAncestor bool                       `json:"candidate_commit_ancestor"`
 	CandidateRun            stableCandidateRun         `json:"candidate_run"`
 	FinalizationRun         stableFinalizationRun      `json:"finalization_run"`
+	FreshQualification      *stableFreshQualification  `json:"fresh_qualification,omitempty"`
 	ManifestAttested        bool                       `json:"manifest_attested"`
 	Observations            []stableFailureObservation `json:"observations"`
 	ObservedAt              string                     `json:"observed_at"`
@@ -209,7 +216,26 @@ func evaluateStableFailure(facts stableFailureFacts, document []byte) (stableFai
 	if facts.Schema != qualificationFactsSchema || facts.Stage != stableFailureStage || !facts.ManifestAttested || facts.Observations == nil || facts.BurnedIdentities == nil || secretBearing(document) || observedErr != nil || createdErr != nil || finalizationErr != nil || observedAt.Format(time.RFC3339) != facts.ObservedAt || finalizationAt.Format(time.RFC3339) != facts.FinalizationRun.CreatedAt || observedAt.Before(finalizationAt) || observedAt.Before(createdAt) || !validFailureBurns(facts.BurnedIdentities) || !decodeCanonical(facts.SignedManifest, &manifest) || !validStableFailureManifest(manifest) {
 		return refused()
 	}
-	if !facts.CandidateCommitAncestor || facts.CandidateRun != (stableCandidateRun{Conclusion: "success", CreatedAt: facts.CandidateRun.CreatedAt, Event: "workflow_dispatch", HeadSHA: manifest.Workflow.Commit, ID: manifest.Workflow.RunID, Path: manifest.Workflow.Path}) || !validStableFinalizationRun(facts.FinalizationRun) || len(facts.Observations) != len(manifest.Releases) {
+	if !facts.CandidateCommitAncestor || !validStableFinalizationRun(facts.FinalizationRun) || len(facts.Observations) != len(manifest.Releases) {
+		return refused()
+	}
+	qualificationRunURL := manifest.Workflow.RunURL
+	if fresh := facts.FreshQualification; fresh != nil {
+		var result v3RecurringResultFacts
+		if facts.Operation != "abandon" || !decodeCanonical(fresh.AcceptanceFacts, &result) ||
+			result.Stage != v3PackagedLiveResultStage || result.FreshWindow == nil ||
+			!bytes.Equal(result.QualificationManifest, facts.SignedManifest) {
+			return refused()
+		}
+		accepted, err := evaluateRecurringV3Result(result, fresh.AcceptanceFacts)
+		encoded, marshalErr := marshalCanonical(accepted)
+		if err != nil || marshalErr != nil || !bytes.Equal(encoded, fresh.AcceptanceDecision) ||
+			!stableQualificationRunMatches(stablePreflightFacts{CandidateRun: facts.CandidateRun, FreshWindow: &fresh.Observation},
+				manifest, result.FreshWindow, result.EvaluationTime, finalizationAt) {
+			return refused()
+		}
+		qualificationRunURL = result.FreshWindow.Workflow.RunURL
+	} else if !successfulQualificationRun(facts.CandidateRun, manifest.Workflow) {
 		return refused()
 	}
 	for index := range manifest.Releases {
@@ -253,7 +279,7 @@ func evaluateStableFailure(facts stableFailureFacts, document []byte) (stableFai
 	actions := make([]finalizeStableFailureAction, len(indexes))
 	for actionIndex, releaseIndex := range indexes {
 		release, observation := manifest.Releases[releaseIndex], facts.Observations[releaseIndex]
-		burn := stableFailureBurn(facts.BurnedIdentities, burnedIdentity{Commit: release.Commit, OriginalTag: release.Tag, QualificationRunURL: manifest.Workflow.RunURL, Reason: reason, RecordedAt: facts.ObservedAt, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Sequence: release.Sequence})
+		burn := stableFailureBurn(facts.BurnedIdentities, burnedIdentity{Commit: release.Commit, OriginalTag: release.Tag, QualificationRunURL: qualificationRunURL, Reason: reason, RecordedAt: facts.ObservedAt, ReleaseIndexSHA256: release.ReleaseIdentity.ReleaseIndexSHA256, Sequence: release.Sequence})
 		burnRequired, exact := burnRequirement(facts.BurnedIdentities, burn)
 		if !exact {
 			return refused()

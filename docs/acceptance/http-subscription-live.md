@@ -45,6 +45,41 @@ native qualification and attestations. Current publication follows
 [ADR-0032](../adr/0032-qualified-publication-retry.md).
 It is distinct from an Owner exception; all other candidates use this procedure.
 
+### Fresh window for an already signed candidate
+
+For a signed, unreserved draft with the current single-node HTTP clean-install
+plan, `candidate.yml` can bind a new window to the original release files if
+the original protected live job never ran. The source workflow must be
+terminal, with successful signing and its exact attestation and decision chain
+available. The draft ID, source commit, sequence, and four file digests stay
+fixed. Confirm the original run had no live steps before closing an expired
+pending gate. Retain its evidence and draft. A reserved, burned, unsigned, or
+diagnostic-only source is ineligible.
+
+Dispatch on verified `main` with the original `b_tag` and `b_sequence`, the
+empty `v3_attempt` object, and canonical `fresh_window` JSON containing
+`origin_run_id` (a decimal string), `start_unix`, `test_until_unix`, and
+`finish_unix` (integer UTC seconds). Pass the same finish as
+`security_cutoff_unix`. The window must fit the complete planned test and
+restoration. The signing approval attests only the new window and checks the
+existing baseline and matching official Karing package. A separate,
+action-time approval is required for the exact waiting `acceptance-vps` job.
+
+The live job verifies both attestations and the four draft bytes before SSH.
+Its claim artifact reserves the original source for that protected attempt
+before staging. A new run may only reuse an unclaimed source. The host uses
+the approved activity cutoff and restoration reserve. Retain the claim and
+failure evidence for explicit disposition if a claimed attempt cannot finish.
+GitHub reruns cannot replay the window.
+
+Use the active request and the fresh run when recording the five journeys.
+The Karing observation still requires a fresh successful delay on the exact
+temporary node. Verify the existing settings and restoration as part of the
+same journeys. Preserve the original manifest as artifact provenance. Stable
+preflight checks the original provenance and the successful live result
+together. Publishing still needs its separately approved stable dispatch,
+using the successful qualification run ID.
+
 Use exactly these five journeys in order:
 
 1. `mvp-install`: prove owned absence, then clean packaged candidate install/setup

@@ -579,7 +579,7 @@ func TestCandidateV3TransportStagesPrivateManifestAndBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const marker = `ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; `
+	const marker = `"${stage_transport[@]}" "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'set -eu; umask 077; `
 	_, remainder, found := strings.Cut(string(body), marker)
 	command, _, terminated := strings.Cut(remainder, `' < v3-transport.tgz`)
 	if !found || !terminated {

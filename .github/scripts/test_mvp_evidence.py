@@ -98,6 +98,36 @@ class MVPEvidenceTest(unittest.TestCase):
         self.assertEqual(facts["detailed_evidence_sha256"],
                          sha(canon(facts["detailed_evidence"])))
 
+    def test_separately_authorized_window_binds_request_and_fresh_attempt(self):
+        request, observation = self.scenario_files()
+        data = json.loads(request.read_bytes())
+        start = int(self.now.timestamp()) - 600
+        admitted = self.now - dt.timedelta(minutes=4)
+        workflow = {"run_id": "1234", "run_url": "https://github.com/albertloky/SBXR/actions/runs/1234"}
+        decision = {"window": {
+            "manifest_sha256": sha(canon(self.manifest)), "workflow": workflow, "run_attempt": 1,
+            "start_unix": start, "test_until_unix": start + 3600, "finish_unix": start + 7200,
+        }}
+        fresh = {"workflow": workflow, "run_attempt": 1, "window_decision": decision,
+                 "admitted_at": admitted.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        path = self.write("fresh.json", fresh)
+        data["qualification_window_sha256"] = sha(canon(decision))
+        self.write("request.json", data)
+        result = subprocess.run(self.command(request, observation) + ["--fresh-window", str(path)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        facts = json.loads((self.root / "facts.json").read_bytes())
+        self.assertEqual(facts["qualification_manifest"], self.manifest)
+        self.assertEqual(facts["detailed_evidence"]["attempt_id"], "run-1234-attempt-1")
+        self.assertEqual(facts["prior_decision_sha256"], sha(canon(decision)))
+        self.assertEqual(facts["fresh_window"], fresh)
+        data["qualification_window_sha256"] = "a" * 64
+        self.write("request.json", data)
+        refused = subprocess.run(self.command(request, observation, "refused.json") +
+                                 ["--fresh-window", str(path)], capture_output=True, text=True)
+        self.assertNotEqual(refused.returncode, 0, refused.stderr)
+        self.assertFalse((self.root / "refused.json").exists())
+
     def test_recurring_collector_checklist_and_source_recovery_fields(self):
         identity = {"repository": "albertloky/SBXR", "tag": "v3.1.81",
                     "commit": "c"*40, "release_index_sha256": "d"*64}

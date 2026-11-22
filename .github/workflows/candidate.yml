@@ -20,6 +20,10 @@ on:
         description: Explicit approved security cutoff in UTC Unix seconds (required for candidate runs)
         required: false
         type: string
+      fresh_window:
+        description: Canonical clock and origin run for a separate qualification of signed files
+        required: false
+        type: string
       v3_attempt:
         description: Canonical secret-safe v3 attempt plan with explicit subscription support scope
         required: true
@@ -39,7 +43,7 @@ env:
 
 jobs:
   preflight:
-    if: ${{ !inputs.inventory_only && (github.ref == 'refs/heads/main') }}
+    if: ${{ !inputs.inventory_only && !inputs.fresh_window && (github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -329,7 +333,7 @@ jobs:
           retention-days: 1
 
   drafts:
-    if: ${{ !inputs.inventory_only }}
+    if: ${{ !cancelled() && !inputs.inventory_only && github.ref == 'refs/heads/main' && ((!inputs.fresh_window && needs.preflight.result == 'success' && needs.build.result == 'success') || (inputs.fresh_window && needs.preflight.result == 'skipped' && needs.build.result == 'skipped')) }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     permissions:
@@ -344,15 +348,19 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Prepare pinned Rust repository tools
+        if: ${{ !inputs.fresh_window }}
         run: bash tooling/rust-package/setup-ci.sh tools
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: ${{ !inputs.fresh_window }}
         with:
           pattern: native-*
           path: native
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: ${{ !inputs.fresh_window }}
         with:
           name: candidate-preflight-decision-chain
       - name: Execute and verify the canonical draft decision chain
+        if: ${{ !inputs.fresh_window }}
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RELEASES: ${{ needs.preflight.outputs.build_releases }}
@@ -478,7 +486,7 @@ jobs:
           trap - EXIT
           cp "$V3_CHECKLIST" installer-updater-vps.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
+        if: ${{ always() && !inputs.fresh_window }}
         with:
           name: qualification-boundary-input
           path: |
@@ -498,18 +506,36 @@ jobs:
 
       - name: Stage bounded candidate failure evidence
         id: retained_evidence
-        if: always()
+        if: ${{ always() && !inputs.fresh_window }}
         run: python3 .github/scripts/candidate-evidence.py retained-candidate-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always() && steps.retained_evidence.outcome == 'success'
+        if: ${{ always() && !inputs.fresh_window && steps.retained_evidence.outcome == 'success' }}
         with:
           name: candidate-draft-failure-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: retained-candidate-evidence/
           if-no-files-found: warn
           retention-days: 90
+      - name: Observe and download the exact retained draft
+        if: inputs.fresh_window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FRESH_WINDOW: ${{ inputs.fresh_window }}
+          B_TAG: ${{ inputs.b_tag }}
+          B_SEQUENCE: ${{ inputs.b_sequence }}
+          V3_ATTEMPT: ${{ inputs.v3_attempt }}
+        run: |
+          test "$V3_ATTEMPT" = '{}'
+          bash .github/scripts/fresh-qualification.sh prepare
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.fresh_window
+        with:
+          name: fresh-qualification-source
+          path: fresh-source/
+          if-no-files-found: error
+          retention-days: 90
 
   sign:
-    if: ${{ !inputs.inventory_only }}
+    if: ${{ !cancelled() && !inputs.inventory_only && needs.drafts.result == 'success' && ((!inputs.fresh_window && needs.preflight.result == 'success') || (inputs.fresh_window && needs.preflight.result == 'skipped')) }}
     needs: [preflight, drafts]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -536,10 +562,12 @@ jobs:
         id: sign-tools
         run: bash tooling/rust-package/setup-ci.sh tools
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: ${{ !inputs.fresh_window }}
         id: sign-input
         with:
           name: qualification-boundary-input
       - name: Verify current-run reservation before signing or host access
+        if: ${{ !inputs.fresh_window }}
         id: sign-reservation
         run: |
           set -euo pipefail
@@ -550,7 +578,7 @@ jobs:
           jq -e --slurpfile reserved expected-reservations.json '.reserved_identities == $reserved[0]' candidate-preflight-facts.json >/dev/null
       - name: Verify Acceptance VPS readiness before signing
         id: sign-readiness
-        if: ${{ !fromJSON(inputs.v3_attempt || '{}').live89_correction_review }}
+        if: ${{ !inputs.fresh_window && (!fromJSON(inputs.v3_attempt || '{}').live89_correction_review) }}
         env:
           V3_ATTEMPT: ${{ inputs.v3_attempt }}
         run: |
@@ -569,6 +597,7 @@ jobs:
           fi
           ssh -i ssh.key -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=known_hosts -o ConnectTimeout=15 "root@$ACCEPTANCE_VPS_HOST" 'test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04 && test "$(uname -m)" = x86_64 && command -v strace >/dev/null && test ! -e /usr/local/bin/sbxr && test ! -L /usr/local/bin/sbxr && test ! -e /var/lib/sbxr && test ! -L /var/lib/sbxr && test ! -e /run/sbxr-qualification && test ! -L /run/sbxr-qualification && test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && '"$evidence_check"
       - name: Create the complete qualification manifest after approval
+        if: ${{ !inputs.fresh_window }}
         id: signing-manifest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -612,6 +641,7 @@ jobs:
           go run ./cmd/sbxr-release qualification < qualification-boundary-facts.json > qualification-manifest.json
           jq -e '.schema == "sbxr-qualification-manifest-v3" and .repository == env.GITHUB_REPOSITORY and .mode == "v3" and .approval.environments == [{name:"acceptance-vps"}] and .approval.state == "approved" and .workflow == {commit:env.GITHUB_SHA,path:".github/workflows/candidate.yml",ref:env.GITHUB_WORKFLOW_REF,run_id:env.GITHUB_RUN_ID,run_url:(env.GITHUB_SERVER_URL+"/"+env.GITHUB_REPOSITORY+"/actions/runs/"+env.GITHUB_RUN_ID)} and [.approval.decision_chain[].stage] == ["candidate-preflight","candidate-draft-construction","candidate-draft-verification"] and [.approval.decision_chain[].outcome] == ["accepted","actions-required","accepted"] and (.releases | length) == 1 and all(.releases[]; (.assets | length) == 4)' qualification-manifest.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: ${{ !inputs.fresh_window }}
         id: sign-manifest-upload
         with:
           name: signed-qualification-manifest
@@ -624,10 +654,40 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Attest qualification manifest
+        if: ${{ !inputs.fresh_window }}
         id: sign-attestation
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
         with:
           subject-path: qualification-manifest.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.fresh_window
+        id: window-input
+        with:
+          name: fresh-qualification-source
+          path: fresh-source
+      - name: Create the separate approved window for the original signed release
+        if: inputs.fresh_window
+        id: window-authorize
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FRESH_WINDOW: ${{ inputs.fresh_window }}
+        run: bash .github/scripts/fresh-qualification.sh authorize
+      - name: Attest the fresh qualification window
+        if: inputs.fresh_window
+        id: window-attestation
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: fresh-window-decision.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.fresh_window
+        id: window-upload
+        with:
+          name: fresh-qualification-window
+          path: |
+            fresh-window-decision.json
+            fresh-window-facts.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Record signing failure stage
         if: ${{ failure() }}
         env:
@@ -640,9 +700,14 @@ jobs:
               || steps.sign-readiness.outcome == 'failure' && 'host-readiness'
               || steps.signing-manifest.outcome == 'failure' && 'create-manifest'
               || steps.sign-manifest-upload.outcome == 'failure' && 'upload-manifest'
-              || steps.sign-attestation.outcome == 'failure' && 'attestation' || 'unknown' }}
+              || steps.sign-attestation.outcome == 'failure' && 'attestation'
+              || steps.window-input.outcome == 'failure' && 'download-window-source'
+              || steps.window-authorize.outcome == 'failure' && 'authorize-window'
+              || steps.window-attestation.outcome == 'failure' && 'attest-window'
+              || steps.window-upload.outcome == 'failure' && 'upload-window' || 'unknown' }}
           VERIFIER_STATE: >-
-            ${{ steps.signing-manifest.outcome == 'success' && 'passed'
+            ${{ (steps.signing-manifest.outcome == 'success' || steps.window-authorize.outcome == 'success') && 'passed'
+              || steps.window-authorize.outcome == 'failure' && 'unknown'
               || (steps.signing-manifest.outcome == 'skipped' || steps.signing-manifest.outcome == '') && 'not started' || 'unknown' }}
         run: |
           if test -s "$RUNNER_TEMP/signing-latest-diagnostics.json"; then
@@ -666,7 +731,7 @@ jobs:
           retention-days: 1
 
   acceptance-vps:
-    if: ${{ !inputs.inventory_only && (!fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review) }}
+    if: ${{ !cancelled() && !inputs.inventory_only && needs.sign.result == 'success' && ((!inputs.fresh_window && needs.preflight.result == 'success' && !fromJSON(inputs.v3_attempt || '{}').owner_exception && !fromJSON(inputs.v3_attempt || '{}').live89_correction_review) || (inputs.fresh_window && needs.preflight.result == 'skipped')) }}
     needs: [preflight, sign]
     runs-on: ubuntu-24.04
     environment: acceptance-vps
@@ -695,9 +760,22 @@ jobs:
           jq --arg go_toolchain "$(go version | awk '{print $3}')" '.software.go_toolchain = $go_toolchain' candidate-failure-state.json > candidate-failure-state.next
           mv candidate-failure-state.next candidate-failure-state.json
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: ${{ !inputs.fresh_window }}
         with:
           name: signed-qualification-manifest
           path: handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.fresh_window
+        with:
+          name: fresh-qualification-source
+          path: handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.fresh_window
+        with:
+          name: fresh-qualification-window
+      - name: Authenticate the original artifact and the separately approved window
+        if: inputs.fresh_window
+        run: bash .github/scripts/fresh-qualification.sh verify-live
       - name: Verify and assemble the root-only qualification handoff
         run: |
           set -euo pipefail
@@ -708,7 +786,11 @@ jobs:
           gh attestation download qualification-manifest.json --repo "$GITHUB_REPOSITORY" --limit 1
           bundle="$(find . -maxdepth 1 -name 'sha256:*.jsonl' -type f -print -quit)"
           test -n "$bundle"
-          gh attestation verify qualification-manifest.json --bundle "$bundle" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$GITHUB_SHA" >/dev/null
+          artifact_commit="$GITHUB_SHA"
+          if test -f ../fresh-window-decision.json; then
+            artifact_commit="$(jq -er '.workflow.commit|select(test("^[a-f0-9]{40}$"))' qualification-manifest.json)"
+          fi
+          gh attestation verify qualification-manifest.json --bundle "$bundle" --repo "$GITHUB_REPOSITORY" --signer-workflow albertloky/SBXR/.github/workflows/candidate.yml --source-ref refs/heads/main --source-digest "$artifact_commit" >/dev/null
           mv "$bundle" qualification.bundle
           mkdir -m 0700 assets
           while read -r release; do
@@ -737,12 +819,29 @@ jobs:
           printf '%s\n' 'subjectAltName=IP:127.0.0.1' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
           openssl x509 -req -days 2 -in handoff/gateway.csr -CA handoff/ca.crt -CAkey handoff/ca.key -CAcreateserial -extfile handoff/gateway.ext -out handoff/gateway.crt
           rm handoff/ca.key handoff/gateway.csr handoff/gateway.ext handoff/ca.srl handoff/release.json
+      - name: Claim this source once before any host effects
+        id: fresh-window-claim
+        if: inputs.fresh_window
+        run: |
+          bash .github/scripts/fresh-qualification.sh admit
+          printf 'origin_run_id=%s\n' "$(jq -er '.window.origin.run_id|select(test("^[1-9][0-9]*$"))' fresh-window-decision.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: inputs.fresh_window
+        with:
+          name: fresh-qualification-use-${{ steps.fresh-window-claim.outputs.origin_run_id }}
+          path: fresh-window-decision.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
       - name: Run the packaged V3 journey
         id: journey
         run: |
           set -euo pipefail
           bash .github/scripts/validate-security-cutoff.sh "$SECURITY_CUTOFF_UNIX"
           chmod 0600 handoff/qualification-manifest.json
+          if test -f handoff/fresh-window-evidence.json; then
+            bash .github/scripts/fresh-qualification.sh recheck-clock
+          fi
           python3 .github/scripts/disclosure-diagnostic.py check-admission \
             --manifest handoff/qualification-manifest.json --security-cutoff-unix "$SECURITY_CUTOFF_UNIX"
           if ! jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then
@@ -753,6 +852,15 @@ jobs:
           printf '%s\n' "$ACCEPTANCE_VPS_SSH_PRIVATE_KEY" > ssh.key
           printf '%s %s\n' "$ACCEPTANCE_VPS_HOST" "$ACCEPTANCE_VPS_HOST_KEY" > known_hosts
           ssh_options=(-i "$PWD/ssh.key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$PWD/known_hosts" -o ConnectTimeout=15)
+          cleanup_transport_files() {
+            rm -f -- ssh.key known_hosts handoff/gateway.key v3-transport.tgz
+          }
+          trap cleanup_transport_files EXIT
+          if test -f handoff/fresh-window-evidence.json; then
+            actual_vps="$(python3 .github/scripts/bounded-ssh.py 30 "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'set -eu; test "$(. /etc/os-release; printf "%s:%s" "$ID" "$VERSION_ID")" = ubuntu:24.04; test "$(uname -m)" = x86_64; command -v strace >/dev/null; for p in /usr/local/bin/sbxr /var/lib/sbxr /run/sbxr-qualification /root/sbxr-qualification-v3 /root/sbxr-qualification-evidence; do test ! -e "$p"; test ! -L "$p"; done; sha256sum /etc/machine-id' | cut -d' ' -f1)"
+            test "$actual_vps" = "$(jq -er .v3_attempt.vps_identity_sha256 handoff/qualification-manifest.json)"
+            bash .github/scripts/fresh-qualification.sh recheck-clock
+          fi
           tar -C handoff -czf v3-transport.tgz qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt assets v3-qualification-transport.sh
           cleanup_v3_transport() {
             status=$?
@@ -760,20 +868,33 @@ jobs:
             restored=false
             # Allow time for service stop, staging cleanup and SSH overhead.
             for retry in {1..12}; do
-              if python3 .github/scripts/bounded-ssh.py 90 "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then exit 0; fi; test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 || exit 1; test -f /root/sbxr-qualification-v3/staging-owned && test ! -L /root/sbxr-qualification-v3/staging-owned || exit 1; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test ! -e /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then find /root/sbxr-qualification-v3 -depth -delete; else exit 1; fi'; then restored=true; break; fi
+              timeout=90
+              if test -f handoff/fresh-window-evidence.json; then
+                remaining=$((SECURITY_CUTOFF_UNIX - $(date +%s) - 5))
+                if test "$remaining" -le 0; then break; fi
+                if test "$remaining" -lt "$timeout"; then timeout=$remaining; fi
+              fi
+              if python3 .github/scripts/bounded-ssh.py "$timeout" "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'if test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3; then exit 0; fi; test -d /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 || exit 1; test -f /root/sbxr-qualification-v3/staging-owned && test ! -L /root/sbxr-qualification-v3/staging-owned || exit 1; test "$(cat /root/sbxr-qualification-v3/staging-owned)" = "${{ github.run_id }}-${{ github.run_attempt }}" || exit 1; if test -f /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; elif test ! -e /root/sbxr-qualification-v3/transport-owned && test ! -L /root/sbxr-qualification-v3/transport-owned; then find /root/sbxr-qualification-v3 -depth -delete; else exit 1; fi'; then restored=true; break; fi
               sleep 5
             done
             if test "$restored" != true; then
               printf '%s\n' '::error::Qualification transport cleanup unproved. Reconnect and run bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down; do not start another attempt.' >&2
               status=1
             fi
-            rm ssh.key known_hosts handoff/gateway.key v3-transport.tgz
+            cleanup_transport_files
             exit "$status"
           }
           trap cleanup_v3_transport EXIT
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && install -d -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'umask 077; tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3; chmod 0600 /root/sbxr-qualification-v3/qualification-manifest.json /root/sbxr-qualification-v3/qualification.bundle; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up '$SECURITY_CUTOFF_UNIX'"
+          stage_transport=(ssh)
+          if test -f handoff/fresh-window-evidence.json; then
+            stage_transport=(python3 .github/scripts/bounded-ssh.py 30)
+          fi
+          "${stage_transport[@]}" "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'test ! -e /root/sbxr-qualification-v3 && test ! -L /root/sbxr-qualification-v3 && mkdir -m 0700 /root/sbxr-qualification-v3 && printf "%s\n" "${{ github.run_id }}-${{ github.run_attempt }}" > /root/sbxr-qualification-v3/staging-owned'
+          "${stage_transport[@]}" "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'set -eu; umask 077; tar --no-same-owner -xzf - -C /root/sbxr-qualification-v3; chmod 0600 /root/sbxr-qualification-v3/qualification-manifest.json /root/sbxr-qualification-v3/qualification.bundle; chmod 0700 /root/sbxr-qualification-v3/sbxr-release' < v3-transport.tgz
+          if test -f handoff/fresh-window-evidence.json; then
+            bash .github/scripts/fresh-qualification.sh recheck-clock
+          fi
+          "${stage_transport[@]}" "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" "bash /root/sbxr-qualification-v3/v3-qualification-transport.sh up '$SECURITY_CUTOFF_UNIX'"
           # The operator drives only supported packaged paths on the VPS and
           # Mac. This collector validates evidence; it cannot simulate them.
           if jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then
@@ -781,10 +902,19 @@ jobs:
           else
             bash .github/scripts/v3-recurring-evidence.sh "$ACCEPTANCE_VPS_HOST" "$PWD/ssh.key" "$PWD/known_hosts"
           fi
-          ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down'
+          if test -f handoff/fresh-window-evidence.json; then
+            remaining=$((SECURITY_CUTOFF_UNIX - $(date +%s) - 5))
+            test "$remaining" -gt 0
+            if test "$remaining" -gt 90; then remaining=90; fi
+            python3 .github/scripts/bounded-ssh.py "$remaining" "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'set -eu; root=/root/sbxr-qualification-v3; test -d "$root"; test ! -L "$root"; test -f "$root/staging-owned"; test ! -L "$root/staging-owned"; test "$(cat "$root/staging-owned")" = "${{ github.run_id }}-${{ github.run_attempt }}"; bash "$root/v3-qualification-transport.sh" down'
+          else
+            ssh "${ssh_options[@]}" "root@$ACCEPTANCE_VPS_HOST" 'bash /root/sbxr-qualification-v3/v3-qualification-transport.sh down'
+          fi
+          cleanup_transport_files
           trap - EXIT
-          rm handoff/gateway.key v3-transport.tgz
-          rm ssh.key known_hosts
+          if test -f handoff/fresh-window-evidence.json; then
+            bash .github/scripts/fresh-qualification.sh record-restoration
+          fi
           # A completed diagnostic must never claim that qualification passed.
           if jq -e '.v3_attempt.diagnostic != null' handoff/qualification-manifest.json >/dev/null; then exit 0; fi
           jq '.stages.integrated_verification = "Passed" | .stages.codex_live_acceptance = "Passed"' candidate-failure-state.json > candidate-failure-state.next
@@ -815,6 +945,9 @@ jobs:
           facts_sha256="$(sha256sum v3-packaged-live-result-facts.json | cut -d' ' -f1)"
           result_code=RELEASE-V3-SUBSCRIPTION-QUALIFICATION
           if test "$(jq -r .source_state handoff/qualification-manifest.json)" = v3-subscription-clean; then result_code=RELEASE-V3-SUBSCRIPTION-CLEAN-INSTALL-QUALIFICATION; fi
+          if test -f handoff/fresh-window-evidence.json; then
+            prior_decision_sha256="$(sha256sum fresh-window-decision.json | cut -d' ' -f1)"
+          fi
           jq -e --arg result_code "$result_code" --arg facts_sha256 "$facts_sha256" --arg prior_decision_sha256 "$prior_decision_sha256" '.schema == "sbxr-release-qualification-decision-v1" and .stage == "v3-packaged-live-result" and .outcome == "accepted" and .facts_sha256 == $facts_sha256 and .prior_decision_sha256 == $prior_decision_sha256 and (.records | length) == 1 and (.records[0].body | contains($result_code))' v3-packaged-live-result-decision.json >/dev/null
           cp v3-packaged-live-result-facts.json acceptance-vps-result-facts.json
           cp v3-packaged-live-result-decision.json acceptance-vps-result-decision.json
@@ -823,7 +956,19 @@ jobs:
           secret_pattern='BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|vless://|https://[^ /"[:space:]]+:8443/'
           if grep -aERq "$secret_pattern" acceptance-records v3-packaged-live-result-facts.json v3-packaged-live-result-decision.json handoff/v3-packaged-live-evidence.json; then exit 1; elif test $? -ne 1; then exit 1; fi
           cat acceptance-records/*.md >> "$GITHUB_STEP_SUMMARY"
-          gh release edit "$tag" --draft --notes-file "acceptance-records/$tag.md"
+          if test -f handoff/fresh-window-evidence.json; then
+            cp fresh-window-decision.json handoff/fresh-window-decision.json
+            jq -cjS '.releases[0]' handoff/qualification-manifest.json > fresh-result-release.json
+            bash .github/scripts/recheck-qualified-release.sh fresh-result-release.json fresh-result-download fresh-result-metadata.json
+            jq -e '.draft==true and .immutable==false and .prerelease==false' fresh-result-metadata.json >/dev/null
+            release_id="$(jq -er '.release_id|select(type=="number" and .>0 and .==floor)' fresh-result-release.json)"
+            jq -cn --rawfile body "acceptance-records/$tag.md" '{body:$body}' |
+              gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" --method PATCH --input - |
+              jq -e --argjson id "$release_id" --rawfile body "acceptance-records/$tag.md" \
+                '.id==$id and .draft==true and .prerelease==false and .body==$body' >/dev/null
+          else
+            gh release edit "$tag" --draft --notes-file "acceptance-records/$tag.md"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: ${{ !fromJSON(inputs.v3_attempt || '{}').diagnostic }}
         with:
@@ -837,6 +982,7 @@ jobs:
             handoff/v3-packaged-live-evidence.json
             handoff/v3-scenarios/
             handoff/qualification-manifest.json
+            handoff/fresh-window-decision.json
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -976,7 +1122,7 @@ jobs:
           retention-days: 90
 
   cleanup-unqualified:
-    if: always() && !fromJSON(inputs.v3_attempt || '{}').diagnostic && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success'))
+    if: always() && !fromJSON(inputs.v3_attempt || '{}').diagnostic && github.ref == 'refs/heads/main' && (inputs.inventory_only || (needs.drafts.result != 'skipped' && needs.acceptance-vps.result != 'success' && needs.owner-exception.result != 'success' && needs.live89-correction.result != 'success')) && !inputs.fresh_window
     needs: [preflight, drafts, sign, acceptance-vps, owner-exception, live89-correction]
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.inventory_only && 10 || 360 }}

@@ -111,6 +111,11 @@ def validate_request(request, now):
     if diagnostic:
         keys.add("diagnostic_test_until_unix")
     enabled = "karing_response_limit_seconds" in request
+    if "qualification_window_sha256" in request:
+        value = request["qualification_window_sha256"]
+        if diagnostic or enabled or type(value) is not str or not re.fullmatch(r"[a-f0-9]{64}", value):
+            raise Refusal("collector fresh-window binding differs")
+        keys.add("qualification_window_sha256")
     if enabled:
         keys |= {"karing_response_limit_seconds", "attended_finish_by"}
     if (set(request) != keys or type(request["deadline_unix"]) is not int or
