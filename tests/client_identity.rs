@@ -117,6 +117,13 @@ struct Guard {
     directory: fs::File,
     inode: u64,
 }
+impl Drop for Guard {
+    fn drop(&mut self) {
+        // A sibling subprocess may retain the descriptor between fork and exec.
+        rustix::fs::flock(&self.directory, rustix::fs::FlockOperation::Unlock)
+            .expect("release the synthetic fixture lock");
+    }
+}
 struct DiskHost {
     root: PathBuf,
     fail_effect: Option<(Effect, bool)>,
@@ -612,6 +619,29 @@ fn failure_before_and_after_each_effect_keeps_the_replacement_and_never_regenera
         }
     }
 }
+#[test]
+fn finishing_started_target_releases_fixture_lock_with_retained_descriptor() {
+    let root = Root::new();
+    let mut h = DiskHost::create(&root, false, true);
+    h.fail_effect = Some((Effect::StartTarget, true));
+    assert_eq!(
+        execute_new(&mut h, &mut EntropyCount::default()),
+        Err(Error::Effect)
+    );
+
+    // A child between fork and exec can retain the same open file description.
+    let guard = h.acquire().unwrap();
+    let retained = guard.directory.try_clone().unwrap();
+    assert!(matches!(h.acquire(), Err(Error::Refused)));
+    drop(guard);
+    drop(h);
+
+    let mut h = DiskHost::open(&root);
+    assert_eq!(finish_now(&mut h), Ok(Outcome::Finished));
+    assert!(h.record().pending_change().is_none());
+    drop(retained);
+}
+
 #[test]
 fn publication_failure_never_continues_and_restart_observes_rename_before_direction() {
     for cp in [
