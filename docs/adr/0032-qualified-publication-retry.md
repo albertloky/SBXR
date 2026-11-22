@@ -689,3 +689,23 @@ The release-index SHA-256 is
 Future admission requires all twenty-nine matching drafts and absent
 release and burn refs. The retired tag, sequence and release ID remain
 reserved.
+
+## Retained q232 identity — 2026-11-22
+
+Retire signed-unqualified draft v3.1.158, build 232, release 454275266,
+from source d0b1ed9a1939b14815218c33baad974b7bc6fd43 and workflow
+44994457142, attempt 1. Signing and attestation succeeded. The exact
+[acceptance job](https://github.com/albertloky/SBXR/actions/runs/44994457142/job/137134991552)
+ended at 07:49:39 UTC with no qualification result. It staged only the
+temporary loopback gateway. SBXR and sing-box were never installed, no Karing
+profile was added, and no Karing delay was measured. Gateway teardown and host
+and client baseline restoration were verified at 07:49:44 UTC.
+
+Keep the unpublished draft, its four exact assets, signed evidence, and
+[diagnostic handoff](https://github.com/albertloky/SBXR/actions/runs/44994457142/artifacts/14745347552)
+in place. The qualification manifest SHA-256 is
+80d7cf2a3f94669c47ed90703f8a6c9681cca656c99762273e5b31bd072ae355.
+The release-index SHA-256 is
+dd4077698b52304982e9de0df949eb2518fa5e3e94fbce195d04b2bfd3527536.
+Future admission requires all thirty matching drafts and absent release and
+burn refs. The retired tag, sequence and release ID remain reserved.
