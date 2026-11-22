@@ -709,3 +709,22 @@ The release-index SHA-256 is
 dd4077698b52304982e9de0df949eb2518fa5e3e94fbce195d04b2bfd3527536.
 Future admission requires all thirty matching drafts and absent release and
 burn refs. The retired tag, sequence and release ID remain reserved.
+
+## Retained q233 identity — 2026-11-22
+
+Retire signed-unqualified draft v3.1.159, build 233, release 454346483,
+from source 8332aa71ca6640f754369fe151c0a46e5175e15f and workflow
+45005500246, attempt 1. Signing and attestation succeeded. The November 22
+planning and activity cutoffs were 10:30 and 11:00 UTC, and restoration was
+due by 12:00 UTC. With Owner approval, GitHub recorded normal cancellation
+at 10:44:30 UTC. Live acceptance had zero steps and no diagnostic request
+was opened.
+
+Keep the unpublished draft, its four exact assets and signed evidence in
+place. The qualification manifest SHA-256 is
+4a456fc8f72a14aa96babf328856b7231e4fdb1fa3752614c90aeb9bfbf37934.
+The release-index SHA-256 is
+a6e634922685923448b6911f1267cb4fd5fd8850d1db3454c0053c0bae461b69.
+Future admission requires all thirty-one matching drafts and absent
+release and burn refs. The retired tag, sequence and release ID remain
+reserved.
