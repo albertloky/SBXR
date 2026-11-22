@@ -270,27 +270,41 @@ exit "$VERIFIER_STATUS"
 	}
 }
 
-func TestCandidatePreflightAuthenticationOptInIsIsolated(t *testing.T) {
+func TestCandidateVerificationAuthenticationOptInIsIsolated(t *testing.T) {
 	const command = " -- verify-candidate-preflight "
+	const signingRecheck = "bash .github/scripts/signing-latest-recheck.sh"
 	body, err := os.ReadFile(".github/workflows/candidate.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	preflight, later, found := strings.Cut(string(body), "\n  rust-native:")
+	workflow := string(body)
+	preflight, later, found := strings.Cut(workflow, "\n  rust-native:")
 	if !found || strings.Count(preflight, command) != 1 || strings.Contains(later, command) {
-		t.Fatal("only the candidate preflight job may opt into authenticated verification")
+		t.Fatal("the authenticated command must be called directly only in candidate preflight")
 	}
-	for _, file := range []string{
-		".github/workflows/stable.yml",
-		".github/workflows/verify.yml",
-		".github/scripts/signing-latest-recheck.sh",
-	} {
+	_, sign, hasSign := strings.Cut(later, "\n  sign:\n")
+	sign, _, hasAcceptance := strings.Cut(sign, "\n  acceptance-vps:")
+	_, manifest, hasManifest := strings.Cut(sign, "        id: signing-manifest\n")
+	manifest, _, _ = strings.Cut(manifest, "\n      - ")
+	if !hasSign || !hasAcceptance || !hasManifest ||
+		!strings.Contains(manifest, "GH_TOKEN: ${{ github.token }}") ||
+		!strings.Contains(manifest, signingRecheck) || strings.Count(workflow, signingRecheck) != 1 {
+		t.Fatal("the authenticated signing recheck must use the existing token in the manifest step only")
+	}
+	script, err := os.ReadFile(".github/scripts/signing-latest-recheck.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(script), command) != 1 {
+		t.Fatal("signing must explicitly opt into the same restricted HTTP verifier as candidate preflight")
+	}
+	for _, file := range []string{".github/workflows/stable.yml", ".github/workflows/verify.yml"} {
 		body, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(body), command) {
-			t.Errorf("%s unexpectedly opts into candidate-preflight authentication", file)
+		if strings.Contains(string(body), command) || strings.Contains(string(body), signingRecheck) {
+			t.Errorf("%s unexpectedly opts into authenticated public verification", file)
 		}
 	}
 }

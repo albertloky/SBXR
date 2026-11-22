@@ -28,7 +28,8 @@ report_exit() {
   exit "$status"
 }
 trap 'report_exit "$?"' EXIT
-if cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-public-latest \
+# Reuse the preflight verifier's restricted API transport with the signing step's token.
+if cargo run --locked --offline --release --manifest-path tooling/rust-package/Cargo.toml -- verify-candidate-preflight \
   --http-diagnostics "$diagnostics_dir/signing-latest-http.raw" > current-source-verification.json; then
   verifier_exit=0
 else
