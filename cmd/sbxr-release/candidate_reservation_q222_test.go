@@ -21,7 +21,7 @@ func TestRetiredBuild222IsPinnedAndCannotBeReused(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 32 || !reflect.DeepEqual(policy[19], expected) {
+	if len(policy) != 33 || !reflect.DeepEqual(policy[19], expected) {
 		t.Fatal("exact signed-unqualified reservation for build 222 is missing")
 	}
 	if got := fmt.Sprintf("%x", sha256.Sum256(mustJSON(policy[:19]))); got != "5c7f263bfa70493752ed621890d706310d4dc677bac8e27e06d2095cf9692889" {

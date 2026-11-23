@@ -19,7 +19,7 @@ func TestQ215SignedReservation(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 32 || !reflect.DeepEqual(policy[12], expected) {
+	if len(policy) != 33 || !reflect.DeepEqual(policy[12], expected) {
 		t.Fatal("exact signed build 215 reservation missing")
 	}
 	for _, mutate := range []func(*qualificationFacts){
@@ -32,8 +32,8 @@ func TestQ215SignedReservation(t *testing.T) {
 		f := candidateFacts("v3")
 		f.Candidate.ATag = ""
 		f.Candidate.ASequence = 0
-		f.Candidate.BTag = "v3.1.161"
-		f.Candidate.BSequence = 235
+		f.Candidate.BTag = "v3.1.162"
+		f.Candidate.BSequence = 236
 		f.ReservedIdentities = approvedCandidateReservations()
 		mutate(&f)
 		if _, err := evaluateCandidatePreflight(f, mustJSON(f)); err == nil {

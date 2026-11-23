@@ -743,3 +743,20 @@ evidence in place. The release-index SHA-256 is
 `474d62eafaa661d0c5b73c1836f4f627068aa0157154c8485ef133d0942a9546`.
 Future admission requires all thirty-two matching drafts and absent release
 and burn refs. The retired tag, sequence and release ID remain reserved.
+
+## Retained q235 identity — 2026-11-23
+
+The Owner approved retiring unpublished draft v3.1.161, build 235, release
+454604534, and preserving its four assets. The candidate used source
+`1fc9e3ab05c910ad7f0614ac21212e24f50d30ac` in workflow 45042678522,
+attempt 1. The [signing job](https://github.com/albertloky/SBXR/actions/runs/45042678522/job/137284628532)
+failed at the Acceptance VPS readiness check. GitHub skipped manifest creation,
+attestation and live acceptance. The run ended in failure and retained its
+pre-signing failure evidence. The reservation uses signing state `unknown`
+with no qualification manifest digest.
+
+The release-index SHA-256 is
+`a4a54acdd441f560e132b39b90a56fe6dbed7dfa707f082507874b54e5ec1d57`.
+Future admission requires all thirty-three retained drafts to match and their
+release and burn refs to be absent. The policy reserves build 235's tag,
+sequence and release ID against reuse and promotion.
