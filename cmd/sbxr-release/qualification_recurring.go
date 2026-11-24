@@ -20,18 +20,41 @@ type v3Observation struct {
 	Result     string `json:"result"`
 }
 
+// Optional, closed diagnostic metadata on an already failed native M1 disclosure.
+type m1DisclosureDiagnostic struct {
+	ElapsedMS      int    `json:"elapsed_ms"`
+	LastInputClass string `json:"last_input_class"`
+	Reason         string `json:"reason"`
+}
+
+func (d m1DisclosureDiagnostic) valid() bool {
+	if d.ElapsedMS < 0 || d.ElapsedMS > 120000 || !slices.Contains([]string{"none", "selection", "other", "continuation", "exit"}, d.LastInputClass) {
+		return false
+	}
+	switch d.Reason {
+	case "action-refused", "deadline-before-start", "descendant-cleanup", "diagnostic-bound", "driver-error",
+		"exit-before-continuation", "exit-before-prompt", "exit-before-result", "exit-before-return",
+		"exit-before-selection", "exit-deadline", "input-closed", "input-deadline", "label-duplicate", "label-missing",
+		"output-bound", "output-deadline", "output-encoding", "output-unterminated", "owner-exited", "process-cleanup",
+		"process-failed", "process-ownership", "prompt-mismatch", "request-deadline", "result-mismatch", "signal-cancelled":
+		return true
+	}
+	return false
+}
+
 type v3ScenarioFailure struct {
-	ActualResult   string               `json:"actual_result"`
-	AttemptID      string               `json:"attempt_id"`
-	Boundary       string               `json:"boundary"`
-	Candidate      qualificationRelease `json:"candidate"`
-	ExpectedResult string               `json:"expected_result"`
-	HostState      string               `json:"host_state"`
-	ObservedAt     string               `json:"observed_at"`
-	OperationID    string               `json:"operation_id"`
-	ScenarioID     string               `json:"scenario_id"`
-	Schema         string               `json:"schema"`
-	VPSID          string               `json:"vps_id"`
+	ActualResult   string                  `json:"actual_result"`
+	AttemptID      string                  `json:"attempt_id"`
+	Boundary       string                  `json:"boundary"`
+	Candidate      qualificationRelease    `json:"candidate"`
+	ExpectedResult string                  `json:"expected_result"`
+	HostState      string                  `json:"host_state"`
+	M1Disclosure   *m1DisclosureDiagnostic `json:"m1_disclosure,omitempty"`
+	ObservedAt     string                  `json:"observed_at"`
+	OperationID    string                  `json:"operation_id"`
+	ScenarioID     string                  `json:"scenario_id"`
+	Schema         string                  `json:"schema"`
+	VPSID          string                  `json:"vps_id"`
 }
 
 type v3SafetyCleanup struct {
@@ -79,6 +102,9 @@ func evaluateV3ScenarioFailure(facts v3ScenarioFailureFacts, document []byte) (v
 		return refused()
 	}
 	failure, attempt, release := facts.Failure, manifest.V3Attempt, manifest.Releases[0]
+	if d := failure.M1Disclosure; d != nil && (failure.Schema != "sbxr-v3-scenario-failure-v3" || failure.ScenarioID != "mvp-install" || failure.OperationID != "operation-1" || failure.ActualResult != "unexpected-failure" || !d.valid()) {
+		return refused()
+	}
 	observed, timeOK := qualificationTime(failure.ObservedAt)
 	runURL := manifest.Workflow.RunURL
 	if facts.FreshWindow != nil {

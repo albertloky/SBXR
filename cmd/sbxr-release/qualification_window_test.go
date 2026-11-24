@@ -410,6 +410,56 @@ func TestFreshQualificationFailureBelongsToTheNewAttempt(t *testing.T) {
 		decision["burn"].(map[string]any)["qualification_run_url"] != "https://github.com/albertloky/SBXR/actions/runs/992800" {
 		t.Fatalf("unsafe failure decision: %s", body)
 	}
+	failure := input["failure"].(map[string]any)
+	for _, reason := range []string{"output-deadline", "exit-before-continuation"} {
+		diagnostic := map[string]any{"elapsed_ms": 90010, "last_input_class": "other", "reason": reason}
+		failure["m1_disclosure"] = diagnostic
+		body, err := runQualificationCommand(binary, qualificationDocument(t, input))
+		if err != nil {
+			t.Fatalf("safe disclosure diagnostic refused: %v", err)
+		}
+		decision := jsonObject(t, body)
+		got := decision["failure"].(map[string]any)["m1_disclosure"].(map[string]any)
+		if got["reason"] != reason || decision["outcome"] != "failed" || decision["stop_test_mutations"] != true || decision["burn_required"] != true {
+			t.Fatal("disclosure diagnostic or failure disposition differs")
+		}
+		// Exercise the actual hosted staging command on the release tool's output.
+		dir := t.TempDir()
+		evidenceDir := filepath.Join(dir, "handoff", "failure-evidence")
+		if err := os.MkdirAll(evidenceDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for name, raw := range map[string][]byte{"failure.json": []byte(qualificationDocument(t, input)), "failure-decision.json": body} {
+			if err := os.WriteFile(filepath.Join(evidenceDir, name), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		stager, err := filepath.Abs("../../.github/scripts/candidate-evidence.py")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stage := exec.Command("python3", "-B", stager, "retained")
+		stage.Dir = dir
+		output, err := stage.CombinedOutput()
+		if err != nil || string(output) != "M1 disclosure: reason="+reason+" last_input_class=other elapsed_ms=90010\n" {
+			t.Fatalf("unexpected hosted diagnostic or staging error: %v", err)
+		}
+		retained, err := os.ReadFile(filepath.Join(dir, "retained", "handoff", "failure-evidence", "failure-decision.json"))
+		if err != nil || !bytes.Equal(retained, body) {
+			t.Fatal("hosted failure decision differs from release-tool output")
+		}
+		for key, unsafe := range map[string]any{"reason": "SECRET-CANARY", "last_input_class": "https://private.invalid", "elapsed_ms": -1, "raw": "secret"} {
+			before := diagnostic[key]
+			diagnostic[key] = unsafe
+			assertQualificationRefused(t, binary, qualificationDocument(t, input), "unsafe diagnostic")
+			if before == nil {
+				delete(diagnostic, key)
+			} else {
+				diagnostic[key] = before
+			}
+		}
+	}
+	delete(failure, "m1_disclosure")
 	input["failure"].(map[string]any)["attempt_id"] = "run-123-attempt-1"
 	assertQualificationRefused(t, binary, qualificationDocument(t, input), "borrowed failure attempt")
 }

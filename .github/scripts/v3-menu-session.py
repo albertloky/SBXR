@@ -54,6 +54,15 @@ SETUP_CHOICE_PROMPT = "Connection [1] (h Help, c Cancel):"
 SETUP_REFUSAL_PROMPT = "Setup is not ready. r Retry checks, b Back, c Cancel:"
 
 
+M1_DISCLOSURE_REASONS = frozenset("""
+    action-refused deadline-before-start descendant-cleanup diagnostic-bound driver-error
+    exit-before-continuation exit-before-prompt exit-before-result exit-before-return
+    exit-before-selection exit-deadline input-closed input-deadline label-duplicate label-missing
+    output-bound output-deadline output-encoding output-unterminated owner-exited process-cleanup
+    process-failed process-ownership prompt-mismatch request-deadline result-mismatch signal-cancelled
+""".split())
+
+
 class ProtocolError(Exception):
     def __init__(self, phase, code=None):
         super().__init__(phase)
@@ -234,9 +243,13 @@ class PhaseTiming:
     def __init__(self, sink, deadline):
         self.relay = DiagnosticRelay(sink)
         self.deadline = deadline
+        self.started = time.monotonic()
+        self.last_input_class = "none"
 
     def __call__(self, event, input_class="none"):
         now = time.monotonic()
+        if event == "input-sent":
+            self.last_input_class = input_class
         self.relay.emit("SBXR_MENU_PHASE " + json.dumps({
             "event": event, "class": input_class, "monotonic": round(now, 6),
             "remaining_ms": round((self.deadline - now) * 1000, 3),
@@ -1001,6 +1014,15 @@ def main():
         suffix = " code=" + code if not diagnostic_output and code and re.fullmatch(r"[A-Z0-9-]+", code) else ""
         message = "SBXR_MENU_SESSION_REFUSED phase=" + phase + suffix
         if timing:
+            # This opt-in summary contains only driver-owned values. Never include
+            # last_code, child output, prompt text or the value written to stdin.
+            if (os.environ.get("SBXR_M1_DISCLOSURE_RECEIPT") == "1" and
+                    args.mode == "disclose" and args.label == "Show client configuration" and
+                    args.expected == "PROXY-INSTALLATION-CLIENT-CONFIGURATION-DISCLOSED" and
+                    phase in M1_DISCLOSURE_REASONS):
+                ms = int((time.monotonic() - timing.started) * 1000)
+                if 0 <= ms <= 120000:
+                    timing.relay.emit(f"SBXR_M1_DISCLOSURE {phase} {timing.last_input_class} {ms}")
             timing.relay.emit(message)
         else:
             print(message, file=sys.stderr)

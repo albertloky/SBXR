@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import stat
 import sys
 
@@ -11,6 +12,9 @@ MAX_FILE = 16 << 20
 MAX_TOTAL = 64 << 20
 SECRET = re.compile(r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|Authorization: Bearer |[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|(?:vless|vmess)://|https?://[^ /\"\s]+:8443/|/s/[A-Za-z0-9_-]{20,}", re.I)
 STAGES = {'v3-scenario-failure', 'v3-scenario-result', 'candidate-failure-finalization', 'candidate-failure-verification'}
+
+valid_disclosure = runpy.run_path(str(Path(__file__).with_name("m1_disclosure_receipt.py")))["valid"]
+
 
 def unique(items):
     result = {}
@@ -29,6 +33,7 @@ def stage(root, destination):
               for directory in ('', 'boundary', 'boundary/unsigned')
               for kind in ('facts', 'decision', 'verification-facts', 'verification-decision')]
     retained, total, rejected = [], 0, 0
+    disclosure = None
     for path in paths:
         try:
             for parent in (path, *path.parents):
@@ -55,6 +60,12 @@ def stage(root, destination):
                     or schema not in {'sbxr-release-qualification-facts-v1', 'sbxr-release-qualification-decision-v1'}
                     or evidence_stage not in STAGES):
                 raise ValueError('unexpected evidence schema or stage')
+            failure = value.get("failure")
+            if isinstance(failure, dict) and "m1_disclosure" in failure:
+                if (evidence_stage != "v3-scenario-failure" or failure.get("scenario_id") != "mvp-install"
+                        or failure.get("operation_id") != "operation-1" or failure.get("actual_result") != "unexpected-failure"
+                        or not valid_disclosure(failure["m1_disclosure"])):
+                    raise ValueError("unsafe disclosure diagnostic")
             # Scan decoded strings too: JSON escaping must not hide credential URLs.
             if SECRET.search(raw.decode('utf-8')) or SECRET.search(json.dumps(value, ensure_ascii=False)):
                 raise ValueError('secret-shaped evidence refused')
@@ -67,6 +78,11 @@ def stage(root, destination):
             continue
         total += len(raw)
         retained.append((path.relative_to(root), raw))
+        if (path == root / "handoff/failure-evidence/failure-decision.json"
+                and schema == "sbxr-release-qualification-decision-v1" and evidence_stage == "v3-scenario-failure"
+                and value.get("outcome") == "failed" and value.get("stop_test_mutations") is True
+                and value.get("burn_required") is True and isinstance(failure, dict)):
+            disclosure = failure.get("m1_disclosure")
     if rejected:
         print(f'Candidate evidence: omitted {rejected} unsafe or incomplete records.', file=sys.stderr)
     destination.mkdir(mode=0o700)
@@ -76,6 +92,13 @@ def stage(root, destination):
         with target.open('xb') as stream:
             stream.write(raw)
         target.chmod(0o600)
+    if disclosure is not None:
+        # Log only the closed projection from the retained release-tool decision.
+        try:
+            print(f"M1 disclosure: reason={disclosure['reason']} last_input_class={disclosure['last_input_class']} "
+                  f"elapsed_ms={disclosure['elapsed_ms']}", flush=True)
+        except OSError:
+            pass  # A logging failure must not suppress artifact upload.
     return len(retained)
 
 if __name__ == '__main__':

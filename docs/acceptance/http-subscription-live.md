@@ -372,6 +372,24 @@ actual prepared callers and recheck feasibility before an approved attempt.
 
 ### Terminal failure ends candidate authentication
 
+For the native M1 **Show client configuration** action, the attended operator sets
+`SBXR_M1_DISCLOSURE_RECEIPT=1` on that driver process. Its host wrapper applies
+`m1_disclosure_receipt.add_diagnostic(terminal, intent, driver_stderr)` before
+returning the normal terminal receipt. The receiver and disposition reader use
+`expected_terminal` when comparing it with their independently calculated
+binding, exit, size and digest. Keep stderr private and out of the receipt.
+On M1 failure, prepare the existing facts with `attach_to_failure` using the
+private operator's `live` directory and the authenticated job, request digest,
+manifest digest and window digest (or `None` for an original run). Do this
+before canonicalizing and replaying the facts. Check that the replay decision
+contains that exact prepared failure and the original safety-cleanup record.
+Submit those same facts bytes through the ordinary failure path. A verified
+decision can then report the refusal
+category, last flushed input class and elapsed milliseconds through refusal
+handling. The class `other` records no input value. A successful disclosure
+has no failure diagnostic. Missing, uncertain or foreign receipts leave the
+original failure intact and confer no permission to retry.
+
 Submitting `v3-scenario-failure` through `v3-recurring-evidence.sh submit` is a
 terminal operation, not just saving a report. The collector accepts the failed
 outcome, writes STOP, and exits. The candidate workflow's EXIT trap then tears down the private loopback gateway
