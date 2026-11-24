@@ -198,9 +198,47 @@ prove_not_set_up() {
 
 prove_running() {
   local output
-  output="$(printf '0\n' | /usr/local/bin/sbxr)"
-  grep -F 'Proxy status: Running' <<<"$output" >/dev/null
-  grep -F 'Code: PROXY-INSTALLATION-SETUP-COMPLETE' <<<"$output" >/dev/null
+  output="$(printf '0\n' | /usr/local/bin/sbxr)" || return $?
+  # A fresh Rust menu reports lifecycle readiness. Setup completion belongs
+  # to the setup action. The older versioned Go frame reports a proxy code.
+  awk '
+    NR == 1 && $0 != "SBXR V3" { bad = 1 }
+    closed && $0 !~ /^Choose:[[:space:]]*$/ { bad = 1 }
+    $0 == "SBXR V3" { frames++ }
+    /^Version: v[0-9]/ { version++ }
+    /^Proxy status:/ { proxy++; if ($0 != "Proxy status: Running") bad = 1 }
+    /^Software Lifecycle:/ { lifecycle++; if ($0 != "Software Lifecycle: Ready") bad = 1 }
+    /^Code:/ {
+      if ($0 == "Code: SOFTWARE-LIFECYCLE-STATUS-READY") ready++
+      else if ($0 == "Code: PROXY-INSTALLATION-SETUP-COMPLETE") setup++
+      else bad = 1
+    }
+    /^Failed safety check:/ { bad = 1 }
+    $0 == "0. Exit" { closed++ }
+    END {
+      rust = !version && lifecycle == 1 && ready == 1 && !setup
+      legacy = version == 1 && setup == 1 && lifecycle == ready && ready <= 1
+      exit !(frames == 1 && proxy == 1 && closed == 1 && !bad && (rust || legacy))
+    }
+  ' <<<"$output"
+}
+
+# Local manual M1 caller. Use the already authenticated SSH argv and the
+# current request's reviewed remote checks. stdin carries the verified module.
+observe_m1_running() {
+  [[ $# -ge 4 && $2 =~ ^[1-9][0-9]{0,9}$ && -n $3 ]] || return 1
+  local directory=$1 cutoff=$2 checks=$3 scripts
+  local read_seconds=60 kill_after=3 reserve=900
+  shift 3
+  scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || return 1
+  python3 "$scripts/mvp-operator-run.py" --run-directory "$directory" \
+    --label m1-prove-running --cutoff-unix "$cutoff" --timeout 80 --reserve "$reserve" \
+    -- "$@" "set -eu
+$checks
+now=\$(date +%s)
+test \"\$now\" -gt 0
+test \"\$now\" -lt $((cutoff - read_seconds - kill_after - 10 - reserve))
+exec timeout --signal=TERM --kill-after=$kill_after $read_seconds bash -c 'set -euo pipefail; source /dev/stdin; prove_running'"
 }
 
 prove_not_installed() {

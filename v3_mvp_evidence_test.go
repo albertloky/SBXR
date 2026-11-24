@@ -75,6 +75,7 @@ func TestSharedPackagedMenuDrivers(t *testing.T) {
 	for _, path := range []string{
 		".github/scripts/test_v3_menu_session.py",
 		".github/scripts/test_v3_packaged_live_menu_disclosure.py",
+		".github/scripts/test_m1_running_status.py",
 	} {
 		if output, err := exec.Command("python3", path).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", path, err, output)

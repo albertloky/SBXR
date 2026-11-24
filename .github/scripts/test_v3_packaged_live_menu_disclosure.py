@@ -21,7 +21,7 @@ def event(value):
 event({"event":"started","pid":os.getpid()})
 print("SBXR V3\nProxy status: Running")
 print("Subscription status: Problem detected" if mode == "missing" else "Subscription status: Available")
-print("Code: PROXY-INSTALLATION-SETUP-COMPLETE")
+print("Software Lifecycle: Ready\nCode: SOFTWARE-LIFECYCLE-STATUS-READY")
 print("1. View details\n2. Rotate Client Identity")
 if mode != "missing": print("3. Show client configuration")
 if mode == "duplicate": print("7. Show client configuration")

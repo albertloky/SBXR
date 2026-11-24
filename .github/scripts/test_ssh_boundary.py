@@ -49,7 +49,7 @@ def free_port():
 def fake_product(path):
     source = f'''#!/usr/bin/env python3
 import os, signal, sys, time
-menu = "SBXR V3\\nProxy status: Running\\nCode: PROXY-INSTALLATION-SETUP-COMPLETE\\n1. View details\\n2. Rotate Client Identity\\n3. Show client configuration\\n4. Replace subscription certificate\\n0. Exit"
+menu = "SBXR V3\\nProxy status: Running\\nSoftware Lifecycle: Ready\\nCode: SOFTWARE-LIFECYCLE-STATUS-READY\\n1. View details\\n2. Rotate Client Identity\\n3. Show client configuration\\n4. Replace subscription certificate\\n0. Exit"
 print(menu, flush=True)
 choice = sys.stdin.readline().strip()
 if choice == "0": raise SystemExit(0)

@@ -140,6 +140,31 @@ Karing row once; it is not a five-minute wait followed by a second five-minute
 cleanup allowance. If missing cooperation would prevent independently reachable
 cleanup within the selected row, do not open that handoff.
 
+### M1 running-state readback
+
+After the setup action emits `PROXY-INSTALLATION-SETUP-COMPLETE`, read the
+new native menu separately. A healthy observed status review took 34.86 seconds.
+Use the existing 80-second read-only SSH batch for this observation. Its
+remote command has 60 seconds, followed by at most 3 seconds to stop. The
+remaining 17 seconds cover transport and guard overhead. The local supervisor
+separately reserves 10 seconds to stop and the full 900 seconds for M1 restoration.
+
+Use the current authenticated request's earliest cutoff `E`, the existing
+pinned SSH argv (including the destination), and the same reviewed remote
+checks for the machine, staging owner, manifest, request, and signed/runtime
+deadlines. Revalidate the request before invoking the caller. Stream the same
+verified helper bytes used in the rest of the handoff.
+
+```bash
+source "$verified_scripts/v3-packaged-live.sh"
+observe_m1_running "$run_directory" "$E" "$current_remote_checks" \
+  "${pinned_ssh[@]}" < "$verified_scripts/v3-packaged-live.sh"
+```
+
+This observes the current local proxy state. Outside traffic still requires
+its own observation. A timeout or failed readback stops the journey under the
+existing safety-cleanup procedure.
+
 ## Handoff admission and the M3 limitation
 
 Before a qualification handoff with response allowance `H`, require

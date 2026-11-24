@@ -304,6 +304,10 @@ not replace artifact/attestation review, complete `mvp-install`, or authorize a
 new attempt. It needs no log-parent permission window. The later public menu
 processes still use the applicable [log-parent plan](mvp-protected-log-parent-2026-09-19.md).
 
+For M1, verify the result of the setup action in its own menu session. Use the
+[bounded running-state readback](bounded-operator-cleanup.md#m1-running-state-readback)
+for the independent status observation.
+
 ## Recording the five journeys
 
 The existing JSON handoff remains supported. Prefer the small repository-owned
