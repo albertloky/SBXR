@@ -777,3 +777,24 @@ successful qualification. Preserve the draft, all four assets, the source claim,
 both attestations and the failed run evidence. Future admission requires all
 34 retained drafts to match, with their release and burn refs absent.
 Build 236’s tag, sequence and release ID are unavailable for reuse or promotion.
+
+## Retained q237 identity — 2026-11-24
+
+The Owner approved retaining unpublished draft v3.1.163, build 237, release
+456494759, as signed-unqualified. The original signing job in attempt 1 bound
+all four assets to commit `9373a863a1ff9d24cb22639657d0f6fa6b9045fc`.
+Artifact 14904077833 contains the qualification manifest with SHA-256
+`8bd35b6a24440b29c1981b74aac490f8c245a4fe2c17ed137ce6248cce12d673`.
+The release-index SHA-256 is
+`3603ea6d41d58810c4a265e30c05b8291c99d1225e301c1465c7fb7dcf871653`.
+[Original signing job](https://github.com/albertloky/SBXR/actions/runs/45351436999/job/138322718291)
+
+Fresh attempt 1 claimed the signed source (artifact 14914938409). Installation
+completed, then the M1 running-state observer timed out before the Karing
+measurement. The live job failed. Preserve the draft, its four assets, the
+claim, the attestations and the failure evidence.
+[Failed live job](https://github.com/albertloky/SBXR/actions/runs/45379029266/job/138396474874)
+
+Future admission requires all 35 retained drafts to match, with their release
+and burn refs absent. Build 237’s tag, sequence and draft ID are reserved
+against reuse and promotion.
