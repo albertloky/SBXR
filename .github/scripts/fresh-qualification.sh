@@ -100,7 +100,8 @@ case "$1" in
       '.origin == $origin[0] and .signed_manifest == ($manifest | fromjson)' fresh-window-facts.json >/dev/null
     go run ./cmd/sbxr-release qualification < fresh-window-facts.json > fresh-window-replayed.json
     cmp fresh-window-replayed.json fresh-window-decision.json
-    python3 -B "$scripts/qualification-window-authority.py" window fresh-window-decision.json "$GITHUB_RUN_ID"
+    python3 -B "$scripts/qualification-window-authority.py" window-bundle fresh-window-decision.json "$GITHUB_RUN_ID" > handoff/fresh-window.bundle
+    install -m 0600 fresh-window-decision.json handoff/fresh-window-decision.json
     # Both jobs use the same environment. The protected live job, its unique
     # successful sign dependency, and two reviews must all match this run.
     python3 -B "$scripts/qualification-window-authority.py" live "$GITHUB_RUN_ID"

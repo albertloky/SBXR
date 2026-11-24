@@ -61,6 +61,27 @@ class FreshWindowAuthority(unittest.TestCase):
                 self.assertFalse(auth.exact_invocation(result, INVOCATION))
 
 
+    def test_staged_bundle_is_from_the_exact_verified_window_invocation(self):
+        auth = load()
+        bundle = {"dsseEnvelope": {"payload": "fixture"}}
+        verified = {"attestation": {"bundle": bundle}, "verificationResult": {
+            "signature": {"certificate": {"runInvocationURI": INVOCATION}}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = pathlib.Path(tmp) / "fresh-window-decision.json"
+            workflow = auth.run_workflow("101", RUN)
+            subject.write_text(json.dumps({"outcome": "accepted", "stage": "qualification-window",
+                                          "window": {"workflow": workflow, "run_attempt": 1}}))
+            auth.gh_json = lambda args, reason: RUN if args[0] == "api" else [verified]
+            self.assertEqual(auth.verify_window(subject, "101"), bundle)
+            for missing in (None, {}, {"dsseEnvelope": {}}):
+                verified["attestation"]["bundle"] = missing
+                with self.subTest(missing=missing), self.assertRaises(auth.Refused):
+                    auth.verify_window(subject, "101")
+            verified["attestation"]["bundle"] = bundle
+            verified["verificationResult"]["signature"]["certificate"]["runInvocationURI"] += "0"
+            with self.assertRaises(auth.Refused):
+                auth.verify_window(subject, "101")
+
     def test_expired_or_previously_claimed_source_has_no_admission_receipt(self):
         script = pathlib.Path(__file__).resolve().with_name("fresh-qualification.sh")
         with tempfile.TemporaryDirectory() as directory:

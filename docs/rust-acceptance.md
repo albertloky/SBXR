@@ -255,16 +255,21 @@ The seven required inputs are `qualification-manifest.json`,
 `qualification.bundle`, `ca.crt`, `staging-owned`, `transport-owned`, `deadline`
 and `runtime-deadline`. The manifest must describe the approved current
 clean-install HTTP scope, one candidate identity/sequence and all four assets;
-its workflow run/attempt must match the staging marker. The transport marker is
-empty. Canonical epoch deadlines must keep the original six-hour bound and
-60-second early runtime cutoff. Absolute and monotonic checks prevent renewal of
+the staging marker identifies the live run and attempt. For an ordinary run it
+matches the manifest. Fresh staging also contains the exact
+`fresh-window-decision.json` and its `fresh-window.bundle`. The decision binds
+the original manifest digest, workflow and release to the fresh staging owner
+and finish time. Both files use the same protected read and retained-inode
+checks as the manifest. The transport marker is empty. Canonical epoch deadlines
+must keep the original six-hour bound and 60-second early runtime cutoff. Absolute and monotonic checks prevent renewal of
 the loaded deadline. Root ownership, safe nonsymlink parents, 0700 staging,
 single-link regular files, exact contract permissions, bounded bytes and retained
 inodes are mandatory. Only CA and staging marker allow 0644 as well as 0600,
 matching the retained producer; all other selected inputs require 0600.
 
 Selection is untrusted structural data. Before candidate networking, the real
-pinned Sigstore verifier authenticates the exact staged raw manifest and bundle.
+pinned Sigstore verifier authenticates the exact staged manifest and, for fresh
+staging, the separate window decision under its own signed subject name.
 The protected Installed Record must name that same full identity and sequence.
 The fixed gateway then authenticates its own delivered manifest and all assets;
 its raw signed manifest digest must equal the staged digest. The private TLS

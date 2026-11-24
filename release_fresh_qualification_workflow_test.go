@@ -222,3 +222,48 @@ func TestStablePublicationEvidenceNamesTheQualificationRun(t *testing.T) {
 		})
 	}
 }
+
+func TestHostTransportCarriesVerifiedWindowOnlyForFreshAdmission(t *testing.T) {
+	workflow, err := os.ReadFile(".github/workflows/candidate.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Execute the same packaging block that follows the runner's last host
+	// check. No SSH, signing, or synthetic admission replaces that boundary.
+	_, live, ok := strings.Cut(string(workflow), "actual_vps=\"")
+	if !ok {
+		t.Fatal("missing host admission")
+	}
+	_, live, ok = strings.Cut(live, "bash .github/scripts/fresh-qualification.sh recheck-clock\n          fi\n")
+	pack, _, end := strings.Cut(live, "          cleanup_v3_transport() {")
+	if !ok || !end {
+		t.Fatal("missing transport packaging")
+	}
+	for _, fresh := range []bool{false, true} {
+		dir := t.TempDir()
+		handoff := filepath.Join(dir, "handoff")
+		if err := os.Mkdir(handoff, 0700); err != nil {
+			t.Fatal(err)
+		}
+		names := []string{"qualification-manifest.json", "qualification.bundle", "sbxr-release", "gateway.crt", "gateway.key", "ca.crt", "assets", "v3-qualification-transport.sh"}
+		if fresh {
+			names = append(names, "fresh-window-evidence.json", "fresh-window-decision.json", "fresh-window.bundle")
+		}
+		for _, n := range names {
+			if err := os.WriteFile(filepath.Join(handoff, n), []byte(n), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command("bash", "-euc", pack)
+		cmd.Dir = dir
+		if b, e := cmd.CombinedOutput(); e != nil {
+			t.Fatalf("transport packaging: %v %s", e, b)
+		}
+		for _, n := range []string{"fresh-window-decision.json", "fresh-window.bundle"} {
+			b, e := exec.Command("tar", "-xOzf", filepath.Join(dir, "v3-transport.tgz"), n).Output()
+			if fresh && (e != nil || string(b) != n) || !fresh && e == nil {
+				t.Fatalf("fresh=%v: archived %s differs", fresh, n)
+			}
+		}
+	}
+}

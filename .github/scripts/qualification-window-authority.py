@@ -91,6 +91,7 @@ def verify_attestation(subject, workflow, run_attempt):
     ], "attestation")
     expected = workflow["run_url"] + f"/attempts/{run_attempt}"
     require(exact_invocation(verified, expected), "attestation-invocation")
+    return verified[0]
 
 
 def origin(subject, run_id):
@@ -119,7 +120,10 @@ def verify_window(subject, run_id):
     require(decision["outcome"] == "accepted" and decision["stage"] == "qualification-window" and
             decision["window"]["workflow"] == workflow and decision["window"]["run_attempt"] == 1,
             "window-run-identity")
-    verify_attestation(subject, workflow, 1)
+    bundle = verify_attestation(subject, workflow, 1)["attestation"]["bundle"]
+    envelope = bundle.get("dsseEnvelope") if isinstance(bundle, dict) else None
+    require(isinstance(envelope, dict) and envelope.get("payload"), "window-bundle")
+    return bundle
 
 
 def live(run_id, completed=False):
@@ -155,8 +159,10 @@ def main(args):
     if len(args) == 3 and args[0] == "origin":
         report = origin(Path(args[1]), args[2])
         sys.stdout.write(json.dumps(report, sort_keys=True, separators=(",", ":")))
-    elif len(args) == 3 and args[0] == "window":
-        verify_window(Path(args[1]), args[2])
+    elif len(args) == 3 and args[0] in ("window", "window-bundle"):
+        bundle = verify_window(Path(args[1]), args[2])
+        if args[0] == "window-bundle":
+            sys.stdout.write(json.dumps(bundle, separators=(",", ":")))
     elif len(args) == 2 and args[0] in ("live", "completed"):
         live(args[1], completed=args[0] == "completed")
     else:

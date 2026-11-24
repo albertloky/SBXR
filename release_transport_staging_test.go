@@ -145,6 +145,37 @@ func TestQualificationTransportStagingRemovesOnlyKnownOwnedTreeAndAllowsPartialR
 	}
 }
 
+func TestFreshWindowTransportProofBelongsOnlyToSplitRunStaging(t *testing.T) {
+	for _, tc := range []struct {
+		owner string
+		fresh bool
+	}{
+		{"101-1\n", false}, {"102-1\n", true}, {"102-2\n", false}, {"foreign\n", false},
+	} {
+		_, root := makeTransportStaging(t, true)
+		writeTransportStaging(t, root, "qualification-manifest.json", `{"workflow":{"run_id":"101"},"v3_attempt":{"run_attempt":1},"releases":[{"tag":"v3.1.95"}]}`)
+		writeTransportStaging(t, root, "staging-owned", tc.owner)
+		for _, name := range []string{"fresh-window-decision.json", "fresh-window.bundle"} {
+			writeTransportStaging(t, root, name, "retained window proof")
+		}
+		contents, identities := snapshotTransportStaging(t, root)
+		output, err := removeTransportStaging(t, root)
+		if tc.fresh {
+			if err != nil {
+				t.Fatalf("fresh-window teardown: %v %s", err, output)
+			}
+			if _, err := os.Lstat(root); !os.IsNotExist(err) {
+				t.Fatal("fresh-window staging remains")
+			}
+		} else {
+			if err == nil {
+				t.Fatalf("unexpected deletion with marker %q", tc.owner)
+			}
+			assertTransportStagingUntouched(t, root, contents, identities)
+		}
+	}
+}
+
 func TestQualificationTransportStagingRefusesUnsafeTreeBeforeDeletingAnything(t *testing.T) {
 	for _, test := range []struct {
 		name    string

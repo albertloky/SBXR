@@ -353,3 +353,66 @@ fn qualification_purge_scope_requires_one_node_clock_and_protected_machine_id() 
     stage.write("staging-owned", b"1234-2\n", 0o644);
     assert!(input.verify_one_node_purge_host(&fs, stage.time).is_err());
 }
+
+#[test]
+fn fresh_window_selects_the_signed_origin_for_menu_entry() {
+    let f = Fixture::new();
+    let raw = crate::release_acquisition::fixture_candidate_manifest();
+    let manifest: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let mut workflow = manifest["workflow"].clone();
+    workflow["run_id"] = "5678".into();
+    workflow["commit"] = "c".repeat(40).into();
+    workflow["run_url"] = "https://github.com/albertloky/SBXR/actions/runs/5678".into();
+    let decision = serde_json::json!({
+        "schema":"sbxr-release-qualification-decision-v1", "stage":"qualification-window",
+        "outcome":"accepted", "window":{
+            "schema":"sbxr-qualification-window-v1", "origin":manifest["workflow"],
+            "workflow":workflow, "run_attempt":1, "release":manifest["releases"][0],
+            "manifest_sha256":sha256_hex(&raw), "start_unix":f.time-10,
+            "test_until_unix":f.time+1800, "finish_unix":f.time+3600
+        }
+    });
+    f.write("staging-owned", b"5678-1\n", 0o600);
+    let put = |v: &serde_json::Value| {
+        f.write(
+            "fresh-window-decision.json",
+            &serde_json::to_vec(v).unwrap(),
+            0o600,
+        )
+    };
+    put(&decision);
+    f.write("fresh-window.bundle", BUNDLE, 0o600);
+    std::fs::remove_file(f.stage().join("staging-owned")).unwrap();
+    assert!(select(&f.root(), f.time).is_err(), "missing fresh owner");
+    f.write("staging-owned", b"5678-1\n", 0o600);
+    let selected = f.candidate();
+    assert_eq!(selected.manifest_sha256, sha256_hex(&raw));
+    assert_eq!(selected.identity.tag(), "v9.0.0");
+    assert!(
+        selected.authenticate(&SelectionBudget::new()).is_err(),
+        "unrelated signature must refuse admission"
+    );
+    for marker in [b"1234-1\n".as_slice(), b"9999-1\n", b"5678-2\n"] {
+        f.write("staging-owned", marker, 0o600);
+        assert!(select(&f.root(), f.time).is_err(), "foreign staging owner");
+    }
+    f.write("staging-owned", b"5678-1\n", 0o600);
+    for (key, bad) in [
+        ("origin", workflow.clone()),
+        ("manifest_sha256", "0".repeat(64).into()),
+        ("finish_unix", (f.time + 3601).into()),
+        ("start_unix", (f.time + 10).into()),
+    ] {
+        let mut changed = decision.clone();
+        changed["window"][key] = bad;
+        put(&changed);
+        assert!(select(&f.root(), f.time).is_err(), "wrong {key}");
+    }
+    put(&decision);
+    std::fs::remove_file(f.stage().join("fresh-window.bundle")).unwrap();
+    assert!(
+        select(&f.root(), f.time).is_err(),
+        "missing window signature"
+    );
+    assert!(selected.verify(f.time).is_err(), "removed retained proof");
+}

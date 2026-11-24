@@ -334,13 +334,27 @@ pub fn verify_candidate_manifest(
     manifest: &[u8],
     budget: &SelectionBudget,
 ) -> Result<VerifiedStatement> {
-    if manifest.is_empty() || manifest.len() > 1 << 20 {
-        return Err(TrustError::Refused);
-    }
-    json_object(manifest, 1 << 20)?;
-    let policy = VerificationPolicy::candidate_manifest(&sha256_hex(manifest))?;
+    verify_candidate_document(body, "qualification-manifest.json", manifest, budget)
+}
+
+pub(crate) fn verify_window_decision(
+    body: &[u8],
+    decision: &[u8],
+    budget: &SelectionBudget,
+) -> Result<VerifiedStatement> {
+    verify_candidate_document(body, "fresh-window-decision.json", decision, budget)
+}
+
+fn verify_candidate_document(
+    body: &[u8],
+    name: &str,
+    document: &[u8],
+    budget: &SelectionBudget,
+) -> Result<VerifiedStatement> {
+    json_object(document, 1 << 20)?;
+    let policy = VerificationPolicy::candidate_manifest(&sha256_hex(document))?;
     let verified = verify_bundle(body, &policy, budget)?;
-    inspect_candidate_statement(verified.payload(), manifest)?;
+    inspect_candidate_subject(verified.payload(), name, document)?;
     budget.check()?;
     Ok(verified)
 }
@@ -498,7 +512,11 @@ fn native_statement(body: &[u8], commit: &str) -> Result<(String, BTreeMap<Strin
 /// Inspect only the subject binding; the enclosing DSSE signature is unverified.
 /// Like Go, permits other in-toto predicate fields but checks all JSON duplicates.
 pub fn inspect_candidate_statement(body: &[u8], manifest: &[u8]) -> Result<()> {
-    if manifest.is_empty() || manifest.len() > 1 << 20 {
+    inspect_candidate_subject(body, "qualification-manifest.json", manifest)
+}
+
+fn inspect_candidate_subject(body: &[u8], name: &str, document: &[u8]) -> Result<()> {
+    if document.is_empty() || document.len() > 1 << 20 {
         return Err(TrustError::Refused);
     }
     let value = json_object(body, MAX_BUNDLE_BYTES)?;
@@ -513,12 +531,12 @@ pub fn inspect_candidate_statement(body: &[u8], manifest: &[u8]) -> Result<()> {
         return Err(TrustError::Refused);
     }
     let subject = subjects[0].as_object().ok_or(TrustError::Refused)?;
-    if subject.get("name").and_then(Value::as_str) != Some("qualification-manifest.json")
+    if subject.get("name").and_then(Value::as_str) != Some(name)
         || digest(
             subject.get("digest").ok_or(TrustError::Refused)?,
             "sha256",
             64,
-        )? != sha256_hex(manifest)
+        )? != sha256_hex(document)
     {
         return Err(TrustError::Refused);
     }

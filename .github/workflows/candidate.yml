@@ -861,7 +861,11 @@ jobs:
             test "$actual_vps" = "$(jq -er .v3_attempt.vps_identity_sha256 handoff/qualification-manifest.json)"
             bash .github/scripts/fresh-qualification.sh recheck-clock
           fi
-          tar -C handoff -czf v3-transport.tgz qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt assets v3-qualification-transport.sh
+          window_files=()
+          if test -f handoff/fresh-window-evidence.json; then
+            window_files=(fresh-window-decision.json fresh-window.bundle)
+          fi
+          tar -C handoff -czf v3-transport.tgz qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt assets v3-qualification-transport.sh "${window_files[@]}"
           cleanup_v3_transport() {
             status=$?
             trap - EXIT

@@ -102,7 +102,18 @@ manifest = root / "qualification-manifest.json"
 # Refuse links before parsing any authority from this run's manifest.
 st = manifest.lstat()
 require(stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and st.st_uid == os.geteuid())
-releases = json.loads(manifest.read_text())["releases"]
+document = json.loads(manifest.read_text())
+releases = document["releases"]
+window_files = {"fresh-window-decision.json", "fresh-window.bundle"}
+if any(os.path.lexists(root / name) for name in window_files):
+    owner = root / "staging-owned"
+    meta = owner.lstat()
+    require(stat.S_ISREG(meta.st_mode) and meta.st_uid == os.geteuid() and meta.st_nlink == 1 and meta.st_size <= 64)
+    origin = document["workflow"]["run_id"]
+    marker = re.fullmatch(rb"([1-9][0-9]*)-1\n", owner.read_bytes())
+    require(isinstance(origin, str) and re.fullmatch(r"[1-9][0-9]*", origin) and
+            document["v3_attempt"]["run_attempt"] == 1 and marker and marker[1].decode() != origin)
+    files.update(window_files)
 require(isinstance(releases, list))
 tags = set()
 for release in releases:
@@ -125,7 +136,8 @@ def inspect(path, relative):
     seen.append((path, st.st_dev, st.st_ino))
 inspect(root, "")
 # Validation finishes before the first unlink. No following of links or rm -rf.
-for path, device, inode in seen:
+# Keep the live owner available if removal of the fresh proof is interrupted.
+for path, device, inode in sorted(seen, key=lambda row: row[0] == root / "staging-owned"):
     if path.parent == root and path.name in ("qualification-manifest.json", "transport-owned"):
         continue
     current = path.lstat()

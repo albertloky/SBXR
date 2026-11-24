@@ -109,6 +109,7 @@ pub(in crate::host) enum EntryInput {
 pub(in crate::host) struct ProtectedCandidateInput {
     fs: ProtectedFs,
     files: Vec<HeldFile>,
+    fresh_window: Option<FreshWindow>,
     identity: ReleaseIdentity,
     sequence: u64,
     ca_sha256: String,
@@ -130,6 +131,70 @@ fn deadline(bytes: &[u8]) -> Result<u64, HostError> {
     let s = s.strip_suffix('\n').ok_or(HostError::Foreign)?;
     positive(s).ok_or(HostError::Foreign)
 }
+// The manifest names the signed build. In a fresh window the separately
+// attested decision names the run that owns staging and its absolute cutoff.
+struct FreshWindow {
+    decision: HeldFile,
+    bundle: HeldFile,
+    start: u64,
+}
+
+impl FreshWindow {
+    fn read(
+        stage: &ProtectedFs,
+        manifest: &serde_json::Value,
+        manifest_sha256: &str,
+        marker: &[u8],
+        finish: u64,
+        time: u64,
+    ) -> Result<Option<Self>, HostError> {
+        const DECISION: &str = "fresh-window-decision.json";
+        const BUNDLE: &str = "fresh-window.bundle";
+        if stage.metadata(DECISION)?.is_none() && stage.metadata(BUNDLE)?.is_none() {
+            return Ok(None);
+        }
+        let decision = HeldFile::read(stage, DECISION, 1 << 20)?;
+        let bundle = HeldFile::read(stage, BUNDLE, trust::MAX_BUNDLE_BYTES)?;
+        let doc = trust::json_object(&decision.bytes, 1 << 20).map_err(refused)?;
+        let w = &doc["window"];
+        let origin = &manifest["workflow"];
+        let live = &w["workflow"];
+        let run = live["run_id"]
+            .as_str()
+            .filter(|id| positive(id).is_some())
+            .ok_or(HostError::Foreign)?;
+        let start = w["start_unix"].as_u64().ok_or(HostError::Foreign)?;
+        let test_until = w["test_until_unix"].as_u64().ok_or(HostError::Foreign)?;
+        if doc["schema"] != "sbxr-release-qualification-decision-v1"
+            || doc["stage"] != "qualification-window"
+            || doc["outcome"] != "accepted"
+            || w["schema"] != "sbxr-qualification-window-v1"
+            || w["manifest_sha256"] != manifest_sha256
+            || w["origin"] != *origin
+            || w["release"] != manifest["releases"][0]
+            || manifest["v3_attempt"]["run_attempt"] != 1
+            || w["run_attempt"] != 1
+            || live["run_id"] == origin["run_id"]
+            || live["path"] != origin["path"]
+            || live["ref"] != origin["ref"]
+            || live["run_url"] != format!("https://github.com/albertloky/SBXR/actions/runs/{run}")
+            || marker != format!("{run}-1\n").as_bytes()
+            || w["finish_unix"].as_u64() != Some(finish)
+            || start == 0
+            || start > time
+            || start >= test_until
+            || test_until >= finish
+        {
+            return Err(HostError::Foreign);
+        }
+        Ok(Some(Self {
+            decision,
+            bundle,
+            start,
+        }))
+    }
+}
+
 /// Called by the actual zero-argument entry. Absence alone selects public stable;
 /// any existing incomplete, unsafe, stale or contradictory handoff refuses.
 pub(in crate::host) fn select(fs: &ProtectedFs, time: u64) -> Result<EntryInput, HostError> {
@@ -157,7 +222,7 @@ pub(in crate::host) fn select(fs: &ProtectedFs, time: u64) -> Result<EntryInput,
         .as_u64()
         .filter(|n| *n > 0)
         .ok_or(HostError::Foreign)?;
-    if files[3].bytes != format!("{run}-{attempt}\n").as_bytes() || !files[4].bytes.is_empty() {
+    if !files[4].bytes.is_empty() {
         return Err(HostError::Foreign);
     }
     trust::json_object(&files[1].bytes, trust::MAX_BUNDLE_BYTES).map_err(refused)?;
@@ -170,9 +235,22 @@ pub(in crate::host) fn select(fs: &ProtectedFs, time: u64) -> Result<EntryInput,
     {
         return Err(HostError::Foreign);
     }
+    let manifest_sha256 = sha256_hex(manifest);
+    let fresh_window = FreshWindow::read(
+        &stage,
+        &document,
+        &manifest_sha256,
+        &files[3].bytes,
+        finish,
+        time,
+    )?;
+    if fresh_window.is_none() && files[3].bytes != format!("{run}-{attempt}\n").as_bytes() {
+        return Err(HostError::Foreign);
+    }
     let value = ProtectedCandidateInput {
         ca_sha256: sha256_hex(&files[2].bytes),
-        manifest_sha256: sha256_hex(manifest),
+        manifest_sha256,
+        fresh_window,
         fs: stage,
         files,
         identity,
@@ -188,6 +266,13 @@ impl ProtectedCandidateInput {
         if time >= self.runtime_deadline || Instant::now() >= self.until {
             return Err(HostError::Foreign);
         }
+        if let Some(window) = &self.fresh_window {
+            if time < window.start {
+                return Err(HostError::Foreign);
+            }
+            window.decision.verify(&self.fs)?;
+            window.bundle.verify(&self.fs)?;
+        }
         for file in &self.files {
             file.verify(&self.fs)?;
         }
@@ -195,11 +280,16 @@ impl ProtectedCandidateInput {
     }
     pub(in crate::host) fn authenticate(&self, budget: &SelectionBudget) -> Result<(), HostError> {
         self.verify(now()?)?;
+        let trust_error = |e| match e {
+            trust::TrustError::Interrupted => HostError::Cancelled,
+            _ => HostError::Foreign,
+        };
         trust::verify_candidate_manifest(&self.files[1].bytes, &self.files[0].bytes, budget)
-            .map_err(|e| match e {
-                trust::TrustError::Interrupted => HostError::Cancelled,
-                _ => HostError::Foreign,
-            })?;
+            .map_err(trust_error)?;
+        if let Some(window) = &self.fresh_window {
+            trust::verify_window_decision(&window.bundle.bytes, &window.decision.bytes, budget)
+                .map_err(trust_error)?;
+        }
         self.verify(now()?)
     }
     pub(in crate::host) fn ca_sha256(&self) -> &str {
