@@ -760,3 +760,20 @@ The release-index SHA-256 is
 Future admission requires all thirty-three retained drafts to match and their
 release and burn refs to be absent. The policy reserves build 235's tag,
 sequence and release ID against reuse and promotion.
+
+## Retained q236 identity — 2026-11-24
+
+The Owner approved retaining unpublished draft v3.1.162, build 236, release
+454999136, as signed-unqualified. The [original run](https://github.com/albertloky/SBXR/actions/runs/45108911492),
+attempt 1, attested the qualification manifest binding all four assets to commit
+`8c29ef7a65a16ba50fa0c2020bee325ebea686af`. The manifest SHA-256 is `d3c470c314e4dc49cf87a35d37e619bb9bf82b9582e18c5ca545e35e9918ecec`.
+The release-index SHA-256 is
+`11296eec38cd27eaae81c95b2ba684b190d3cced3f776ecba0c184499148267b`.
+
+The [fresh live job](https://github.com/albertloky/SBXR/actions/runs/45301636475/job/138138220936)
+in attempt 1 claimed that source and failed after installation. Menu startup
+refused the fresh run’s staging marker. The job produced no Karing delay or
+successful qualification. Preserve the draft, all four assets, the source claim,
+both attestations and the failed run evidence. Future admission requires all
+34 retained drafts to match, with their release and burn refs absent.
+Build 236’s tag, sequence and release ID are unavailable for reuse or promotion.
