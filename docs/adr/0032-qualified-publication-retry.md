@@ -820,3 +820,17 @@ attestations, draft and all four signed files.
 Future admission requires all 36 retained drafts to match and their release
 and burn refs to be absent. Build 238's tag, sequence and draft ID are
 reserved against reuse and promotion.
+
+## Retained q239 identity — 2026-11-25
+
+The Owner approved retaining unpublished draft v3.1.165, build 239, release
+457594332, as signed-unqualified. The [signing job](https://github.com/albertloky/SBXR/actions/runs/45530167834/job/138944023484)
+attested the manifest for the four assets at commit
+`87d70a276ad234344b054b6cc712eb67672c7c21`. Artifact 14987033706 contains
+the manifest with SHA-256 `ced229372a484edf648e5b9da47ee686a7ddb7dd29ebaa95fffd6371ee0c47c0`.
+The release-index SHA-256 is
+`223562ff78a2e12bbfb87513f3a9c1074c4cf5c92b0681d41359456a26b34f50`.
+
+Preserve the draft, its assets and the run evidence. Future admission requires
+all 37 retained drafts to match and their release and burn refs to be absent.
+Build 239’s tag, sequence and release ID are reserved against reuse and promotion.
