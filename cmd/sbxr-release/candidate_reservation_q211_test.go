@@ -57,7 +57,7 @@ func TestQ211ExactReservation(t *testing.T) {
 }
 
 func TestQ211ReservationCannotBeOmittedOrRelabeled(t *testing.T) {
-	if len(approvedCandidateReservations()) != 35 {
+	if len(approvedCandidateReservations()) != 36 {
 		t.Fatal("missing ninth reservation")
 	}
 	facts := candidateFacts("v3")
