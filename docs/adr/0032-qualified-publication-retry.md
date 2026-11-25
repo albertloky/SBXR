@@ -798,3 +798,25 @@ claim, the attestations and the failure evidence.
 Future admission requires all 35 retained drafts to match, with their release
 and burn refs absent. Build 237’s tag, sequence and draft ID are reserved
 against reuse and promotion.
+
+## Retained q238 identity — 2026-11-25
+
+The Owner approved retaining unpublished draft v3.1.164, build 238, release
+456901275, as signed-unqualified. Original attempt 1 signed the four assets at
+commit `5aa6c80c47c45087b844d3a48ba3f64ec31eda2d`. Artifact 14930964844
+contains the qualification manifest with SHA-256
+`10fd48951e970dc88bdf72416359836ca51496b64e47878337fcd61abded480d`.
+The release-index SHA-256 is
+`8f0b962bb8304f5b3e5bc24fbb93d2cf83380f9c989ef760623a9f1479c42bf4`.
+[Original signing job](https://github.com/albertloky/SBXR/actions/runs/45407968687/job/138528698008)
+
+Fresh attempt 1 claimed the signed source (artifact 14939765525). Installation
+completed and M1 reached Running. The Show client configuration driver then
+exited with status 1 before the Karing measurement. Artifact 14941930501
+retains the failed journey evidence. Preserve both runs, the source claim,
+attestations, draft and all four signed files.
+[Failed live job](https://github.com/albertloky/SBXR/actions/runs/45422391100/job/138548928882)
+
+Future admission requires all 36 retained drafts to match and their release
+and burn refs to be absent. Build 238's tag, sequence and draft ID are
+reserved against reuse and promotion.
