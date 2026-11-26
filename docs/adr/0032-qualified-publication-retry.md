@@ -849,3 +849,21 @@ SHA-256 is `cda62e7974dbbf0d7da822ecec8fbfd9adaa096f777ee7bd6a1743012e83d28e`.
 Future admission requires all 38 retained drafts to match and their release
 and burn refs to be absent. Build 240’s tag, sequence and release ID are
 reserved against reuse and promotion.
+
+## Retained q241 identity — 2026-11-26
+
+The Owner approved retaining unpublished draft v3.1.167, build 241, release
+458865361, as signed-unqualified. Attempt 1 signed the manifest for all four
+assets at commit `c9f3c5a113f2f9c04d82b1b855ad65a82a02c9e7`.
+[Signing job](https://github.com/albertloky/SBXR/actions/runs/45735394188/job/139646389950)
+
+Artifact 15080843671 contains the qualification manifest with SHA-256
+`c932e7937603d0d33b18188d60894144152374adf31b093face54945904a230d`.
+The release-index SHA-256 is
+`1ff37d650b62d5827fc560142b425810073d5312edaa6ed219590eea4f899cae`.
+The one-node diagnostic produced no Karing latency reading.
+
+Preserve the draft, all four assets and the run evidence. Future admission
+requires all 39 retained drafts to match and their release and burn refs to be
+absent. Build 241’s tag, sequence and release ID are reserved against reuse
+and promotion.
