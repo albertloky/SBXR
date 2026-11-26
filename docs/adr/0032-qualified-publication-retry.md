@@ -834,3 +834,18 @@ The release-index SHA-256 is
 Preserve the draft, its assets and the run evidence. Future admission requires
 all 37 retained drafts to match and their release and burn refs to be absent.
 Build 239’s tag, sequence and release ID are reserved against reuse and promotion.
+
+## Retained q240 identity — 2026-11-26
+
+The Owner approved reserving draft v3.1.166, build 240, release 458388340,
+at commit `44e9fdb3e97cef714b470a1985c0790e88584735`. Attempt 1 ended
+at 01:03:38 UTC on November 26. The protected signing job was canceled with
+zero recorded steps. The reservation records signing state `unknown` and
+omits the qualification manifest digest.
+[Signing job](https://github.com/albertloky/SBXR/actions/runs/45650409988/job/139365024592)
+
+Preserve the draft, its four assets and the run evidence. The release-index
+SHA-256 is `cda62e7974dbbf0d7da822ecec8fbfd9adaa096f777ee7bd6a1743012e83d28e`.
+Future admission requires all 38 retained drafts to match and their release
+and burn refs to be absent. Build 240’s tag, sequence and release ID are
+reserved against reuse and promotion.
