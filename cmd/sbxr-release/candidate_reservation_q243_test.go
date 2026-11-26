@@ -19,7 +19,7 @@ func TestRetiredBuild243IsPinnedAndCannotBeReused(t *testing.T) {
 		},
 	}
 	policy := approvedCandidateReservations()
-	if len(policy) != 41 || !reflect.DeepEqual(policy[40], expected) {
+	if len(policy) != 42 || !reflect.DeepEqual(policy[40], expected) {
 		t.Fatal("exact build 243 reservation is missing")
 	}
 	if documentSHA256(mustJSON(policy[:40])) != "2bc5a416f70d8316eb862f511150555b3189cb69961d93ef9f7680a8351c0c33" {
@@ -37,10 +37,10 @@ func TestRetiredBuild243IsPinnedAndCannotBeReused(t *testing.T) {
 	}
 	facts := candidateFacts("v3")
 	facts.Candidate.ATag, facts.Candidate.ASequence = "", 0
-	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.170", 244
+	facts.Candidate.BTag, facts.Candidate.BSequence = "v3.1.171", 245
 	facts.ReservedIdentities = policy
 	if _, err := evaluateCandidatePreflight(facts, mustJSON(facts)); err != nil {
-		t.Fatalf("fresh build 244 refused: %v", err)
+		t.Fatalf("fresh build 245 refused: %v", err)
 	}
 	for _, signingState := range []string{"unsigned", "unknown"} {
 		facts.ReservedIdentities = approvedCandidateReservations()

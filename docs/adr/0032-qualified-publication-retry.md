@@ -905,3 +905,22 @@ Preserve the draft, its four assets and the run evidence. Future admission
 requires all 41 retained drafts to match and their release and burn refs to be
 absent. Build 243’s tag, sequence and release ID are reserved against reuse
 and promotion.
+
+## Retained q244 identity — 2026-11-26
+
+The Owner approved reserving unpublished draft v3.1.170, build 244, release
+459294133, as signed-unqualified. Attempt 1 signed the manifest at commit
+`f75bf18f88caf4f882feb4ee5210b65221866acb`.
+[Signing job](https://github.com/albertloky/SBXR/actions/runs/45798016021/job/139864650968)
+
+Artifact 15109129186 contains the qualification manifest with SHA-256
+`2711e184db9e4ffa9c8ef8753a2685e1b22176a825a557cb80d8cd4094d9084c`.
+The release-index SHA-256 is
+`08e0feedd89f14e8217e2020b1ffea4ac9ac4db2d23f6022fd10a8927796f53a`.
+The one-node diagnostic produced no Release Qualification.
+[Diagnostic run](https://github.com/albertloky/SBXR/actions/runs/45798016021)
+
+Preserve the draft, its four assets and the run evidence. Future admission
+requires all 42 retained drafts to match and their release and burn refs to be
+absent. Build 244’s tag, sequence and release ID are reserved against reuse
+and promotion.
