@@ -147,7 +147,7 @@ data=json.load(sys.stdin)
 class Lines:
  def __init__(self):self.items=iter(data['transcript'].splitlines())
  def line(self,_):return next(self.items,None)
-s=object.__new__(driver.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args:None
+s=object.__new__(driver.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args,code=None:None
 writes=[];s.write=writes.append
 s.choose(data['label'])
 if data['label']=='View details':
@@ -267,7 +267,7 @@ data=json.load(sys.stdin)
 class Lines:
  def __init__(self):self.items=iter(data['text'].splitlines())
  def line(self,_):return next(self.items,None)
-s=object.__new__(d.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args:None
+s=object.__new__(d.MenuSession);s.stream=Lines();s.deadline=0;s.timing=lambda *args,code=None:None
 writes=[];s.write=writes.append
 s.choose(data['label']);s.expect_prompt(d.PROMPTS[data['label']]);s.write('n\n');s.wait_code('PROXY-INSTALLATION-ACTION-CANCELLED')
 assert writes==['2\n','n\n','0\n'],writes
