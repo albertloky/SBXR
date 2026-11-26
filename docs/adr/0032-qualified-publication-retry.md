@@ -867,3 +867,21 @@ Preserve the draft, all four assets and the run evidence. Future admission
 requires all 39 retained drafts to match and their release and burn refs to be
 absent. Build 241’s tag, sequence and release ID are reserved against reuse
 and promotion.
+
+## Retained q242 identity — 2026-11-26
+
+The Owner approved reserving unpublished draft v3.1.168, build 242, release
+459027331, at commit `ac196038260b80ed985581b71b0b3c358e30c413`.
+Attempt 1 skipped signing. In attempt 2, the protected signing job ended
+cancelled at 07:48:41 UTC with zero recorded steps. The live job also ended
+cancelled with zero steps. GitHub retained seven artifacts, including the
+construction boundary input. The reservation records signing as `unknown`
+and omits the qualification manifest digest.
+[Signing job](https://github.com/albertloky/SBXR/actions/runs/45758998511/job/139729275677)
+
+Preserve the draft, its four verified files and the run evidence. The
+release-index SHA-256 is
+`e8c8ba06f60f3185932d7099b9a705b58f096c4e873c215dbcdbc667c59a6ee3`.
+Future admission requires all 40 retained drafts to match and their release
+and burn refs to be absent. Build 242’s tag, sequence and release ID are
+reserved against reuse and promotion.
