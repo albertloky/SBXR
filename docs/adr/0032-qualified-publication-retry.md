@@ -885,3 +885,23 @@ release-index SHA-256 is
 Future admission requires all 40 retained drafts to match and their release
 and burn refs to be absent. Build 242’s tag, sequence and release ID are
 reserved against reuse and promotion.
+
+## Retained q243 identity — 2026-11-26
+
+The Owner approved reserving unpublished draft v3.1.169, build 243, release
+459156224, as signed-unqualified. Attempt 1 signed the manifest at commit
+`a9f7f2cbb929481074132a4896407be9508f91fa`.
+[Signing job](https://github.com/albertloky/SBXR/actions/runs/45779449291/job/139796477274)
+
+Artifact 15100953169 contains the qualification manifest with SHA-256
+`f552aa6a86c75c9080ffb2aba2678906e15cacdd818b375b74970b8f1b374760`.
+The release-index SHA-256 is
+`d3777552d077927a92b47d7dbfb7ff7a79e46e74959b91171db04f367e32642f`.
+The diagnostic reached Standard setup and ended without a Karing latency
+reading. Scoped restoration was verified.
+[Live job](https://github.com/albertloky/SBXR/actions/runs/45779449291/job/139802471351)
+
+Preserve the draft, its four assets and the run evidence. Future admission
+requires all 41 retained drafts to match and their release and burn refs to be
+absent. Build 243’s tag, sequence and release ID are reserved against reuse
+and promotion.
