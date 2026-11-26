@@ -4,6 +4,7 @@ The UI flags are fresh operator observations. Include every inventoried addition
 native side file in each call. Only the operator performs and records a UI action.
 """
 import argparse
+from contextlib import contextmanager
 import datetime as dt
 import hashlib
 import importlib.util
@@ -20,6 +21,8 @@ spec = importlib.util.spec_from_file_location('native', Path(__file__).with_name
 native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 MAX_SOURCE = 64 * 1024 * 1024
+MAX_CACHE_DB = 128 * 1024 * 1024
+CACHE_CHUNK = 1024 * 1024
 SHA256 = re.compile('[a-f0-9]{64}')
 HANDOFF = re.compile(r'karing-(run-[1-9][0-9]*-attempt-[1-9][0-9]*)')
 
@@ -43,17 +46,66 @@ def private_dir(path):
     return stat.S_ISDIR(mode.st_mode) and mode.st_uid == os.getuid() and stat.S_IMODE(mode.st_mode) == 0o700
 
 
-def read(path, limit, *, native_file=False):
-    require(path.is_absolute() and path.resolve(strict=True) == path)
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        modes = (0o600, 0o644) if native_file and any(private_dir(p) for p in path.parents) else (0o600,)
+@contextmanager
+def native_entry(root, path):
+    # Resolve each directory relative to its open parent, including for absent files.
+    parts = path.relative_to(root).parts
+    require(parts and '..' not in parts)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent = os.open(path.anchor, flags)
+    try:
+        try:
+            for part in path.parts[1:-1]:
+                child = os.open(part, flags, dir_fd=parent)
+                os.close(parent)
+                parent = child
+            info = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            info = None
+        yield parent, info
+    finally:
+        os.close(parent)
+
+
+@contextmanager
+def checked_file(path, limit, *, parent=None):
+    if parent is None:
+        require(path.is_absolute() and path.resolve(strict=True) == path)
+    name = path if parent is None else path.name
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(fd)
+        modes = (0o600, 0o644) if parent is not None and any(private_dir(p) for p in path.parents) else (0o600,)
         require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1
                 and stat.S_IMODE(info.st_mode) in modes and 0 < info.st_size <= limit)
-        raw = stream.read(limit + 1)
-        require(len(raw) == info.st_size and identity(info) == identity(os.fstat(stream.fileno())))
-    require(identity(info) == identity(path.lstat()))
+        yield stream, info
+        require(identity(info) == identity(os.fstat(fd)))
+    require(identity(info) == identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
+
+
+def read(path, limit, *, parent=None):
+    with checked_file(path, limit, parent=parent) as (stream, info):
+        raw = stream.read(info.st_size + 1)
+        require(len(raw) == info.st_size)
     return raw, info
+
+
+def cache_digest(path, parent, needles):
+    hasher = hashlib.sha256()
+    overlap = max(map(len, needles)) - 1
+    tail = b''
+    with checked_file(path, MAX_CACHE_DB, parent=parent) as (stream, info):
+        remaining = info.st_size
+        while remaining:
+            chunk = stream.read(min(remaining, CACHE_CHUNK))
+            require(chunk)
+            remaining -= len(chunk)
+            hasher.update(chunk)
+            window = tail + chunk
+            require(all(needle not in window for needle in needles))
+            tail = window[-overlap:] if overlap else b''
+        require(not stream.read(1))
+    return hasher.hexdigest(), info
 
 
 def wire(args, attempt, label):
@@ -154,16 +206,21 @@ def decide(args, native_dir):
     reads = {}
     side_hashes = {}
     for path in paths:
-        require(path.parent == native_dir)
-        try:
-            path.lstat()
-        except FileNotFoundError:
-            require(path in optional_files)
-            reads[path] = None
-            side_hashes[str(path)] = None
+        is_cache_db = path == native_dir / 'cache.db'
+        with native_entry(native_dir, path) as (parent, entry):
+            if entry is None:
+                require(path in optional_files)
+                reads[path] = None
+                side_hashes[str(path)] = None
+                continue
+            reads[path] = identity(entry)
+            if is_cache_db:
+                side_hashes[str(path)], info = cache_digest(path, parent, needles)
+            else:
+                raw, info = read(path, MAX_SOURCE, parent=parent)
+            require(identity(info) == reads[path])
+        if is_cache_db:
             continue
-        raw, info = read(path, MAX_SOURCE, native_file=True)
-        reads[path] = identity(info)
         if path == store_path:
             store = native._decode_settings(raw)
             originals, candidate = split_originals(store, label, source, baseline)
@@ -198,11 +255,8 @@ def decide(args, native_dir):
 
     # Karing can rewrite several files on Save/Remove. Reject a mixed observation.
     for path, previous in reads.items():
-        try:
-            current = identity(path.lstat())
-        except FileNotFoundError:
-            current = None
-        require(current == previous)
+        with native_entry(native_dir, path) as (_, entry):
+            require((identity(entry) if entry is not None else None) == previous)
     if baseline:
         return {'baseline_sha256': frozen}
     require(frozen == args.baseline_sha256)

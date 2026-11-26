@@ -10,6 +10,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 HELPER = HERE / 'diagnostic-karing-profile.py'
@@ -231,6 +232,89 @@ class NativeDecision(unittest.TestCase):
         self.import_groups(self.group)
         write(tzif, b'replaced')
         self.run_cmd('inspect', ok=False)
+
+    def baseline_args(self, side):
+        return self.args[:self.args.index('--baseline-sha256')] + ['--side-file', str(side)]
+
+    def test_large_cache_is_bound_through_its_last_byte_and_scanned_for_markers(self):
+        cache = self.native / 'cache.db'
+        self.args = self.baseline_args(cache)
+        with cache.open('wb') as stream:
+            stream.truncate(77_250_560)
+        cache.chmod(0o644)
+        pin = self.run_cmd('baseline')['baseline_sha256']
+        self.assertEqual(self.run_cmd('baseline')['baseline_sha256'], pin)
+        with cache.open('r+b') as stream:
+            stream.seek(-1, os.SEEK_END)
+            stream.write(b'x')
+        self.assertNotEqual(self.run_cmd('baseline')['baseline_sha256'], pin)
+        with cache.open('r+b') as stream:
+            stream.seek(65 * 1024 * 1024 - 3)
+            stream.write(LABEL.encode())
+        self.run_cmd('baseline', ok=False)
+
+    def test_nested_json_is_bound_and_compared_with_the_top_level_files(self):
+        side = self.native / 'cache' / 'profile_share.json'
+        side.parent.mkdir()
+        write(side, {'share': 'original'})
+        self.args = self.baseline_args(side)
+        pin = self.run_cmd('baseline')['baseline_sha256']
+        self.args += ['--baseline-sha256', pin, '--receipt-sha256', digest(self.receipt_path.read_bytes())]
+        write(side, b'{ "share" : "original" }')
+        self.assertEqual(self.run_cmd('inspect')['state'], 'absent')
+        write(side, {'share': 'changed'})
+        self.run_cmd('inspect', ok=False)
+        side.unlink()
+        self.run_cmd('inspect', ok=False)
+
+    def test_nested_paths_refuse_escape_symlinks_and_hardlinks(self):
+        outside = self.root / 'outside'
+        outside.mkdir()
+        write(outside / 'entry', b'private')
+        link = self.native / 'linked'
+        link.symlink_to(outside, target_is_directory=True)
+        base = self.args[:self.args.index('--baseline-sha256')]
+        for path in (outside / 'entry', self.native / '..' / 'outside' / 'entry',
+                     link / 'entry', link / 'missing'):
+            with self.subTest(path=path):
+                self.args = base + ['--side-file', str(path)]
+                self.run_cmd('baseline', ok=False)
+        link.unlink()
+        link.mkdir()
+        leaf = link / 'leaf'
+        self.args = base + ['--side-file', str(leaf)]
+        leaf.symlink_to(outside / 'missing')
+        self.run_cmd('baseline', ok=False)
+        leaf.unlink()
+        os.link(outside / 'entry', leaf)
+        self.run_cmd('baseline', ok=False)
+
+    def test_nested_directory_replaced_by_symlink_before_final_identity_check(self):
+        side = self.native / 'cache' / 'profile_share.json'
+        side.parent.mkdir()
+        write(side, {})
+        self.args = self.baseline_args(side)
+        snapshot = self.helper.original_snapshot
+
+        def swap_after_read(*args):
+            moved = self.native / 'moved'
+            side.parent.rename(moved)
+            side.parent.symlink_to(moved, target_is_directory=True)
+            return snapshot(*args)
+
+        with patch.object(self.helper, 'original_snapshot', side_effect=swap_after_read):
+            self.run_cmd('baseline', ok=False)
+
+    def test_only_cache_db_has_the_larger_bounded_read(self):
+        base = self.args[:self.args.index('--baseline-sha256')]
+        for name, size in [('cache.db', 128 * 1024**2 + 1), ('other.bin', 64 * 1024**2 + 1)]:
+            with self.subTest(name=name):
+                side = self.native / name
+                with side.open('wb') as stream:
+                    stream.truncate(size)
+                side.chmod(0o600)
+                self.args = base + ['--side-file', str(side)]
+                self.run_cmd('baseline', ok=False)
 
     def test_refuses_collisions_in_baseline(self):
         self.args = self.args[:self.args.index('--baseline-sha256')]
