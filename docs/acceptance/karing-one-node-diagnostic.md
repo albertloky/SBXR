@@ -80,7 +80,36 @@ client baselines.
    python3 -B .github/scripts/diagnostic-karing-profile.py baseline "${native[@]}"
    ```
 
-4. Install using the reviewed private-loopback transport’s `install "$TAG"` entry point and apply Standard once under the approved host controls. Retained q221 staging/install scripts expect a global CA and a 900-second reserve. Do not replay those scripts; bind the current private CA, staged recorder and current cutoff in the actual install and removal callers. Run Check once. Do **not** first run the old diagnostic disclosure: the receiver owns the single disclosure and confirms the menu action. Call it through the reviewed operator supervisor. Keep the SSH identity/host-key pins, manifest and request digests independent of the received transcript and ahead of use. The fixed SSH producer starts a clean direct session, checks the installed candidate, signed scope, active recorder, request/manifest and retained runtime on the remote side. Its child stdout flows only to the bounded Mac receiver; the outer supervisor sees a secret-free receipt. Use the reviewed path that operates directly on the installed executable; a host requiring some other wrapper stops here.
+4. Install using the reviewed private-loopback transport’s `install "$TAG"` entry point and apply Standard once under the approved host controls. Retained q221 staging/install scripts expect a global CA and a 900-second reserve. Do not replay those scripts; bind the current private CA, staged recorder and current cutoff in the actual install and removal callers. Run Check once.
+
+   Run the bound remote driver's `action Check SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT`
+   with the reviewed executable, timeout, request, clock, exact-candidate check and
+   ordinary cutoff. Success requires the expected response, menu return and successful
+   process exit. The driver emits menu text on stdout and structured events on stderr.
+
+   In the private Check caller, bind `remote(check_command, check_cap)` to one
+   supervised SSH invocation of that command. Discard stdout, pipe stderr in bytes
+   and return the completed process even on a nonzero exit (`check=False`). The remote
+   command must propagate the driver's exit status. Pass this invocation to the
+   reviewed local helper before any generic exception filter or transcript logging.
+
+   <!-- operator-diagnostic-check -->
+   ```python
+   import runpy
+
+   run_check = runpy.run_path(str(scripts / "v3-menu-session.py"))["run_diagnostic_check"]
+   raise SystemExit(run_check(remote, check_command, check_cap))
+   ```
+
+   Keep raw stdout, stderr and exception text out of operator logs. The summary
+   retains the observed exit and recognized refusal phase. A driver
+   `result-accepted` event preserves the expected Check response even if the
+   subsequent menu return fails. On a result mismatch it includes only a known
+   Check code. Missing evidence is `unavailable`. An unknown result is
+   `unrecognized`. A transport exception without a process exit
+   reports `exit=unavailable`. Any nonzero caller exit ends ordinary work.
+
+   Do **not** first run the old diagnostic disclosure: the receiver owns the single disclosure and confirms the menu action. Call it through the reviewed operator supervisor. Keep the SSH identity/host-key pins, manifest and request digests independent of the received transcript and ahead of use. The fixed SSH producer starts a clean direct session, checks the installed candidate, signed scope, active recorder, request/manifest and retained runtime on the remote side. Its child stdout flows only to the bounded Mac receiver; the outer supervisor sees a secret-free receipt. Use the reviewed path that operates directly on the installed executable; a host requiring some other wrapper stops here.
 
    ```sh
    python3 -B .github/scripts/mvp-operator-run.py --run-directory "$run_directory" \

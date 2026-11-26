@@ -63,6 +63,58 @@ M1_DISCLOSURE_REASONS = frozenset("""
 """.split())
 
 
+CHECK_CURRENT = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
+CHECK_RESPONSES = {
+    CHECK_CURRENT,
+    "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED",
+    "SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE",
+    "SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE",
+    "SOFTWARE-LIFECYCLE-CHECK-NOT-READY",
+}
+CHECK_REFUSAL_PHASES = frozenset("""
+    deadline-before-start deadline-invalid descendant-cleanup diagnostic-bound driver-error
+    exit-before-result exit-before-selection exit-deadline input-closed input-deadline
+    label-duplicate label-missing output-bound output-deadline output-encoding output-unterminated
+    owner-exited process-cleanup process-failed process-ownership prompt-mismatch
+    request-clock-file request-clock-identity request-clock-refused request-clock-unavailable
+    request-deadline result-mismatch signal-cancelled subreaper-unavailable
+""".split())
+
+
+def run_diagnostic_check(remote, command, cap):
+    """Run the operator's bound Check once and retain only structured menu evidence."""
+    try:
+        result = remote(command, cap)
+    except subprocess.TimeoutExpired:
+        print("Check exit=unavailable phase=transport-timeout response=unavailable", file=sys.stderr)
+        return 124
+    except Exception:
+        # Transport exceptions can include the entire SSH command and its inputs.
+        print("Check exit=unavailable phase=transport-error response=unavailable", file=sys.stderr)
+        return 1
+    returncode = result.returncode
+    phase = "completed" if returncode == 0 else "unavailable"
+    response = "unavailable"
+    refusals = []
+    for line in result.stderr.splitlines():
+        if line.startswith(b"SBXR_MENU_SESSION_REFUSED phase="):
+            refusals.append(line.removeprefix(b"SBXR_MENU_SESSION_REFUSED phase="))
+        elif line.startswith(b"SBXR_MENU_PHASE "):
+            try:
+                event = json.loads(line.removeprefix(b"SBXR_MENU_PHASE "))
+            except (ValueError, UnicodeError, RecursionError):
+                continue
+            if isinstance(event, dict) and event.get("event") == "result-accepted":
+                response = CHECK_CURRENT
+    if returncode and len(refusals) == 1:
+        name, _, code = refusals[0].decode("ascii", errors="replace").partition(" code=")
+        phase = name if name in CHECK_REFUSAL_PHASES else "refused"
+        if phase == "result-mismatch":
+            response = code if code in CHECK_RESPONSES else "unrecognized"
+    print(f"Check exit={returncode} phase={phase} response={response}", file=sys.stderr, flush=True)
+    return returncode if returncode >= 0 else 128 - returncode
+
+
 class ProtocolError(Exception):
     def __init__(self, phase, code=None):
         super().__init__(phase)
@@ -606,7 +658,8 @@ class MenuSession:
                 code = line.removeprefix("Code: ")
                 if not found:
                     if code != expected:
-                        raise ProtocolError("result-mismatch")
+                        # A malformed result must not inherit a previous menu frame's code.
+                        raise ProtocolError("result-mismatch", code)
                     found = True
                     self.timing("result-accepted")
                     self.timing("return-wait")

@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
@@ -30,7 +31,7 @@ root=Path(os.environ["FIXTURE_ROOT"]); spec=json.loads(os.environ["FIXTURE_SPEC"
 for diagnostic in spec.get("diagnostics", []): print(diagnostic,file=sys.stderr,flush=True)
 def event(value):
     with (root/"events.jsonl").open("a") as stream: stream.write(json.dumps(value)+"\n")
-print("SBXR V3\nProxy status: Running\nCode: PROXY-INSTALLATION-STATUS-RUNNING")
+print("SBXR V3\nProxy status: Running\nCode: "+spec.get("menu_code", "PROXY-INSTALLATION-STATUS-RUNNING"))
 print("2. Rotate Client Identity\n7. "+spec["label"]+"\n0. Exit",flush=True)
 selected=sys.stdin.readline().strip(); event({"selected":selected})
 if selected != "7": raise SystemExit(90)
@@ -1278,6 +1279,69 @@ class MenuSessionDriverTest(unittest.TestCase):
         result,events=self.invoke(spec,"observe","Recover",marker)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(events,[{"selected":"7"},{"exit":"0"}])
+
+    def test_documented_operator_check_retains_only_safe_summary(self):
+        expected = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
+        token = "TOP-SECRET-TOKEN"
+        url = "https://user:password@example.invalid/" + token
+        doc = DRIVER.parents[2] / "docs/acceptance/karing-one-node-diagnostic.md"
+        example = doc.read_text().split("<!-- operator-diagnostic-check -->\n   ```python\n")[1].split("\n   ```")[0]
+        # Substitute only the bound transport. Run the documented caller, driver,
+        # executable and operator log writer as separate local processes.
+        bindings = """from pathlib import Path
+import subprocess, sys
+scripts = Path(sys.argv[1])
+check_command, check_cap = sys.argv[2:], 5
+def remote(command, cap):
+    if command[0] == "fixture-timeout":
+        raise subprocess.TimeoutExpired(command, cap)
+    if command[0] == "fixture-os-error":
+        raise OSError(command[1])
+    return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=cap)
+"""
+        for actual, phase, response in (
+            (expected, "completed", expected),
+            ("SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED", "result-mismatch",
+             "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"),
+            ("SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE", "result-mismatch",
+             "SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE"),
+            ("SOFTWARE-LIFECYCLE-CHECK-" + token, "result-mismatch", "unrecognized"),
+            (url, "result-mismatch", "unrecognized"),
+            ("result-hang", "output-deadline", expected),
+            (None, "unavailable", "unavailable"),
+            ("fixture-timeout", "transport-timeout", "unavailable"),
+            ("fixture-os-error", "transport-error", "unavailable"),
+        ):
+            with self.subTest(actual=actual), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                executable = root / "sbxr"
+                executable.write_text(FIXTURE)
+                executable.chmod(0o700)
+                spec = dict(label="Check", kind="result-hang" if actual == "result-hang" else "action",
+                            expected=expected, actual=actual,
+                            menu_code=expected, diagnostics=["Authorization: Bearer " + token])
+                env = dict(os.environ, FIXTURE_ROOT=temporary, FIXTURE_SPEC=json.dumps(spec))
+                command = [sys.executable, str(DRIVER), "action", "Check", expected,
+                           "--executable", str(executable), "--timeout", "3"]
+                exit_code = int(actual != expected)
+                if actual is None:
+                    command = [sys.executable, "-c", f"import sys; print({url!r},file=sys.stderr); sys.exit(255)"]
+                    exit_code = 255
+                reported_exit = exit_code
+                if actual in ("fixture-timeout", "fixture-os-error"):
+                    command = [actual, url]
+                    exit_code = 124 if actual == "fixture-timeout" else 1
+                    reported_exit = "unavailable"
+                result = subprocess.run([sys.executable, str(DRIVER.with_name("mvp-operator-run.py")),
+                    "--run-directory", temporary, "--label", "check", "--cutoff-unix", str(time.time() + 60),
+                    "--timeout", "10", "--reserve", "0", "--", sys.executable, "-c",
+                    bindings + textwrap.dedent(example), str(DRIVER.parent), *command],
+                    env=env, capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, exit_code)
+                self.assertEqual(result.stdout + result.stderr, b"")
+                self.assertEqual((root / "check.operator.stdout").read_bytes(), b"")
+                self.assertEqual((root / "check.operator.stderr").read_text(),
+                                 f"Check exit={reported_exit} phase={phase} response={response}\n")
 
     def test_result_mismatch_reports_only_phase_and_actual_code(self):
         spec={"label":"Check","kind":"action","expected":"SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT","actual":"SOFTWARE-LIFECYCLE-CHECK-FAILED"}
