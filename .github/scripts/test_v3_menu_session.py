@@ -88,6 +88,7 @@ elif kind == "terminal":
 print("SBXR V3\nProxy status: Running\nCode: "+spec.get("actual",spec.get("expected","PROXY-INSTALLATION-STATUS-RUNNING")))
 print("1. View details\n0. Exit",flush=True); event({"exit":sys.stdin.readline().strip()})
 for diagnostic in spec.get("late_diagnostics", []): print(diagnostic,file=sys.stderr,flush=True)
+raise SystemExit(spec.get("exit_code", 0))
 '''
 
 class SetupDiagnosticSelectionTest(unittest.TestCase):
@@ -1192,6 +1193,15 @@ class MenuSessionDriverTest(unittest.TestCase):
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(events,[{"selected":"7"},{"exit":"0"}])
 
+    def test_stable_check_rejects_private_candidate_response(self):
+        expected = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
+        actual = "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"
+        result, events = self.invoke(dict(label="Check", kind="action", actual=actual),
+                                     "action", "Check", expected)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("phase=result-mismatch code=" + actual, result.stderr)
+        self.assertEqual(events, [{"selected": "7"}])
+
     def test_ready_recovery_reproduces_internal_code_mismatch(self):
         spec={"label":"Recover", "kind":"action", "actual":"SOFTWARE-LIFECYCLE-STATUS-READY"}
         result,events=self.invoke(spec,"action","Recover","SOFTWARE-LIFECYCLE-RECOVER-NOT-REQUIRED")
@@ -1281,11 +1291,14 @@ class MenuSessionDriverTest(unittest.TestCase):
         self.assertEqual(events,[{"selected":"7"},{"exit":"0"}])
 
     def test_documented_operator_check_retains_only_safe_summary(self):
-        expected = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
+        expected = "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"
         token = "TOP-SECRET-TOKEN"
         url = "https://user:password@example.invalid/" + token
         doc = DRIVER.parents[2] / "docs/acceptance/karing-one-node-diagnostic.md"
-        example = doc.read_text().split("<!-- operator-diagnostic-check -->\n   ```python\n")[1].split("\n   ```")[0]
+        procedure = doc.read_text()
+        # Exercise the runbook's actual driver arguments against independent outcomes.
+        action = next(text.split() for text in procedure.split("`") if text.startswith("action Check "))
+        example = procedure.split("<!-- operator-diagnostic-check -->\n   ```python\n")[1].split("\n   ```")[0]
         # Substitute only the bound transport. Run the documented caller, driver,
         # executable and operator log writer as separate local processes.
         bindings = """from pathlib import Path
@@ -1301,13 +1314,14 @@ def remote(command, cap):
 """
         for actual, phase, response in (
             (expected, "completed", expected),
-            ("SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED", "result-mismatch",
-             "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED"),
+            ("SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT", "result-mismatch",
+             "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"),
             ("SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE", "result-mismatch",
              "SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE"),
             ("SOFTWARE-LIFECYCLE-CHECK-" + token, "result-mismatch", "unrecognized"),
             (url, "result-mismatch", "unrecognized"),
             ("result-hang", "output-deadline", expected),
+            ("exit-failure", "process-failed", expected),
             (None, "unavailable", "unavailable"),
             ("fixture-timeout", "transport-timeout", "unavailable"),
             ("fixture-os-error", "transport-error", "unavailable"),
@@ -1318,10 +1332,11 @@ def remote(command, cap):
                 executable.write_text(FIXTURE)
                 executable.chmod(0o700)
                 spec = dict(label="Check", kind="result-hang" if actual == "result-hang" else "action",
-                            expected=expected, actual=actual,
+                            expected=expected, actual=expected if actual == "exit-failure" else actual,
+                            exit_code=37 if actual == "exit-failure" else 0,
                             menu_code=expected, diagnostics=["Authorization: Bearer " + token])
                 env = dict(os.environ, FIXTURE_ROOT=temporary, FIXTURE_SPEC=json.dumps(spec))
-                command = [sys.executable, str(DRIVER), "action", "Check", expected,
+                command = [sys.executable, str(DRIVER), *action,
                            "--executable", str(executable), "--timeout", "3"]
                 exit_code = int(actual != expected)
                 if actual is None:
@@ -1342,6 +1357,30 @@ def remote(command, cap):
                 self.assertEqual((root / "check.operator.stdout").read_bytes(), b"")
                 self.assertEqual((root / "check.operator.stderr").read_text(),
                                  f"Check exit={reported_exit} phase={phase} response={response}\n")
+
+    def test_accepted_check_event_reports_only_allowlisted_codes(self):
+        current = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
+        for code, reported in ((current, current), ("TOP-SECRET-TOKEN", None)):
+            with self.subTest(code=code):
+                result, _ = self.invoke(dict(label="Check", kind="action", expected=code),
+                                        "action", "Check", code)
+                self.assertEqual(result.returncode, 0)
+                self.assertNotIn("TOP-SECRET-TOKEN", result.stderr)
+                events = [json.loads(line.removeprefix("SBXR_MENU_PHASE "))
+                          for line in result.stderr.splitlines() if line.startswith("SBXR_MENU_PHASE ")]
+                [accepted] = [event for event in events if event["event"] == "result-accepted"]
+                self.assertEqual(accepted.get("code"), reported)
+
+    def test_accepted_event_with_missing_or_unknown_code_keeps_summary_safe(self):
+        for fields, response in (({}, "unavailable"), ({"code": "SECRET-TOKEN"}, "unrecognized"),
+                                 ({"code": ["SECRET-TOKEN"]}, "unrecognized")):
+            with self.subTest(fields=fields):
+                event = json.dumps(dict(event="result-accepted", **fields))
+                def remote(command, cap):
+                    return subprocess.CompletedProcess(command, 0, stderr=("SBXR_MENU_PHASE " + event).encode())
+                with patch.object(sys, "stderr", new_callable=io.StringIO) as log:
+                    self.assertEqual(menu.run_diagnostic_check(remote, ["fixture"], 1), 0)
+                    self.assertEqual(log.getvalue(), f"Check exit=0 phase=completed response={response}\n")
 
     def test_result_mismatch_reports_only_phase_and_actual_code(self):
         spec={"label":"Check","kind":"action","expected":"SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT","actual":"SOFTWARE-LIFECYCLE-CHECK-FAILED"}

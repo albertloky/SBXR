@@ -63,9 +63,8 @@ M1_DISCLOSURE_REASONS = frozenset("""
 """.split())
 
 
-CHECK_CURRENT = "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT"
 CHECK_RESPONSES = {
-    CHECK_CURRENT,
+    "SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT",
     "SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED",
     "SOFTWARE-LIFECYCLE-CHECK-RELEASE-UNAVAILABLE",
     "SOFTWARE-LIFECYCLE-CHECK-CONCURRENT-CHANGE",
@@ -105,7 +104,9 @@ def run_diagnostic_check(remote, command, cap):
             except (ValueError, UnicodeError, RecursionError):
                 continue
             if isinstance(event, dict) and event.get("event") == "result-accepted":
-                response = CHECK_CURRENT
+                code = event.get("code")
+                if code is not None:
+                    response = code if isinstance(code, str) and code in CHECK_RESPONSES else "unrecognized"
     if returncode and len(refusals) == 1:
         name, _, code = refusals[0].decode("ascii", errors="replace").partition(" code=")
         phase = name if name in CHECK_REFUSAL_PHASES else "refused"
@@ -298,14 +299,17 @@ class PhaseTiming:
         self.started = time.monotonic()
         self.last_input_class = "none"
 
-    def __call__(self, event, input_class="none"):
+    def __call__(self, event, input_class="none", *, code=None):
         now = time.monotonic()
         if event == "input-sent":
             self.last_input_class = input_class
-        self.relay.emit("SBXR_MENU_PHASE " + json.dumps({
+        record = {
             "event": event, "class": input_class, "monotonic": round(now, 6),
             "remaining_ms": round((self.deadline - now) * 1000, 3),
-        }, sort_keys=True))
+        }
+        if code in CHECK_RESPONSES:
+            record["code"] = code
+        self.relay.emit("SBXR_MENU_PHASE " + json.dumps(record, sort_keys=True))
 
     def native(self, raw):
         prefix = next((p for p in (b"SBXR_NATIVE_SUBSCRIPTION ", b"SBXR_NATIVE_QUERY ", b"SBXR_NATIVE_READINESS ", b"SBXR_NATIVE_PHASE ")
@@ -541,7 +545,7 @@ class LineStream:
 class MenuSession:
     def __init__(self, executable, sink, deadline, cancelled=None, *, protected_wrapper=False, timing=None):
         self.deadline = deadline
-        self.timing = timing or (lambda *args: None)
+        self.timing = timing or (lambda *args, **kwargs: None)
         self.protected_wrapper = protected_wrapper
         if protected_wrapper and not sys.platform.startswith("linux"):
             raise ProtocolError("protected-wrapper-requires-linux")
@@ -661,7 +665,7 @@ class MenuSession:
                         # A malformed result must not inherit a previous menu frame's code.
                         raise ProtocolError("result-mismatch", code)
                     found = True
-                    self.timing("result-accepted")
+                    self.timing("result-accepted", code=code)
                     self.timing("return-wait")
             elif found and frame and line == "0. Exit":
                 self.timing("return-ready")

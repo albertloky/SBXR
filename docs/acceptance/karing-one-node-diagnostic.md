@@ -82,10 +82,13 @@ client baselines.
 
 4. Install using the reviewed private-loopback transport’s `install "$TAG"` entry point and apply Standard once under the approved host controls. Retained q221 staging/install scripts expect a global CA and a 900-second reserve. Do not replay those scripts; bind the current private CA, staged recorder and current cutoff in the actual install and removal callers. Run Check once.
 
-   Run the bound remote driver's `action Check SOFTWARE-LIFECYCLE-CHECK-ALREADY-CURRENT`
+   After independently authenticating the signed private candidate and verifying the
+   loopback gateway, run the bound remote driver's `action Check SOFTWARE-LIFECYCLE-CHECK-RELEASE-REFUSED`
    with the reviewed executable, timeout, request, clock, exact-candidate check and
-   ordinary cutoff. Success requires the expected response, menu return and successful
-   process exit. The driver emits menu text on stdout and structured events on stderr.
+   ordinary cutoff. This private diagnostic expects Check to refuse the candidate
+   as a stable release. Require that exact response, normal menu return and a zero
+   driver exit. The node still requires its own fresh Karing latency test.
+   The driver emits menu text on stdout and structured events on stderr.
 
    In the private Check caller, bind `remote(check_command, check_cap)` to one
    supervised SSH invocation of that command. Discard stdout, pipe stderr in bytes
@@ -103,8 +106,8 @@ client baselines.
 
    Keep raw stdout, stderr and exception text out of operator logs. The summary
    retains the observed exit and recognized refusal phase. A driver
-   `result-accepted` event preserves the expected Check response even if the
-   subsequent menu return fails. On a result mismatch it includes only a known
+   `result-accepted` event records the observed allowlisted Check code even if
+   the subsequent menu return or process exit fails. On a result mismatch it includes only a known
    Check code. Missing evidence is `unavailable`. An unknown result is
    `unrecognized`. A transport exception without a process exit
    reports `exit=unavailable`. Any nonzero caller exit ends ordinary work.
