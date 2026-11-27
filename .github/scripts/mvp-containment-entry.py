@@ -173,7 +173,10 @@ class Entry:
         action=self.action
         if action=='clock':
             c=load('containment_clock',self.prepared/'read-current-clock.py',self.pins)
-            value=c.read_current_clock('containment-clock',self.runtime['scenario'],mode='cleanup',reserve=0)
+            if 'cleanup_clock_sha256' in self.cfg:
+                value = c.read_bound_clock(self.runtime['scenario'], self.cfg, self.binding, self.remote.remote)
+            else:
+                value = c.read_current_clock('containment-clock', self.runtime['scenario'], mode='cleanup', reserve=0)
             require(value['request_sha256']==self.binding['request_sha256'],'current request changed')
             save(self.runtime['clock_record'],value)
             result={'clock_consistent':True,'current_cutoff':min(self.scope['original_cutoff'],value['effective_deadline_unix'])}
@@ -210,7 +213,7 @@ class Entry:
             result['unrelated_state_preserved']=True
         else:raise ValueError('unknown containment operation')
         require(time.time()<self.deadline,'phase completion past deadline')
-        result.update(binding=self.binding,origin='native',observed_at=time.time(),outcome='complete')
+        result.update(binding=self.binding,origin=self.origin,observed_at=time.time(),outcome='complete')
         result.setdefault('current_cutoff',self.scope['original_cutoff'])
         return result
 

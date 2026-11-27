@@ -289,26 +289,50 @@ current host readiness or live qualification is asserted by this document.
 
 ### Check the prepared containment inputs offline
 
-From the reviewed checkout, run the following before requesting a window.
+For a fresh window on an existing signed HTTP candidate, start with the original
+manifest, its independently verified digest, the proposed four-field
+`fresh_window` declaration, the reviewed destination IPv4 and the operator's
+latest dispatch time in Unix seconds. Use a new preparation directory.
+
+```sh
+python3 -B .github/scripts/prepare-mvp-containment.py "$prepared" \
+  --manifest "$manifest" --manifest-sha256 "$verified_manifest_sha256" \
+  --window "$proposed_window" --host "$acceptance_host_ipv4" \
+  --dispatch-guard-by "$dispatch_guard_unix"
+```
+
+The command writes `preparation.json`, `read-current-clock.py`, and reviewed
+copies of `mvp-observe.py` and `native-receipts.py` in `operator-source/`.
+The clock provider uses the prepared transport to read the fixed host paths.
+It checks the current staging owner, signed machine identity, original manifest,
+collector-bound window and request, then runs the recorder's
+`cleanup-deadline` against the existing private draft. The operator, request
+and transport cutoffs all bound the result.
+
+The remaining preparation requires the actual native input bindings in
+`native-inputs.json` and reviewed implementations of `remote.py`,
+`review-cleanup.py`, `outside-run.py`, `direct-control.py` and
+`finalize-failure.py`. In particular, the maintained local runner and SSH
+timeout cannot supply the interrupted product action's remote process identity.
+The host guard requires a launch-time boot digest, PID, process group, start
+ticks and inherited deadline marker. The process owner must retain these
+before the effect and allow a fresh observation of the group and remaining
+marked processes after a disconnect. Local exit status cannot establish this.
+
+Before requesting a window, check the complete directory from the reviewed
+checkout.
 
 ```sh
 python3 -B .github/scripts/mvp-containment-bindings.py "$prepared"
 ```
 
-The command writes the proposal to standard output. It requires the run-local
-`preparation.json`, `native-inputs.json`, the reviewed copy of
-`operator-source/native-receipts.py`, and the six native entry providers
-`remote.py`, `review-cleanup.py`, `read-current-clock.py`, `outside-run.py`,
-`direct-control.py`, and `finalize-failure.py`. The process supervisor rechecks
-the frozen digests before launching a phase.
-
-Supply those six providers from an independently reviewed operator preparation
-for the selected candidate and window. The repository supplies their consumer.
-Computing digests records the bytes supplied and leaves `ready_for_live`
-false. Admission still requires verification of the composed operations and
-their dependencies, including supported removal, independent absence checks
-and the retained-data fallback. If the matching providers are unavailable,
-stop before requesting the window.
+The factory refuses missing inputs and pins the prepared files. For the
+repository's clock provider, it also checks the provider and recorder against
+the reviewed sources. Its proposal leaves `ready_for_live` false. Admission
+requires verification of the composed operations and their dependencies,
+including supported removal, independent absence checks and the retained-data
+fallback. Before admission, verify that the launch caller can produce the required
+process identity. During recovery, a missing record leaves quiescence unproved.
 
 ## Offline no-reply containment rehearsal
 

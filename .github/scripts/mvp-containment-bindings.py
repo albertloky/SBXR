@@ -68,6 +68,12 @@ def prepared_inputs(prepared, scripts):
     expected = {'source_file': helper, 'size': len(canonical), 'sha256': hashlib.sha256(canonical).hexdigest()}
     if native['canonical_helper'] != expected or pins[helper] != expected['sha256']:
         raise ValueError('prepared native-receipts.py differs from reviewed source')
+    if 'cleanup_clock_sha256' in cfg:
+        recorder_pin = digest(scripts / 'mvp-observe.py')
+        if (cfg['cleanup_clock_sha256'] != recorder_pin
+                or pins.get(str(prepared / 'operator-source/mvp-observe.py')) != recorder_pin
+                or pins[str(prepared / 'read-current-clock.py')] != digest(scripts / 'read-current-clock.py')):
+            raise ValueError('prepared cleanup clock differs from reviewed source')
     return cfg, pins
 
 
