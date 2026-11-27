@@ -86,6 +86,7 @@ class Entry:
         self.prepared=Path(self.runtime['prepared'])
         self.remote=load('remote',self.prepared/'remote.py',self.pins)
         cfg,run,proof=self.remote.bound_candidate()
+        require(self.binding['host']==cfg['host'],'prepared destination host differs')
         require(self.binding['run_id']==run and self.binding['source']==cfg['source'] and self.binding['manifest_sha256']==proof['manifest_sha256'] and self.binding['tag']==cfg['tag'] and self.binding['sequence']==cfg['sequence'],'actual signed candidate differs')
         require(self.scope['signed_finish']==cfg['test_finish_unix'] and self.scope['final_cutoff']==cfg['cleanup_finish_unix'],'original approved window changed')
         require(sha(private(self.runtime['original_failure']))==self.binding['failure_sha256'],'original failure changed')
@@ -143,7 +144,11 @@ class Entry:
         return result
 
     def native(self,prepare=False):
-        inputs=json.loads(private(self.runtime['native_inputs']))
+        path = self.prepared / 'native-inputs.json'
+        require(str(path) == self.runtime['native_inputs'], 'native input path differs')
+        raw = private(path)
+        require(sha(raw) == self.pins[str(path)], 'native input bytes changed')
+        inputs=json.loads(raw)
         n=load('containment_native_receipts',inputs['canonical_helper']['source_file'],self.pins)
         require(inputs['source_commit']==self.binding['source'] and inputs['candidate']=={'tag':self.binding['tag'],'sequence':self.binding['sequence']},'native inputs candidate changed')
         frozen=Path(self.runtime['native_retention_inputs'])

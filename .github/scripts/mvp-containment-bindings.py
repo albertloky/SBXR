@@ -4,14 +4,20 @@ The proposal is deliberately not a runnable scope. Actual run, failure, request,
 clock, verified ownership and native UI observations must be supplied by their
 existing producers after admission. Import and proposal creation have no effects.
 """
+import argparse
 import ast
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import runpy
 
 PHASES=('clock','ownership','stop-services','verify-host','stop-outside','restore-client','verify-retained','record-failure','verify-transport')
 MODULES=('bindings','entry','freeze','host','native-readback','process','transport-preservation')
+PREPARED_INPUTS = ('preparation.json', 'native-inputs.json', 'operator-source/native-receipts.py',
+                   'remote.py', 'review-cleanup.py', 'read-current-clock.py',
+                   'outside-run.py', 'direct-control.py', 'finalize-failure.py')
 LATE=('actual signed run and manifest verification','actual immutable original failure and request hashes',
       'fresh clock and validated review-cleanup receipt with process reconciliation',
       'read-only host scope freeze from that authenticated review and original host baseline',
@@ -30,18 +36,53 @@ def rust_string(file,name):
     return ast.literal_eval(match.group(1)).encode()
 
 
+def prepared_inputs(prepared, scripts):
+    if (prepared / 'operator-source').is_symlink():
+        raise ValueError('linked prepared directory')
+    missing = [name for name in PREPARED_INPUTS if not os.path.lexists(prepared / name)]
+    if missing:
+        raise ValueError('missing prepared inputs: ' + ', '.join(missing))
+    # Use the supervisor's bounded regular-file reader before pinning any input.
+    read = runpy.run_path(str(Path(__file__).with_name('mvp-containment-process.py')))['read']
+    inputs = {prepared / name for name in PREPARED_INPUTS}
+    inputs.update(prepared.glob('*.py'))
+    inputs.update(p for p in (prepared / 'operator-source').iterdir()
+                  if p.is_symlink() or not p.is_dir())
+    metadata = {}
+    pins = {}
+    for path in sorted(inputs):
+        if path.is_symlink():
+            raise ValueError('linked prepared input: ' + path.name)
+        raw = read(path)
+        pins[str(path)] = hashlib.sha256(raw).hexdigest()
+        if path in (prepared / 'preparation.json', prepared / 'native-inputs.json'):
+            if path.stat().st_mode & 0o077:
+                raise ValueError('expected private prepared input: ' + path.name)
+            metadata[path.name] = json.loads(raw)
+    cfg = metadata['preparation.json']
+    native = metadata['native-inputs.json']
+    if native['source_commit'] != cfg['source'] or native['candidate'] != {k: cfg[k] for k in ('tag', 'sequence')}:
+        raise ValueError('native input candidate differs from preparation')
+    helper = str(prepared / 'operator-source/native-receipts.py')
+    canonical = (scripts / 'native-receipts.py').read_bytes()
+    expected = {'source_file': helper, 'size': len(canonical), 'sha256': hashlib.sha256(canonical).hexdigest()}
+    if native['canonical_helper'] != expected or pins[helper] != expected['sha256']:
+        raise ValueError('prepared native-receipts.py differs from reviewed source')
+    return cfg, pins
+
+
 def proposal(repository,prepared):
-    repo=Path(repository).resolve();prepared=Path(prepared).resolve();scripts=repo/'.github/scripts'
-    cfg=json.loads((prepared/'preparation.json').read_text())
+    repo=Path(repository).resolve();scripts=repo/'.github/scripts'
+    if Path(prepared).is_symlink():
+        raise ValueError('linked prepared directory')
+    prepared = Path(prepared).resolve(strict=True)
+    cfg, prepared_pins = prepared_inputs(prepared, scripts)
     entry=scripts/'mvp-containment-entry.py';runner=scripts/'mvp-operator-run.py'
     paths=[scripts/('mvp-containment-'+x+'.py') for x in MODULES]
     paths += [scripts/'mvp-retained-containment.py',scripts/'native-receipts.py',scripts/'mvp-host-baseline.py',runner]
-    # Prepared imports may resolve other prepared helpers: freeze the complete
-    # finite set without executing any of them or editing their original pins.
-    paths += sorted(prepared.glob('*.py'))+sorted((prepared/'operator-source').glob('*'))
-    paths=[p for p in paths if p.is_file()]
     paths += [repo/'src/runtime_handoff.rs',repo/'src/client_identity.rs',repo/'src/host/owner_runtime/testdata/sing-box.service']
     pins={str(p):digest(p) for p in paths}
+    pins.update(prepared_pins)
     serving=rust_string(repo/'src/runtime_handoff.rs','SERVING_UNIT')
     startup=rust_string(repo/'src/client_identity.rs','STARTUP_DROP_IN')
     singbox=repo/'src/host/owner_runtime/testdata/sing-box.service'
@@ -63,3 +104,13 @@ def proposal(repository,prepared):
                 'clock_record':'containment-clock.json','original_failure':'original-failure.json',
                 'native_retention_inputs':'containment-native-inputs.json','cua_request':'containment-cua-request.json',
                 'cua_reply':'containment-cua-reply.json'}.items()}}
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('prepared', type=Path, help='directory containing the reviewed operator inputs')
+    args = parser.parse_args()
+    try:
+        print(json.dumps(proposal(Path(__file__).resolve().parents[2], args.prepared), sort_keys=True))
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        parser.exit(1, f'Containment preparation refused: {error}\n')

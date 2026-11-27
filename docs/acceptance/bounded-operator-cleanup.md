@@ -287,6 +287,29 @@ remaining budget stops admission. Unknown live duration alone is not converted
 into either a guarantee or permission for a new test. No successful simulation,
 current host readiness or live qualification is asserted by this document.
 
+### Check the prepared containment inputs offline
+
+From the reviewed checkout, run the following before requesting a window.
+
+```sh
+python3 -B .github/scripts/mvp-containment-bindings.py "$prepared"
+```
+
+The command writes the proposal to standard output. It requires the run-local
+`preparation.json`, `native-inputs.json`, the reviewed copy of
+`operator-source/native-receipts.py`, and the six native entry providers
+`remote.py`, `review-cleanup.py`, `read-current-clock.py`, `outside-run.py`,
+`direct-control.py`, and `finalize-failure.py`. The process supervisor rechecks
+the frozen digests before launching a phase.
+
+Supply those six providers from an independently reviewed operator preparation
+for the selected candidate and window. The repository supplies their consumer.
+Computing digests records the bytes supplied and leaves `ready_for_live`
+false. Admission still requires verification of the composed operations and
+their dependencies, including supported removal, independent absence checks
+and the retained-data fallback. If the matching providers are unavailable,
+stop before requesting the window.
+
 ## Offline no-reply containment rehearsal
 
 The stop-only coordinator, `mvp-retained-containment.py`, now has concrete
