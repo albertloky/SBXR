@@ -47,6 +47,7 @@ func TestFreshWindowSigningAdapterReplaysTheOriginalBoundary(t *testing.T) {
 	window["karing_checked_at"] = facts["observed_at"]
 	origin := manifest["workflow"].(map[string]any)
 	next := facts["workflow"].(map[string]any)
+	next["commit"] = strings.Repeat("b7", 20) // Updated workflow source, original signed release.
 	karing := manifest["v3_attempt"].(map[string]any)["packages"].(map[string]any)["karing"].(map[string]any)
 	baseline := manifest["v3_attempt"].(map[string]any)["baseline"].(map[string]any)["release_identity"]
 	declaration := map[string]any{"origin_run_id": origin["run_id"], "start_unix": window["start_unix"],

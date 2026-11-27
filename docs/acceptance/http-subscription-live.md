@@ -56,7 +56,10 @@ fixed. Confirm the original run had no live steps before closing an expired
 pending gate. Retain its evidence and draft. A reserved, burned, unsigned, or
 diagnostic-only source is ineligible.
 
-Dispatch on verified `main` with the original `b_tag` and `b_sequence`, the
+The fresh workflow may run on a descendant of the original source commit on
+verified `main`. The manifest attestation binds the origin commit and invocation.
+The window decision has its own attestation bound to the fresh commit and invocation.
+Dispatch with the original `b_tag` and `b_sequence`, the
 empty `v3_attempt` object, and canonical `fresh_window` JSON containing
 `origin_run_id` (a decimal string), `start_unix`, `test_until_unix`, and
 `finish_unix` (integer UTC seconds). Pass the same finish as
@@ -184,9 +187,14 @@ python3 -B "$prepared/capture-native.py" verify --inputs "$prepared/native-input
 
 The booleans must report actual observations, including TUN off if that is the
 preserved baseline. Repeat this capture/verification path for `m3-identity`,
-`m3-link` and `m5` when those states actually exist. Both callers resolve the
-explicit attempt from the authenticated manifest/current request; verification
-re-reads the actual source and recomputes preservation before recording. The
+`m3-link` and `m5` when those states actually exist. For a separately approved
+window, retain the exact verified `fresh-window-decision.json` beside the
+run-local `qualification-manifest.json` as an owned mode-0600 file. Capture and
+verification select the execution attempt from that decision after matching its
+bytes to the current collector request's `qualification_window_sha256`. The
+original manifest supplies the candidate identity and native profile policy.
+An ordinary request uses the manifest attempt directly. Verification re-reads
+the actual native source and recomputes preservation before recording. The
 existing capture envelope retains its private audit and complete file inventory.
 No file is overwritten. A refusal retains partial private evidence for reviewed
 cleanup; inspect existing outputs rather than recapturing an uncertain outcome.

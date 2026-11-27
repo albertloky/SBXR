@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from types import SimpleNamespace
 
@@ -28,11 +29,36 @@ def load_native(inputs_path):
     return native
 
 
+def active_attempt_id(n, root, manifest, manifest_digest, request):
+    path = root / "fresh-window-decision.json"
+    if "qualification_window_sha256" not in request:
+        n.require(not os.path.lexists(path), "Window decision lacks a matching collector request")
+        return manifest["v3_attempt"]["attempt_id"]
+
+    # The protected collector pins the exact decision bytes after attestation
+    # verification and admission. The manifest continues to identify the build.
+    raw = n.private_bytes(path)
+    n.require(hashlib.sha256(raw).hexdigest() == request["qualification_window_sha256"],
+              "Window decision differs from the current request")
+    decision = json.loads(raw, object_pairs_hook=n.unique)
+    window = decision["window"]
+    run = window["workflow"]["run_id"]
+    n.require(decision["schema"] == "sbxr-release-qualification-decision-v1" and
+              decision["stage"] == "qualification-window" and decision["outcome"] == "accepted" and
+              window["schema"] == "sbxr-qualification-window-v1" and window["manifest_sha256"] == manifest_digest and
+              window["origin"] == manifest["workflow"] and window["release"] == manifest["releases"][0] and
+              type(window["run_attempt"]) is int and window["run_attempt"] == 1 and
+              re.fullmatch(r"[1-9][0-9]*", run) and run != window["origin"]["run_id"],
+              "Window decision differs from the signed candidate or fresh run")
+    return f"run-{run}-attempt-1"
+
+
 def bindings(n, root, inputs, phase):
     scenario = PHASES[phase]
     if scenario is None:
         return {}, None
     raw = n.private_bytes(root / "qualification-manifest.json")
+    manifest_digest = hashlib.sha256(raw).hexdigest()
     manifest = json.loads(raw, object_pairs_hook=n.unique)
     n.require(manifest["schema"] == "sbxr-qualification-manifest-v3" and
               manifest["workflow"]["commit"] == inputs["source_commit"] and
@@ -47,7 +73,7 @@ def bindings(n, root, inputs, phase):
     request_raw = n.private_bytes(root / (label + "-request.private"))
     request = json.loads(request_raw, object_pairs_hook=n.unique)
     n.require(request["scenario_id"] == scenario and
-              request["qualification_manifest_sha256"] == hashlib.sha256(raw).hexdigest(),
+              request["qualification_manifest_sha256"] == manifest_digest,
               "Request differs from the authenticated manifest/scenario")
     now = dt.datetime.now(dt.timezone.utc)
     # The recorder/collector validates the technical clock and recorded attended
@@ -60,9 +86,10 @@ def bindings(n, root, inputs, phase):
         finish_by = request["deadline_unix"]
     n.require(n.timestamp(request["not_before"]) <= now and now.timestamp() < finish_by,
               "Collector request is not current")
-    return {"qualification_manifest_sha256": hashlib.sha256(raw).hexdigest(),
+    return {"qualification_manifest_sha256": manifest_digest,
             "request_sha256": hashlib.sha256(request_raw).hexdigest(),
-            "attempt_id": attempt["attempt_id"], "candidate": candidate["release_identity"]}, attempt
+            "attempt_id": active_attempt_id(n, root, manifest, manifest_digest, request),
+            "candidate": candidate["release_identity"]}, attempt
 
 
 def retain(root, name, raw):

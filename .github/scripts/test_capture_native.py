@@ -138,7 +138,7 @@ class NativeCaptureTests(unittest.TestCase):
                    "deadline_unix": int(now.timestamp()) + 300,
                    "scenario_limit_seconds": 7200 if phase == "m2" else 1800,
                    "required_checks": MVP.required_checks(self.manifest["v3_attempt"], scenario)}
-        self.write(label + "-request.private", request)
+        return self.write(label + "-request.private", request)
 
     def run_cli(self, action, phase, connected="true", tun="true"):
         # Only actual native/app paths move to public fixture files. Both caller
@@ -168,6 +168,112 @@ raise SystemExit(c.main([sys.argv[2],'--inputs',str(inputs),'--phase',sys.argv[4
 
     def test_subprocess_capture_and_consumer_for_all_native_phases(self):
         self.exercise_native_phases()
+
+    def window_fixture(self):
+        origin = {"run_id": "101", "commit": "a" * 40, "path": ".github/workflows/candidate.yml",
+                  "ref": "albertloky/SBXR/.github/workflows/candidate.yml@refs/heads/main",
+                  "run_url": "https://github.com/albertloky/SBXR/actions/runs/101"}
+        workflow = {**origin, "run_id": "202", "commit": "b" * 40,
+                    "run_url": "https://github.com/albertloky/SBXR/actions/runs/202"}
+        self.manifest["workflow"] = origin
+        attempt = self.manifest["v3_attempt"]
+        attempt.pop("proxy_profile")
+        attempt.update(attempt_id="run-101-attempt-1", run_attempt=1, required_scenarios=MVP.HTTP_ORDER,
+                       packages={}, runner={}, vps_id="fixture", vps_identity_sha256="c" * 64)
+        manifest = self.write("qualification-manifest.json", self.manifest)
+        start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+        epoch = int(start.timestamp())
+        window = {"schema": "sbxr-qualification-window-v1", "workflow": workflow, "run_attempt": 1,
+                  "origin": origin, "release": self.manifest["releases"][0], "manifest_sha256": record(manifest)["sha256"],
+                  "start_unix": epoch, "test_until_unix": epoch + 2400, "finish_unix": epoch + 4000}
+        decision = {"schema": "sbxr-release-qualification-decision-v1", "stage": "qualification-window",
+                    "outcome": "accepted", "window": window}
+        return {"window_decision": decision, "workflow": workflow, "run_attempt": 1,
+                "admitted_at": start.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def assemble_phase(self, phase, request_path, fresh):
+        request = json.loads(request_path.read_bytes())
+        scenario, now = request["scenario_id"], request["not_before"]
+        previous = [{"scenario_id": s} for s in MVP.HTTP_ORDER[:MVP.HTTP_ORDER.index(scenario)]]
+        observation = {"started_at": now, "completed_at": now, "scenario_id": scenario,
+                       "checks": [{"check": c, "observed_at": now, "result": "observed"}
+                                  for c in request["required_checks"]]}
+        output = self.root / (phase + "-assembled.json")
+        command = [sys.executable, "-B", str(SCRIPTS / "v3-mvp-evidence.py"),
+                   "--manifest", self.root / "qualification-manifest.json", "--request", request_path,
+                   "--previous", self.write("previous.json", previous), "--observation", self.write("obs.json", observation),
+                   "--boundary", self.write("boundary.json", {}), "--output", output]
+        if fresh:
+            command.extend(["--fresh-window", self.write("fresh-window-evidence.json", fresh)])
+        result = subprocess.run(command, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        facts = json.loads(output.read_bytes())
+        self.assertEqual(facts["qualification_manifest"], self.manifest)
+        return facts["detailed_evidence"]["scenarios"][-1]["attempt_id"]
+
+    def check_window_phases(self, fresh, expected):
+        if fresh:
+            decision = self.write("fresh-window-decision.json", fresh["window_decision"])
+        for phase in ("m2", "m3-identity", "m3-link", "m5"):
+            with self.subTest(phase=phase):
+                request_path = self.install(phase, combined=False)
+                if fresh:
+                    request = json.loads(request_path.read_bytes())
+                    request["qualification_window_sha256"] = record(decision)["sha256"]
+                    self.write(request_path, request)
+                assembled = self.assemble_phase(phase, request_path, fresh)
+                self.assertEqual(assembled, expected)
+                self.require_pass("capture", phase)
+                self.require_pass("verify", phase)
+                receipt_path = self.root / (phase + "-native-capture-result.private")
+                receipt = json.loads(receipt_path.read_bytes())
+                self.assertEqual(receipt["authority"], {
+                    "attempt_id": assembled, "candidate": self.manifest["releases"][0]["release_identity"],
+                    "qualification_manifest_sha256": record(self.root / "qualification-manifest.json")["sha256"],
+                    "request_sha256": record(request_path)["sha256"],
+                })
+                if fresh and phase == "m2":
+                    for wrong in ("run-101-attempt-1", "run-202-attempt-2"):
+                        receipt["authority"]["attempt_id"] = wrong
+                        self.write(receipt_path, receipt)
+                        self.assertNotEqual(self.run_cli("verify", phase).returncode, 0)
+
+    def test_fresh_capture_agrees_with_assembler(self):
+        self.check_window_phases(self.window_fixture(), "run-202-attempt-1")
+
+    def test_ordinary_capture_agrees_with_assembler(self):
+        self.window_fixture()
+        self.check_window_phases(None, "run-101-attempt-1")
+
+    def test_capture_refuses_missing_or_wrong_window(self):
+        fresh = self.window_fixture()
+        decision = fresh["window_decision"]
+        request_path = self.install("m2", combined=False)
+        request = json.loads(request_path.read_bytes())
+        request["qualification_window_sha256"] = hashlib.sha256(canonical(decision)).hexdigest()
+        self.write(request_path, request)
+        other = {**fresh["workflow"], "run_id": "303", "run_url": "https://github.com/albertloky/SBXR/actions/runs/303"}
+        for change in (None, {"workflow": other}, {"run_attempt": 2}):
+            with self.subTest(change=change):
+                if change:
+                    self.write("fresh-window-decision.json", {**decision, "window": {**decision["window"], **change}})
+                self.assertNotEqual(self.run_cli("capture", "m2").returncode, 0)
+                self.assertFalse((self.root / "m2-native-store.private").exists())
+
+        for change in ({"run_attempt": 2}, {"run_attempt": True}, {"workflow": self.manifest["workflow"]},
+                       {"manifest_sha256": "0" * 64}):
+            with self.subTest(bound_change=change):
+                path = self.write("fresh-window-decision.json", {**decision, "window": {**decision["window"], **change}})
+                request["qualification_window_sha256"] = record(path)["sha256"]
+                self.write(request_path, request)
+                self.assertNotEqual(self.run_cli("capture", "m2").returncode, 0)
+                self.assertFalse((self.root / "m2-native-store.private").exists())
+
+        self.write("fresh-window-decision.json", decision)
+        del request["qualification_window_sha256"]
+        self.write(request_path, request)
+        self.assertNotEqual(self.run_cli("capture", "m2").returncode, 0)
+        self.assertFalse((self.root / "m2-native-store.private").exists())
 
     def exercise_native_phases(self):
         for phase in ("baseline-check", "m2", "m3-identity", "m3-link", "m5"):
