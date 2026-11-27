@@ -1,10 +1,13 @@
 """Run-private outside client ownership. Only the process holding the child stops and reaps it."""
 from contextlib import contextmanager
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 import subprocess
@@ -144,10 +147,40 @@ def run_client(root,binding,label,deadline,program,config,expected,*,log):
     supervise(root,binding,label,spawn,deadline)
 
 
+def image_cdhashes(path):
+    """All candidate CodeDirectory hashes of every architecture in the pinned file."""
+    arches=subprocess.check_output(['/usr/bin/lipo','-archs',str(path)],timeout=3).split()
+    require(arches,'outside executable architectures unavailable')
+    hashes=set()
+    for arch in arches:
+        info=subprocess.run(['/usr/bin/codesign','--display','--verbose=4','--arch',arch,str(path)],
+                            capture_output=True,check=True,timeout=3).stderr
+        # For a multi-slot signature codesign displays only its preferred slot.
+        # Legacy single-signature output omits the slot count.
+        slots=re.findall(rb'^Total signatures=([^\r\n]*)$',info,re.M)
+        choices=re.findall(rb'^Hash choices=([^\r\n]+)$',info,re.M)
+        candidates=re.findall(rb'^CandidateCDHash ([^=\s]+)=([0-9a-f]{40})$',info,re.M)
+        require(slots in ([],[b'1']) and len(choices)==1
+                and set(choices[0].split(b','))=={name for name,_ in candidates},
+                'outside executable code identity incomplete')
+        hashes.update(bytes.fromhex(value.decode('ascii')) for _,value in candidates)
+    return hashes
+
+
+def process_exited(pid):
+    # A zombie still answers signal 0, but its executable has already exited.
+    status=subprocess.run(['/bin/ps','-p',str(pid),'-o','stat='],capture_output=True,timeout=2)
+    if status.returncode==0 and status.stdout.strip().startswith(b'Z'):
+        return True
+    try:
+        os.kill(pid,0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
 def program_pids(record):
     """Read executable identity only. On macOS prove absence independently of the registry."""
-    import ctypes
-    import errno
     path=Path(record['source_file'])
     st=path.lstat()
     require(sys.platform=='darwin' and path.name=='sing-box' and path.resolve(strict=True)==path
@@ -156,6 +189,8 @@ def program_pids(record):
             'outside executable differs from preflight')
     processes=subprocess.run(['/bin/ps','-axo','uid=,pid='],check=True,capture_output=True,timeout=2)
     lookup=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True).proc_pidpath
+    csops=ctypes.CDLL(None,use_errno=True).csops
+    pinned_hashes=None
     matches=set()
     seen=set()
     for line in processes.stdout.splitlines():
@@ -164,17 +199,29 @@ def program_pids(record):
             continue
         seen.add(pid)
         buf=ctypes.create_string_buffer(4096)
-        if lookup(pid,buf,len(buf))<=0:
+        if lookup(pid,buf,len(buf))>0:
             try:
-                os.kill(pid,0)
-            except ProcessLookupError:
+                if Path(os.fsdecode(buf.value)).samefile(path):
+                    matches.add(pid)
                 continue
-            raise ValueError('outside process identity unavailable')
-        target=Path(os.fsdecode(buf.value))
-        try:
-            if target.samefile(path):
-                matches.add(pid)
-        except FileNotFoundError:
-            raise ValueError('outside executable vanished during readback') from None
+            except FileNotFoundError:
+                error=errno.ENOENT
+        else:
+            error=ctypes.get_errno()
+        if error!=errno.ENOENT:
+            require(process_exited(pid),'outside process identity unavailable')
+            continue
+        # An unlinked executable can keep running. A different kernel CDHash
+        # excludes this image. An equal hash cannot distinguish a separate copy.
+        if pinned_hashes is None:
+            pinned_hashes=image_cdhashes(path)
+        cdhash=ctypes.create_string_buffer(20)
+        if csops(pid,5,cdhash,len(cdhash))!=0:  # CS_OPS_CDHASH
+            require(process_exited(pid),'outside process code identity unavailable')
+            continue
+        require(any(cdhash.raw) and cdhash.raw not in pinned_hashes,'outside process identity unresolved')
+    after=path.lstat()
+    require((after.st_dev,after.st_ino,after.st_ctime_ns)==(st.st_dev,st.st_ino,st.st_ctime_ns),
+            'outside executable changed during readback')
     require(os.getpid() in seen,'outside process inventory incomplete')
     return matches
