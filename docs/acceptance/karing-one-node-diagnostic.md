@@ -1,5 +1,29 @@
 # One-node Karing diagnostic
 
+## RackNerd profile and latency check
+
+For every run of this check, leave the existing clipboard apps and Mac activity
+history on. They may incidentally record the temporary test-only RackNerd SBXR
+HTTP Subscription Link, including its embedded temporary credential. Proceed
+directly to Karing without a clipboard rehearsal or a recorder pause. Keep the
+live link out of chat, reports, logs (including CI), command arguments and
+screenshots. This permission excludes production credentials and release-signing
+secrets. Host or network changes require separate authorization.
+
+1. Copy the actual test link. In Karing, open **Add Profile Link** and use
+   **Paste** in **Profile Link/Content**. Confirm a unique test remark, leave the
+   fields to commit the input, and Save once. Confirm that exactly one new
+   profile appeared in the active profile list and locate its RackNerd node.
+   No backup is required. Leave the other profiles, settings and selected
+   connection as they are throughout.
+2. Run **URL-delay** once on that exact node. The check passes when Karing
+   displays a fresh numeric latency in **ms**. Record that value, or record the
+   failure if the result is cached, missing or a timeout.
+3. Remove only the temporary profile, including after a failed latency test.
+   Verify it is absent and the original profiles and selected connection remain.
+   If Save was uncertain, inspect the profile list before acting. Remove a
+   profile only when you can identify it as the one added for this check.
+
 ## Karing pass criterion
 
 The official SBXR Karing test passes when Karing displays a fresh, successful

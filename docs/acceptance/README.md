@@ -8,6 +8,8 @@ Use `subscription-clean-install-only`, empty incoming sources and `mvp-http-live
 under [ADR-0028](../adr/0028-clean-install-only.md). No source upgrade or subscription
 certificate issuance is required. Preparation and local tests do not prove a live pass.
 
+For an existing SBXR HTTP Subscription Link, follow the [RackNerd profile and latency check](karing-one-node-diagnostic.md#racknerd-profile-and-latency-check).
+
 Use the [official one-node Karing test](karing-one-node-diagnostic.md) for the
 separately approved diagnostic on disposable RackNerd. The runbook separates
 the fresh per-node result, operator preflight, RackNerd evidence and restoration.
