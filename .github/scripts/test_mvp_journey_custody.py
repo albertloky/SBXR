@@ -1,4 +1,5 @@
 """Reconcile an interrupted journey from the durable host and operator receipts."""
+import errno
 import hashlib
 import json
 import os
@@ -56,8 +57,9 @@ class CustodyTest(unittest.TestCase):
         path.chmod(0o600)
         return sha(body)
 
-    def process(self, pid, group, ticks):
+    def process(self, pid, group, ticks, flags=0):
         tail = ['S', '1', str(group), str(group)] + ['0'] * 15 + [str(ticks)]
+        tail[6] = str(flags)
         self.put(f'/proc/{pid}/stat', (f'{pid} (fixture) ' + ' '.join(tail)).encode())
         self.put(f'/proc/{pid}/environ', b'')
 
@@ -123,6 +125,54 @@ class CustodyTest(unittest.TestCase):
             m['menu_args']('/bin/sh')
         with self.assertRaises(ValueError):
             m['menu_args']('Complete removal')
+
+    def test_only_m1_disclosure_gets_the_private_receipt_setting(self):
+        m = self.module()
+        key = 'SBXR_M1_DISCLOSURE_RECEIPT'
+        assets = {'v3-packaged-live.sh': b'fixture candidate check',
+                  'v3-menu-session.py': (HERE/'v3-menu-session.py').read_bytes()}
+        def candidate_check(*args, env, **kwargs):
+            self.assertNotIn(key, env)
+
+        with patch.dict(os.environ, {key: 'ambient', 'FIXTURE_SECRET': 'canary'}), patch('subprocess.run', candidate_check):
+            for scenario, operations in m['CAPS'].items():
+                for op in operations.keys() & m['MENU'].keys():
+                    intent = {**self.intent, 'scenario': scenario, 'operation': op}
+                    with self.subTest(op=op):
+                        argv, env = m['packaged_action'](self.host, intent, assets, {}, None, None)
+                        self.assertEqual(argv[5:], m['menu_args'](op))
+                        self.assertNotIn('FIXTURE_SECRET', env)
+                        self.assertEqual(env.get(key), '1' if op == 'disclose' else None)
+
+    def test_ownership_review_distinguishes_kernel_threads_from_unreadable_userspace(self):
+        m = self.module()
+        record = m['begin'](self.host, self.intent, 123)
+        m['seal_reaped'](self.host, record)
+        (self.root/'proc/123').rename(self.root/'finished-owner')
+        def review():
+            return m['review_ownership'](self.host, [record], self.intent)
+
+        environ = self.root/'proc/2/environ'
+        original = Path.read_bytes
+        def read_bytes(path):
+            if path == environ:
+                raise ProcessLookupError(errno.ESRCH, 'fixture has no environment')
+            return original(path)
+        with patch.object(Path, 'read_bytes', read_bytes):
+            self.process(2, 0, 1, flags=0x00200000)  # Linux PF_KTHREAD
+            self.assertTrue(review()['process_cleanup_verified'])
+            self.process(2, 123, 1, flags=0x00200000)
+            with self.assertRaisesRegex(ValueError, 'prior process/group still present'):
+                review()
+            self.process(2, 1, 1)
+            with self.assertRaises(ProcessLookupError):
+                review()
+        environ.unlink()
+        with self.assertRaises(FileNotFoundError):
+            review()
+        self.put('/proc/2/environ', b'SBXR_Q215_OPERATOR_DEADLINE_UNIX=1240\0')
+        with self.assertRaisesRegex(ValueError, 'prior detached child remains'):
+            review()
 
     def test_serving_restart_after_identity_rotation_keeps_the_proxy_running(self):
         from test_mvp_containment_host import HostTests

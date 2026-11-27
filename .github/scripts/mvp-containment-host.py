@@ -23,6 +23,7 @@ PROPS = ('LoadState', 'ActiveState', 'UnitFileState', 'FragmentPath', 'DropInPat
          'ExecStop', 'ExecStopPost', 'SendSIGKILL', 'TriggeredBy', 'RequiredBy', 'WantedBy')
 AUTHORITY = ('/var/lib/sbxr/installed.json', '/var/lib/sbxr/proxy-ownership.json',
              '/var/lib/sbxr/.proxy-ownership.json.next', '/var/lib/.sbxr-removal.json')
+PF_KTHREAD = 0x00200000  # Linux task flags, field 9 of /proc/<pid>/stat.
 
 
 def require(value, reason):
@@ -46,6 +47,14 @@ def properties(raw):
         result[key] = value
     require(set(result) == set(PROPS), 'incomplete systemd observation')
     return result
+
+
+def process_stat(directory):
+    head, tail = (directory/'stat').read_bytes().rsplit(b') ', 1)
+    parts = tail.split()
+    require(head.startswith(directory.name.encode() + b' (') and len(parts) >= 20
+            and parts[6].isdigit(), 'invalid process stat')
+    return int(parts[2]), int(parts[19]), bool(int(parts[6]) & PF_KTHREAD)
 
 
 class Host:
@@ -154,11 +163,17 @@ class Host:
         for item in self.path('/proc').iterdir():
             if not item.name.isdigit(): continue
             try:
-                raw=(item/'stat').read_text(); parts=raw[raw.rfind(')')+2:].split()
-                pgid=int(parts[2]); ticks=int(parts[19]); environment=(item/'environ').read_bytes()
-                later=(item/'stat').read_text().split(')')[-1].split()
-                require(int(later[19])==ticks, 'process changed while inspecting')
-            except FileNotFoundError: continue
+                pgid, ticks, kernel_thread = process_stat(item)
+                # Kernel threads have no userspace environment. Their PID and
+                # group still participate in the same ownership checks.
+                environment = b'' if kernel_thread else (item/'environ').read_bytes()
+                require(process_stat(item) == (pgid, ticks, kernel_thread), 'process changed while inspecting')
+            except (FileNotFoundError, ProcessLookupError):
+                try:
+                    item.stat()
+                except FileNotFoundError:
+                    continue
+                raise
             for row in rows:
                 require(not (int(item.name)==row['pid'] and ticks==row['start_ticks']) and pgid != row['pgid'], 'prior process/group still present')
                 token=('SBXR_Q215_OPERATOR_DEADLINE_UNIX='+str(row['remote_deadline'])).encode()

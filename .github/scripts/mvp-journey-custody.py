@@ -317,6 +317,8 @@ def packaged_action(host, intent, assets, units, startup_digest, reviewed):
               'SOFTWARE-LIFECYCLE-COMPLETE-REMOVAL-COMPLETED','--confirmation',confirm,'--timeout','360',
               '--cleanup-cutoff',str(reviewed['cutoff']),'--cleanup-reserve',str(660 if reviewed['http_state_possible'] else 360)]
     elif op in MENU:
+        if intent['scenario'] == 'mvp-install' and op == 'disclose':
+            env['SBXR_M1_DISCLOSURE_RECEIPT'] = '1'
         argv = [sys.executable, '-I', '-B', '-c', assets['v3-menu-session.py'].decode(), *menu_args(op)]
     elif op in ('restart-serving', 'restart-access'):
         # Check the exact running unit/fragment and every current drop-in before restart.
