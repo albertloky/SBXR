@@ -99,6 +99,8 @@ class Host:
             if not proc.name.isdigit():continue
             try:
                 exe=os.readlink(proc/'exe')
+                require(exe not in ('/usr/bin/sing-box (deleted)','/usr/local/bin/sbxr (deleted)'),
+                        'candidate process still running from a removed executable')
                 if exe not in ('/usr/bin/sing-box','/usr/local/bin/sbxr'):continue
                 cgroup=(proc/'cgroup').read_text().splitlines()
                 pid=int(proc.name)

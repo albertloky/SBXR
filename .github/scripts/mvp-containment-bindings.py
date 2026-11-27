@@ -30,7 +30,10 @@ def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def rust_string(file,name):
-    text=Path(file).read_text()
+    return rust_value(Path(file).read_text(),name)
+
+
+def rust_value(text,name):
     match=re.search(r'pub const '+name+r': &str =\s*("(?:[^"\\]|\\.)*");',text)
     if not match:raise ValueError('candidate unit source missing')
     return ast.literal_eval(match.group(1)).encode()
@@ -74,6 +77,13 @@ def prepared_inputs(prepared, scripts):
                 or pins.get(str(prepared / 'operator-source/mvp-observe.py')) != recorder_pin
                 or pins[str(prepared / 'read-current-clock.py')] != digest(scripts / 'read-current-clock.py')):
             raise ValueError('prepared cleanup clock differs from reviewed source')
+    if 'provider_pins' in cfg:
+        fixed = runpy.run_path(str(scripts / 'remote.py'))
+        names = set(fixed['PROVIDERS']) | {'operator-source/'+name for name in fixed['ASSETS']}
+        names |= {'read-current-clock.py','operator-source/native-receipts.py','operator-source/mvp-containment-process.py'}
+        expected = {name: digest(scripts/Path(name).name) for name in names}
+        if expected != cfg['provider_pins'] or any(pins.get(str(prepared/name)) != value for name,value in expected.items()):
+            raise ValueError('prepared recovery providers differ from reviewed source')
     return cfg, pins
 
 
@@ -87,6 +97,8 @@ def proposal(repository,prepared):
     paths=[scripts/('mvp-containment-'+x+'.py') for x in MODULES]
     paths += [scripts/'mvp-retained-containment.py',scripts/'native-receipts.py',scripts/'mvp-host-baseline.py',runner]
     paths += [repo/'src/runtime_handoff.rs',repo/'src/client_identity.rs',repo/'src/host/owner_runtime/testdata/sing-box.service']
+    if 'provider_pins' in cfg:
+        paths.extend([scripts/'mvp-recovery.py',scripts/'prepare-mvp-containment.py'])
     pins={str(p):digest(p) for p in paths}
     pins.update(prepared_pins)
     serving=rust_string(repo/'src/runtime_handoff.rs','SERVING_UNIT')

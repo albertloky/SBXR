@@ -247,7 +247,7 @@ func TestHostTransportCarriesVerifiedWindowOnlyForFreshAdmission(t *testing.T) {
 		}
 		names := []string{"qualification-manifest.json", "qualification.bundle", "sbxr-release", "gateway.crt", "gateway.key", "ca.crt", "assets", "v3-qualification-transport.sh"}
 		if fresh {
-			names = append(names, "fresh-window-evidence.json", "fresh-window-decision.json", "fresh-window.bundle")
+			names = append(names, "fresh-window-evidence.json", "fresh-window-decision.json", "fresh-window.bundle", "cleanup-recorder.py")
 		}
 		for _, n := range names {
 			if err := os.WriteFile(filepath.Join(handoff, n), []byte(n), 0600); err != nil {
@@ -259,7 +259,7 @@ func TestHostTransportCarriesVerifiedWindowOnlyForFreshAdmission(t *testing.T) {
 		if b, e := cmd.CombinedOutput(); e != nil {
 			t.Fatalf("transport packaging: %v %s", e, b)
 		}
-		for _, n := range []string{"fresh-window-decision.json", "fresh-window.bundle"} {
+		for _, n := range []string{"fresh-window-decision.json", "fresh-window.bundle", "cleanup-recorder.py"} {
 			b, e := exec.Command("tar", "-xOzf", filepath.Join(dir, "v3-transport.tgz"), n).Output()
 			if fresh && (e != nil || string(b) != n) || !fresh && e == nil {
 				t.Fatalf("fresh=%v: archived %s differs", fresh, n)

@@ -1,6 +1,8 @@
 package architecture_test
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -172,6 +174,34 @@ func TestFreshWindowTransportProofBelongsOnlyToSplitRunStaging(t *testing.T) {
 				t.Fatalf("unexpected deletion with marker %q", tc.owner)
 			}
 			assertTransportStagingUntouched(t, root, contents, identities)
+		}
+	}
+}
+
+func TestFreshTransportRecognizesOnlyItsOwnCustodyJournal(t *testing.T) {
+	for _, owner := range []string{"102-1", "103-1"} {
+		parent, root := makeTransportStaging(t, true)
+		manifest := `{"workflow":{"run_id":"101"},"v3_attempt":{"run_attempt":1},"releases":[{"tag":"v3.1.95"}]}`
+		writeTransportStaging(t, root, "qualification-manifest.json", manifest)
+		writeTransportStaging(t, root, "staging-owned", "102-1\n")
+		for _, name := range []string{"fresh-window-decision.json", "fresh-window.bundle"} {
+			writeTransportStaging(t, root, name, "window proof")
+		}
+		writeTransportStaging(t, root, "journey-custody.jsonl", fmt.Sprintf("%s %x\n", owner, sha256.Sum256([]byte(manifest))))
+		contents, identities := snapshotTransportStaging(t, parent)
+		out, err := removeTransportStaging(t, root)
+		if owner == "102-1" {
+			if err != nil {
+				t.Fatalf("owned journal refused: %v %s", err, out)
+			}
+			if _, err := os.Lstat(root); !os.IsNotExist(err) {
+				t.Fatal("owned fixture staging remains")
+			}
+		} else {
+			if err == nil {
+				t.Fatal("foreign journal removed")
+			}
+			assertTransportStagingUntouched(t, parent, contents, identities)
 		}
 	}
 }

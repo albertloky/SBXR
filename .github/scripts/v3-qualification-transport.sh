@@ -114,6 +114,16 @@ if any(os.path.lexists(root / name) for name in window_files):
     require(isinstance(origin, str) and re.fullmatch(r"[1-9][0-9]*", origin) and
             document["v3_attempt"]["run_attempt"] == 1 and marker and marker[1].decode() != origin)
     files.update(window_files)
+    files.add("cleanup-recorder.py")
+    journal = root / "journey-custody.jsonl"
+    if os.path.lexists(journal):
+        import hashlib
+        st = journal.lstat()
+        require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid() and st.st_nlink == 1 and
+                stat.S_IMODE(st.st_mode) == 0o600 and st.st_size <= 256 * 1024)
+        with journal.open("rb") as stream:
+            require(stream.readline(160) == marker[0].strip() + b" " + hashlib.sha256(manifest.read_bytes()).hexdigest().encode() + b"\n")
+        files.add("journey-custody.jsonl")
 require(isinstance(releases, list))
 tags = set()
 for release in releases:
@@ -137,7 +147,7 @@ def inspect(path, relative):
 inspect(root, "")
 # Validation finishes before the first unlink. No following of links or rm -rf.
 # Keep the live owner available if removal of the fresh proof is interrupted.
-for path, device, inode in sorted(seen, key=lambda row: row[0] == root / "staging-owned"):
+for path, device, inode in sorted(seen, key=lambda row: (row[0] == root / "staging-owned", row[0] in {root / n for n in window_files}, row[0] != root / "journey-custody.jsonl")):
     if path.parent == root and path.name in ("qualification-manifest.json", "transport-owned"):
         continue
     current = path.lstat()
@@ -194,6 +204,10 @@ case "$1" in
     test "$#" -le 2
     cutoff=$(cutoff_deadline "${2:-}")
     check_start
+    if test -f "$root/fresh-window-decision.json"; then
+      path_absent "$root/journey-custody.jsonl"
+      (set -C; printf '%s %s\n' "$(cat "$root/staging-owned")" "$(sha256sum "$root/qualification-manifest.json" | cut -d' ' -f1)" > "$root/journey-custody.jsonl")
+    fi
     touch "$root/transport-owned"
     printf '%s\n' "$cutoff" > "$root/deadline"
     printf '%s\n' "$((cutoff - 60))" > "$root/runtime-deadline"

@@ -301,23 +301,21 @@ python3 -B .github/scripts/prepare-mvp-containment.py "$prepared" \
   --dispatch-guard-by "$dispatch_guard_unix"
 ```
 
-The command writes `preparation.json`, `read-current-clock.py`, and reviewed
-copies of `mvp-observe.py` and `native-receipts.py` in `operator-source/`.
-The clock provider uses the prepared transport to read the fixed host paths.
-It checks the current staging owner, signed machine identity, original manifest,
-collector-bound window and request, then runs the recorder's
-`cleanup-deadline` against the existing private draft. The operator, request
-and transport cutoffs all bound the result.
+The command writes `preparation.json`, the clock reader and the five fixed
+providers for transport, ownership review, outside-client custody, direct
+connection checks and failure finalization. It pins their bytes and the host,
+recorder and native-readback sources in `operator-source/`. Supply the actual
+native input bindings in `native-inputs.json`.
 
-The remaining preparation requires the actual native input bindings in
-`native-inputs.json` and reviewed implementations of `remote.py`,
-`review-cleanup.py`, `outside-run.py`, `direct-control.py` and
-`finalize-failure.py`. In particular, the maintained local runner and SSH
-timeout cannot supply the interrupted product action's remote process identity.
-The host guard requires a launch-time boot digest, PID, process group, start
-ticks and inherited deadline marker. The process owner must retain these
-before the effect and allow a fresh observation of the group and remaining
-marked processes after a disconnect. Local exit status cannot establish this.
+The reviewed checkout's `mvp-recovery.py` is the operator entry point. Its
+`launch` and `supported-removal` commands record the host boot digest, PID,
+process group, start ticks and deadline on both sides before the effect. After
+an interruption, `freeze` reconciles those receipts with the host journal and a
+fresh process scan. It retains the private stderr capture for each launch and
+removal. `verify-absence` can inspect an uncertain removal without repeating
+it. `contain` records the original failure with incomplete cleanup when the
+retained-data fallback succeeds. `verify-transport` independently checks the
+result of the protected job's teardown.
 
 Before requesting a window, check the complete directory from the reviewed
 checkout.

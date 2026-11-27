@@ -245,6 +245,14 @@ while IFS= read -r next_scenario <&3; do
 
   reason=evidence-refused
   "${remote[@]}" 'test ! -L /root/sbxr-qualification-evidence/result.json && test "$(stat -c "%a:%u:%h:%F" /root/sbxr-qualification-evidence/result.json)" = "600:0:1:regular file" && test "$(stat -c %s /root/sbxr-qualification-evidence/result.json)" -le 16777216 && cat /root/sbxr-qualification-evidence/result.json' > "$directory/input.json"
+  # The protected job owns admission time and replay facts. The operator supplies
+  # only the bound original failed observation. Validate its exact bytes first.
+  notice_digest=
+  if test -n "$fresh_attempt" && jq -e '.schema == "sbxr-retained-failure-notice-v1"' "$directory/input.json" >/dev/null; then
+    notice_digest="$(sha256sum "$directory/input.json" | cut -d' ' -f1)"
+    python3 -B .github/scripts/finalize-failure.py "$directory/input.json" "$directory/request.json" "$manifest" "$boundary" "$fresh" > "$directory/failure.json"
+    mv "$directory/failure.json" "$directory/input.json"
+  fi
   # Validate original bytes before jq so duplicate and unknown keys cannot disappear.
   if test -n "$fresh_attempt"; then
     jq -e --slurpfile fresh "$fresh" '.fresh_window == $fresh[0]' "$directory/input.json" >/dev/null
@@ -255,6 +263,11 @@ while IFS= read -r next_scenario <&3; do
     jq -e '.outcome == "failed" and .stop_test_mutations and .burn_required' "$directory/decision.json" >/dev/null
     cp "$directory/input.json" "$directory/retained-failure.json"
     reason=failure-recorded
+    if test -n "$notice_digest"; then
+      # Publish acknowledgement only after the evaluator accepted and we retained
+      # this exact failure. The operator treats a lost acknowledgement as unknown.
+      "${remote[@]}" "set -eu; test ! -L /root/sbxr-qualification-evidence; mkdir -m 0700 /root/sbxr-qualification-evidence/recorded-$notice_digest"
+    fi
     exit 1
   fi
   "${remote[@]}" 'test ! -e /root/sbxr-qualification-evidence/observation.json && test ! -L /root/sbxr-qualification-evidence/observation.json'

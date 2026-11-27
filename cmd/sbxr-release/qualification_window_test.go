@@ -411,6 +411,56 @@ func TestFreshQualificationFailureBelongsToTheNewAttempt(t *testing.T) {
 		decision["burn"].(map[string]any)["qualification_run_url"] != "https://github.com/albertloky/SBXR/actions/runs/992800" {
 		t.Fatalf("unsafe failure decision: %s", body)
 	}
+	t.Run("retained operator failure uses the actual hosted admission", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := qualificationDocument(t, input["qualification_manifest"])
+		request := qualificationDocument(t, map[string]any{
+			"scenario_id": "mvp-install", "qualification_manifest_sha256": sha256String(manifest),
+			"qualification_window_sha256": result["prior_decision_sha256"],
+		})
+		paths := []string{}
+		for _, item := range []struct{ name, body string }{
+			{"original", qualificationDocument(t, input["failure"])}, {"request", request},
+			{"manifest", manifest}, {"boundary", qualificationDocument(t, input["qualification_boundary_facts"])},
+			{"fresh", qualificationDocument(t, fresh)},
+		} {
+			path := filepath.Join(dir, item.name)
+			if err := os.WriteFile(path, []byte(item.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			paths = append(paths, path)
+		}
+		script, err := filepath.Abs("../../.github/scripts/finalize-failure.py")
+		if err != nil {
+			t.Fatal(err)
+		}
+		noticePath := filepath.Join(dir, "notice")
+		prepare := exec.Command("python3", "-I", "-B", "-c", `import json,runpy,sys
+from pathlib import Path
+mod=runpy.run_path(sys.argv[1])
+raw=Path(sys.argv[2]).read_bytes()
+request=Path(sys.argv[3]).read_bytes()
+refs=json.loads(request)
+binding=dict(run_id=992800,request_sha256=mod['sha'](request),manifest_sha256=refs['qualification_manifest_sha256'],failure_sha256=mod['sha'](raw))
+Path(sys.argv[4]).write_bytes(mod['canonical'](mod['notice'](raw,binding,'mvp-install',refs['qualification_window_sha256'])))`, script, paths[0], paths[1], noticePath)
+		if out, err := prepare.CombinedOutput(); err != nil {
+			t.Fatalf("prepare failure notice: %s: %v", out, err)
+		}
+		facts, err := exec.Command("python3", append([]string{"-I", "-B", script, noticePath}, paths[1:]...)...).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := runQualificationCommand(binary, string(facts))
+		if err != nil {
+			t.Fatalf("hosted failure replay: %v %s", err, out)
+		}
+		got := jsonObject(t, out)
+		cleanup := got["safety_cleanup"].(map[string]any)
+		if got["outcome"] != "failed" || got["stop_test_mutations"] != true || cleanup["status"] != "incomplete" ||
+			qualificationDocument(t, got["failure"]) != qualificationDocument(t, input["failure"]) {
+			t.Fatal("replay changed original failure or credited cleanup")
+		}
+	})
 	failure := input["failure"].(map[string]any)
 	for _, reason := range []string{"output-deadline", "exit-before-continuation"} {
 		diagnostic := map[string]any{"elapsed_ms": 90010, "last_input_class": "other", "reason": reason}

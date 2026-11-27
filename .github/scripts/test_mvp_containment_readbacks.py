@@ -147,6 +147,12 @@ class OtherReadbackTests(unittest.TestCase):
    def stop_clients(self,labels):return {'all_owned_children_reaped':True,'stopped_labels':labels}
   def reject(port):raise ConnectionRefusedError()
   self.assertEqual(E.outside(Outside(),lambda:{'passed':True},['owned'],'fixture',time.time()+30,connect=reject)['public_ports_closed'],[443,8443])
+ def test_outside_timeout_is_uncertain(self):
+  class Outside:
+   def stop_clients(self,labels):return {'all_owned_children_reaped':True,'stopped_labels':labels}
+  def timeout(port):raise TimeoutError('no response')
+  with self.assertRaises(TimeoutError):
+   E.outside(Outside(),lambda:{'passed':True},[],'fixture',time.time()+30,connect=timeout)
  def test_ui_missing_reply_expires_without_creating_files(self):
   import tempfile
   with tempfile.TemporaryDirectory() as d:

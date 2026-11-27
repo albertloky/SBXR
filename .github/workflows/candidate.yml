@@ -814,6 +814,9 @@ jobs:
           cd ..
           go build -o handoff/sbxr-release ./cmd/sbxr-release
           cp .github/scripts/v3-qualification-transport.sh handoff/
+          if test -f handoff/fresh-window-decision.json; then
+            install -m 0600 .github/scripts/mvp-observe.py handoff/cleanup-recorder.py
+          fi
           openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj '/CN=SBXR Qualification CA' -keyout handoff/ca.key -out handoff/ca.crt
           openssl req -newkey rsa:3072 -nodes -subj '/CN=SBXR loopback gateway' -keyout handoff/gateway.key -out handoff/gateway.csr
           printf '%s\n' 'subjectAltName=IP:127.0.0.1' 'extendedKeyUsage=serverAuth' > handoff/gateway.ext
@@ -863,7 +866,7 @@ jobs:
           fi
           window_files=()
           if test -f handoff/fresh-window-evidence.json; then
-            window_files=(fresh-window-decision.json fresh-window.bundle)
+            window_files=(fresh-window-decision.json fresh-window.bundle cleanup-recorder.py)
           fi
           tar -C handoff -czf v3-transport.tgz qualification-manifest.json qualification.bundle sbxr-release gateway.crt gateway.key ca.crt assets v3-qualification-transport.sh "${window_files[@]}"
           cleanup_v3_transport() {

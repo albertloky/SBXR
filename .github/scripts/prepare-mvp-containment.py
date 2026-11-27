@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the fixed cleanup-clock provider for a planned fresh HTTP window."""
+"""Prepare the fixed operator recovery providers for a planned fresh HTTP window."""
 import argparse
 import hashlib
 import ipaddress
@@ -53,7 +53,7 @@ def prepare(options):
     host = str(ipaddress.IPv4Address(options.host))
     recorder = read(HERE / 'mvp-observe.py')
     config = dict(source=source, tag=release['tag'], sequence=release['sequence'], host=host,
-                  origin_run_id=origin, manifest_sha256=options.manifest_sha256,
+                  origin_run_id=origin, manifest_sha256=options.manifest_sha256, machine_sha256=attempt['vps_identity_sha256'],
                   approved_window_start=start, dispatch_guard_by=guard, attended_finish_by=test,
                   security_cutoff=end, test_finish_unix=test, cleanup_finish_unix=end,
                   cleanup_clock_sha256=hashlib.sha256(recorder).hexdigest())
@@ -65,7 +65,14 @@ def prepare(options):
     files = {'read-current-clock.py': read(HERE / 'read-current-clock.py'),
              'operator-source/mvp-observe.py': recorder,
              'operator-source/native-receipts.py': read(HERE / 'native-receipts.py'),
-             'preparation.json': (json.dumps(config, sort_keys=True) + '\n').encode()}
+             'operator-source/mvp-containment-process.py': read(HERE / 'mvp-containment-process.py')}
+    transport = runpy.run_path(str(HERE/'remote.py'))
+    for name in transport['PROVIDERS']:
+        files[name] = read(HERE/name)
+    for name in transport['ASSETS']:
+        files['operator-source/'+name] = read(HERE/name)
+    config['provider_pins'] = {name: hashlib.sha256(data).hexdigest() for name,data in files.items()}
+    files['preparation.json'] = (json.dumps(config, sort_keys=True) + '\n').encode()
     dest.mkdir(mode=0o700)
     (dest / 'operator-source').mkdir(mode=0o700)
     for name, body in files.items():

@@ -21,7 +21,20 @@ func TestMVPEvidenceAssemblyFixtures(t *testing.T) {
 }
 
 func TestMVPRetainedContainmentFixtures(t *testing.T) {
-	for _, path := range []string{".github/scripts/test_mvp_retained_containment.py", ".github/scripts/test_mvp_containment_host.py", ".github/scripts/test_mvp_containment_readbacks.py", ".github/scripts/test_mvp_containment_process.py", ".github/scripts/test_mvp_containment_freeze.py", ".github/scripts/test_mvp_containment_bindings.py", ".github/scripts/test_prepare_mvp_containment.py", ".github/scripts/test_mvp_host_baseline.py"} {
+	for _, path := range []string{
+		".github/scripts/test_mvp_retained_containment.py",
+		".github/scripts/test_mvp_containment_host.py",
+		".github/scripts/test_mvp_containment_readbacks.py",
+		".github/scripts/test_mvp_containment_process.py",
+		".github/scripts/test_mvp_containment_freeze.py",
+		".github/scripts/test_mvp_containment_bindings.py",
+		".github/scripts/test_prepare_mvp_containment.py",
+		".github/scripts/test_mvp_host_baseline.py",
+		".github/scripts/test_mvp_journey_custody.py",
+		".github/scripts/test_mvp_outside_run.py",
+		".github/scripts/test_mvp_failure_notice.py",
+		".github/scripts/test_mvp_recovery_journey.py",
+	} {
 		if output, err := exec.Command("python3", "-B", path).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", path, err, output)
 		}

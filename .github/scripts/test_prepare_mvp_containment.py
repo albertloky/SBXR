@@ -20,6 +20,28 @@ HERE = Path(__file__).resolve().parent
 SCENARIOS = 'mvp-install mvp-subscription mvp-credentials mvp-serving mvp-removal'.split()
 
 
+ABSENCE_PROBE = r'''
+set -eu
+source "$1"
+ROOT=$2
+test() {
+  if [[ $# == 3 && $1 == '!' && ( $2 == -e || $2 == -L ) && $3 == /* ]]; then
+    builtin test '!' "$2" "$ROOT$3"
+  elif [[ $# == 2 && ( $1 == -e || $1 == -L ) && $2 == /* ]]; then
+    builtin test "$1" "$ROOT$2"
+  else
+    builtin test "$@"
+  fi
+}
+dpkg-query() { return 1; }
+apt-mark() { return 0; }
+systemctl() { return 1; }
+ss() { return 0; }
+getent() { return 2; }
+prove_not_installed
+'''
+
+
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -148,7 +170,9 @@ class ClockPreparation(unittest.TestCase):
         self.assertNotEqual(subprocess.run(self.cmd, capture_output=True).returncode, 0)
         proposal = subprocess.run([sys.executable, '-B', str(HERE/'mvp-containment-bindings.py'), str(self.prepared)], capture_output=True)
         self.assertNotEqual(proposal.returncode, 0)
-        self.assertIn(b'review-cleanup.py', proposal.stderr)
+        self.assertIn(b'native-inputs.json', proposal.stderr)
+        for name in ('remote.py','review-cleanup.py','outside-run.py','direct-control.py','finalize-failure.py'):
+            self.assertEqual((self.prepared/name).read_bytes(), (HERE/name).read_bytes())
 
     def test_changed_remote_authority_before_clock(self):
         self.prepare()
@@ -170,9 +194,6 @@ class ClockPreparation(unittest.TestCase):
 
     def test_freeze_rechecks_the_prepared_clock_and_its_recorder(self):
         self.prepare()
-        for name in ('remote.py', 'review-cleanup.py', 'outside-run.py', 'direct-control.py',
-                     'finalize-failure.py'):
-            write(self.prepared / name, b'raise AssertionError("fixture caller executed")')
         helper = self.prepared/'operator-source/native-receipts.py'
         write(self.prepared/'native-inputs.json', {'source_commit': self.cfg['source'],
               'candidate': {k: self.release[k] for k in ('tag', 'sequence')}, 'canonical_helper': {'source_file': str(helper),
@@ -181,12 +202,12 @@ class ClockPreparation(unittest.TestCase):
         proposal = freeze(HERE.parents[1], self.prepared)
         self.assertFalse(proposal['ready_for_live'])
         pins = proposal['callers']['clock']['dependencies']
-        for name in ('read-current-clock.py', 'operator-source/mvp-observe.py'):
+        for name in ('read-current-clock.py', 'operator-source/mvp-observe.py','remote.py','operator-source/mvp-journey-custody.py'):
             path = self.prepared / name
             original = path.read_bytes()
             self.assertEqual(pins[str(path)], digest(original))
             write(path, original + b'# changed')
-            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'clock'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'clock|providers'):
                 freeze(HERE.parents[1], self.prepared)
             write(path, original)
 
@@ -291,27 +312,7 @@ class ClockPreparation(unittest.TestCase):
         self.assertEqual(menu.returncode, 0, menu.stderr.decode())
         # Run the maintained presence and broken-link checks. Map their absolute
         # paths to this fake host, and use the documented absent OS statuses.
-        probe = r'''
-set -eu
-source "$1"
-ROOT=$2
-test() {
-  if [[ $# == 3 && $1 == '!' && ( $2 == -e || $2 == -L ) && $3 == /* ]]; then
-    builtin test '!' "$2" "$ROOT$3"
-  elif [[ $# == 2 && ( $1 == -e || $1 == -L ) && $2 == /* ]]; then
-    builtin test "$1" "$ROOT$2"
-  else
-    builtin test "$@"
-  fi
-}
-dpkg-query() { return 1; }
-apt-mark() { return 0; }
-systemctl() { return 1; }
-ss() { return 0; }
-getent() { return 2; }
-prove_not_installed
-'''
-        command = ['bash', '-c', probe, 'fixture', str(packaged), str(self.host)]
+        command = ['bash', '-c', ABSENCE_PROBE, 'fixture', str(packaged), str(self.host)]
         self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
         leftover.rename(self.base/'retained-fixture-link')
         self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)

@@ -25,11 +25,14 @@ def freeze(Host,review,binding,policy,*,root=Path('/'),command=None,now=time.tim
     require(0<=now()-observed<=120 and review['uncertain_action_reconciled'] is True
             and review['process_cleanup_verified'] is True,'review freshness/quiescence')
     require(review['exact_installed_identity_verified'] is True or review['installed_executable_present'] is False,'installed identity unverified')
+    rows = review.get('prior_processes', policy.get('prior_processes'))
+    require(rows and ('prior_processes' not in policy or policy['prior_processes'] == rows),
+            'reviewed process inventory differs')
     scope={'binding':binding,'machine_sha256':policy['machine_sha256'],'boot_sha256':policy['boot_sha256'],
            'authority_files':{p:None if v is None else v['sha256'] for p,v in review['authority_snapshot'].items()},
            'executable_sha256':review.get('executable_sha256'),'retained_files':{},'unrelated_files':policy['unrelated_files'],
            'expected_units':copy.deepcopy(policy['expected_units']),'effective_deadline':min(review['current_E'],policy['original_cutoff']),
-           'final_cutoff':policy['final_cutoff'],'reviewed_at':observed,'prior_processes':policy['prior_processes'],
+           'final_cutoff':policy['final_cutoff'],'reviewed_at':observed,'prior_processes':rows,
            'original_ca_bundle_sha256':policy['original_ca_bundle_sha256']}
     host=Host(scope,root=root,command=command,now=now)
     # Validate the signed/run/authority anchors before reading owned data.

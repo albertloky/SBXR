@@ -154,6 +154,7 @@ def live(run_id, completed=False):
     require(len(approvals) == 2 and all(review["state"] == "approved" and
             [environment["name"] for environment in review["environments"]] == ["acceptance-vps"]
             for review in approvals), "live-approvals")
+    return acceptance[0].get("id")
 
 def main(args):
     if len(args) == 3 and args[0] == "origin":

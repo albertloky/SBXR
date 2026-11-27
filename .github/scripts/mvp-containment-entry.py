@@ -72,7 +72,7 @@ def outside(o,control,labels,target,deadline,*,connect=None):
     for port in (443,8443):
         require(time.time()+4<deadline,'outside probe deadline')
         try:probe(port)
-        except (ConnectionRefusedError,ConnectionResetError,TimeoutError):pass
+        except ConnectionRefusedError:pass
         else:raise ValueError('test endpoint still accessible')
     return {'stopped_client_ids':labels,'public_ports_closed':[443,8443]}
 
@@ -85,12 +85,23 @@ class Entry:
         require(time.time()<self.deadline,'phase deadline before import')
         self.prepared=Path(self.runtime['prepared'])
         self.remote=load('remote',self.prepared/'remote.py',self.pins)
-        cfg,run,proof=self.remote.bound_candidate()
+        self.fixed = 'provider_pins' in json.loads(private(self.prepared/'preparation.json'))
+        cfg,run,proof = (self.remote.bound_candidate(post_transport=self.action=='verify-transport')
+                         if self.fixed else self.remote.bound_candidate())
         require(self.binding['host']==cfg['host'],'prepared destination host differs')
         require(self.binding['run_id']==run and self.binding['source']==cfg['source'] and self.binding['manifest_sha256']==proof['manifest_sha256'] and self.binding['tag']==cfg['tag'] and self.binding['sequence']==cfg['sequence'],'actual signed candidate differs')
-        require(self.scope['signed_finish']==cfg['test_finish_unix'] and self.scope['final_cutoff']==cfg['cleanup_finish_unix'],'original approved window changed')
+        phase_finish=(cfg['cleanup_finish_unix']-60 if self.fixed and self.runtime['scenario']=='mvp-removal'
+                      else cfg['test_finish_unix'])
+        require(self.scope['signed_finish']==phase_finish and self.scope['final_cutoff']==cfg['cleanup_finish_unix'],'original approved window changed')
         require(sha(private(self.runtime['original_failure']))==self.binding['failure_sha256'],'original failure changed')
         self.cfg=cfg;self.proof=proof
+        if self.fixed:
+            self.host_scope=json.loads(private(self.runtime['host_scope']))
+            self.intent=self.runtime['interrupted_intent']
+            require(self.host_scope['binding']==self.binding and self.host_scope['effective_deadline']<=self.scope['original_cutoff']
+                    and all(self.binding[k]==self.intent[k] for k in ('run_id','request_sha256','manifest_sha256'))
+                    and self.intent['window_sha256']==proof['window_sha256'], 'frozen recovery identity differs')
+            return
         original_remote=self.remote.remote
         def bounded(label,argv,source,*,timeout,reserve,cutoff):
             remaining=self.deadline-time.time()
@@ -118,6 +129,12 @@ class Entry:
         require(value==self.scope['retained_files'],'retained host/local data changed')
         return value
 
+    def fixed_call(self,phase,**values):
+        request={'phase':phase,'intent':self.intent,'deadline':self.deadline,**values}
+        if phase not in ('clock','transport'):
+            request['copies']=self.remote.copies(self.prepared.parent/'live')
+        return self.remote.call(self.cfg,self.binding['run_id'],self.proof,request)
+
     def host(self,method,**values):
         hostfile=Path(self.runtime['host_module']);source=hostfile.read_bytes()
         require(sha(source)==self.pins[str(hostfile)],'host payload changed')
@@ -126,16 +143,24 @@ class Entry:
         if method!='review':
             review=json.loads(private(preservation_path));require(review['binding']==self.binding,'host review record binding')
             scope['reviewed_at']=review['observed_at'] # actual independent observation, never now
-        # Native remote supervisor supplies another independent absolute limit.
-        body=('SCOPE='+repr(scope)+'\nVALUES='+repr(values)+'\n'+source.decode()+
-              '\nhost=Host(SCOPE)\ndeadline=min('+repr(self.deadline)+',float(os.environ["SBXR_Q215_OPERATOR_DEADLINE_UNIX"]))\n'+
-              ('result=host.stop(deadline,VALUES["commands"])' if method=='stop' else ('while time.time()<deadline-90 and os.path.lexists("/root/sbxr-qualification-v3"):\n time.sleep(min(2,max(0,deadline-90-time.time())))\nresult=host.transport(deadline)' if method=='transport' else 'result=host.'+method+'(deadline)'))+
-              '\nresult["observed_at"]=time.time()\n'+
-              ('result["preservation"]=host.preservation()\n' if method=='verify' else '')+
-              'print(json.dumps(result,sort_keys=True))\n').encode()
-        code,out,err=self.remote.remote('containment-'+self.action+'-'+method,['python3','-B','-'],body,timeout=max(11,self.deadline-time.time()-1),reserve=0,cutoff=self.deadline+10)
-        require(code==0,'remote '+method+' failed/uncertain; inspect without replay')
-        result=json.loads(out)
+        if getattr(self,'fixed',False):
+            if method=='review':
+                actual=self.fixed_call('ownership')
+                v=load('ownership_validator',self.prepared/'review-cleanup.py',self.pins)
+                previous=json.loads(private(self.runtime['ownership_review']))
+                v.validate_retained_review(actual,self.binding,self.intent,previous,time.time())
+            result=self.fixed_call(method,scope=scope,**values)
+        else:
+            # Native remote supervisor supplies another independent absolute limit.
+            body=('SCOPE='+repr(scope)+'\nVALUES='+repr(values)+'\n'+source.decode()+
+                  '\nhost=Host(SCOPE)\ndeadline=min('+repr(self.deadline)+',float(os.environ["SBXR_Q215_OPERATOR_DEADLINE_UNIX"]))\n'+
+                  ('result=host.stop(deadline,VALUES["commands"])' if method=='stop' else ('while time.time()<deadline-90 and os.path.lexists("/root/sbxr-qualification-v3"):\n time.sleep(min(2,max(0,deadline-90-time.time())))\nresult=host.transport(deadline)' if method=='transport' else 'result=host.'+method+'(deadline)'))+
+                  '\nresult["observed_at"]=time.time()\n'+
+                  ('result["preservation"]=host.preservation()\n' if method=='verify' else '')+
+                  'print(json.dumps(result,sort_keys=True))\n').encode()
+            code,out,err=self.remote.remote('containment-'+self.action+'-'+method,['python3','-B','-'],body,timeout=max(11,self.deadline-time.time()-1),reserve=0,cutoff=self.deadline+10)
+            require(code==0,'remote '+method+' failed/uncertain; inspect without replay')
+            result=json.loads(out)
         if method=='review':save(preservation_path,{'binding':self.binding,**result})
         if method=='verify':
             before=json.loads(private(preservation_path));require(result['preservation']==before['preservation'],'unrelated host state changed')
@@ -157,7 +182,7 @@ class Entry:
             inputs['retained_candidate_profiles']=sorted(sha(n._canonical(p)) for p in store['items'] if p.get('remark')==inputs['profile_remark'])
             save(frozen,inputs)
             connection=json.loads(n.source_file(inputs['selected_connection_baseline']))['connection']
-            request={'binding':self.binding,'origin':'native','created_at':time.time(),'deadline':self.deadline,
+            request={'binding':self.binding,'origin':self.origin,'created_at':time.time(),'deadline':self.deadline,
                      'operation':'Restore original selected profile, node, connection and TUN using CUA; retain candidate profile and data. Do not delete.', 'original_connection':connection}
             if not self.scope['http_state_possible']:
                 request['operation']='Observe original Karing selection, connection and TUN through CUA; do not change or delete anything.'
@@ -167,13 +192,15 @@ class Entry:
         else:
             inputs=json.loads(private(frozen));ui=json.loads(private(self.runtime['cua_reply']))
         verifier=load('retained_native_verifier',self.runtime['native_verifier'],self.pins)
-        return verifier.verify(n,inputs,ui,authority=self.binding,source='native',deadline=self.deadline)
+        return verifier.verify(n,inputs,ui,authority=self.binding,source=self.origin,deadline=self.deadline)
 
     def run(self):
         action=self.action
         if action=='clock':
             c=load('containment_clock',self.prepared/'read-current-clock.py',self.pins)
-            if 'cleanup_clock_sha256' in self.cfg:
+            if getattr(self,'fixed',False):
+                value=self.fixed_call('clock')
+            elif 'cleanup_clock_sha256' in self.cfg:
                 value = c.read_bound_clock(self.runtime['scenario'], self.cfg, self.binding, self.remote.remote)
             else:
                 value = c.read_current_clock('containment-clock', self.runtime['scenario'], mode='cleanup', reserve=0)
@@ -186,22 +213,44 @@ class Entry:
         elif action=='stop-outside':
             o=load('containment_outside',self.prepared/'outside-run.py',self.pins)
             d=load('containment_direct',self.prepared/'direct-control.py',self.pins)
-            result=outside(o,lambda:d.observe('m5-containment-control'),self.scope['outside_client_ids'],self.binding['host'],self.deadline)
+            if getattr(self,'fixed',False):
+                registry=self.prepared.parent/'live/outside'
+                owner=types.SimpleNamespace(stop_clients=lambda labels:o.stop_clients(
+                    registry,self.runtime['outside_binding'],labels,self.deadline-12))
+                result=outside(owner,lambda:d.observe(self.binding['host'],self.deadline),
+                               self.scope['outside_client_ids'],self.binding['host'],self.deadline)
+                require(not o.program_pids(self.runtime['outside_program']),'outside client executable remains')
+            else:
+                result=outside(o,lambda:d.observe('m5-containment-control'),self.scope['outside_client_ids'],self.binding['host'],self.deadline)
         elif action=='restore-client':result=self.native(prepare=True)
         elif action=='verify-retained':
             result=self.native(prepare=not self.scope['http_state_possible'])
             result['retained_files']=self.host('verify')['retained_files']
             f=load('containment_failure',self.prepared/'finalize-failure.py',self.pins)
-            proof=f.prepare_after_cleanup(Path(self.runtime['clock_record']),None,None,deadline_monotonic=time.monotonic()+max(0,self.deadline-time.time()-1))
-            require(proof['safety_cleanup']['status']=='incomplete','retained data cannot mean completed cleanup')
+            if getattr(self,'fixed',False):
+                value=f.notice(private(self.runtime['original_failure']),self.binding,self.runtime['scenario'],self.proof['window_sha256'])
+                save(self.runtime['failure_notice'],value)
+            else:
+                proof=f.prepare_after_cleanup(Path(self.runtime['clock_record']),None,None,deadline_monotonic=time.monotonic()+max(0,self.deadline-time.time()-1))
+                require(proof['safety_cleanup']['status']=='incomplete','retained data cannot mean completed cleanup')
         elif action=='record-failure':
             require(self.runtime['transport_disposal_confirmation']['run_id']==self.binding['run_id'],'actual live-job disposal confirmation missing')
-            f=load('containment_failure_publish',self.prepared/'finalize-failure.py',self.pins)
-            # The prepared finalizer otherwise loads a fresh remote module. Bind
-            # its existing operation to this same independently bounded phase.
-            f.n.invoke=lambda label,argv,body,cap,downstream,e: self.remote.remote(label,argv,body,timeout=cap,reserve=downstream,cutoff=e)
-            f.submit()
-            result={'failure_sha256':self.binding['failure_sha256'],'failure_recorded':True,'qualification_passed':False}
+            if getattr(self,'fixed',False):
+                for path in self.runtime['local_retained']:
+                    require(sha(private(path))==self.scope['retained_files']['local:'+path], 'retained evidence changed before submission')
+                confirmation=self.runtime['transport_disposal_confirmation']
+                require(confirmation['job_id']==self.proof['job_id'] and confirmation['run_attempt']==1
+                        and confirmation['window_sha256']==self.proof['window_sha256']
+                        and confirmation['automatic_transport_disposal_approved'] is True, 'job disposal authority differs')
+                fresh_scope={**self.host_scope,'reviewed_at':json.loads(private(self.runtime['host_review_record']))['observed_at']}
+                result=self.fixed_call('submit',scope=fresh_scope,notice=json.loads(private(self.runtime['failure_notice'])))
+            else:
+                f=load('containment_failure_publish',self.prepared/'finalize-failure.py',self.pins)
+                # The prepared finalizer otherwise loads a fresh remote module. Bind
+                # its existing operation to this same independently bounded phase.
+                f.n.invoke=lambda label,argv,body,cap,downstream,e: self.remote.remote(label,argv,body,timeout=cap,reserve=downstream,cutoff=e)
+                f.submit()
+                result={'failure_sha256':self.binding['failure_sha256'],'failure_recorded':True,'qualification_passed':False}
         elif action=='verify-transport':
             # Observe once after the already approved automatic teardown. No down,
             # delete or retry is executed by this retained-data caller.
